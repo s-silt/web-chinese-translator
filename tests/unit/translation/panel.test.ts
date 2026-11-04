@@ -34,6 +34,79 @@ afterEach(() => {
 })
 
 describe('暂停状态条', () => {
+  it('错误原因默认折叠、按文字显示，同类更新保留展开状态', () => {
+    panel = createTranslationPanel()
+    const message = '<img src=x onerror=alert(1)> 凭证无效或没有访问权限'
+    panel.showError(message)
+    const details = shadow().querySelector('.panel-error-details') as HTMLDetailsElement
+    expect(details).not.toBeNull()
+    expect(details.open).toBe(false)
+    expect(details.querySelector('summary')?.textContent).toBe('查看原因')
+    expect(details.querySelector('.error-reason')?.textContent).toBe(message)
+    expect(details.querySelector('img')).toBeNull()
+    panel.showPauseStatus(message, true, undefined, 'error')
+    const notice = shadow().querySelector('.notice-error-details') as HTMLDetailsElement
+    expect(notice.open).toBe(false)
+    expect(notice.querySelector('.error-reason')?.textContent).toBe(message)
+    expect(notice.querySelector('img')).toBeNull()
+    notice.open = true
+    panel.showPauseStatus('2 段翻译失败', true, undefined, 'error')
+    expect(notice.open).toBe(true)
+    panel.hidePauseStatus()
+    expect(notice.open).toBe(false)
+    expect(notice.hidden).toBe(true)
+    panel.showNotice('请配置模型')
+    expect(details.hidden).toBe(true)
+    expect(details.querySelector('.error-reason')?.textContent).toBe('')
+  })
+
+  it('关闭失败气泡只隐藏提示，同类计数变化不弹回；恢复后新的失败可提示', () => {
+    panel = createTranslationPanel()
+    const resume = vi.fn()
+    panel.setOnResume(resume)
+    panel.showPauseStatus('1 段失败', true, undefined, 'error')
+    expect(shadow().querySelector('.pause-reason')?.textContent).toBe('翻译失败')
+    expect(shadow().querySelector('.notice-link')?.textContent).toBe('点击重试')
+    trustedClick(shadow().querySelector('.notice-close')!)
+    expect(resume).not.toHaveBeenCalled()
+    expect((shadow().querySelector('.pause-status') as HTMLElement).style.display).toBe('none')
+    panel.showPauseStatus('2 段失败', true, undefined, 'error')
+    expect((shadow().querySelector('.pause-status') as HTMLElement).style.display).toBe('none')
+    panel.hidePauseStatus()
+    panel.showPauseStatus('3 段失败', true, undefined, 'error')
+    expect((shadow().querySelector('.pause-status') as HTMLElement).style.display).not.toBe('none')
+    const retry = shadow().querySelector('.pause-resume') as HTMLButtonElement
+    retry.click()
+    expect(resume).not.toHaveBeenCalled()
+    trustedClick(retry)
+    expect(resume).toHaveBeenCalledTimes(1)
+  })
+
+  it('失败卡片重试使用独立回调，成功卡片保留只翻译及折叠原文', () => {
+    panel = createTranslationPanel()
+    const literal = vi.fn()
+    const retry = vi.fn()
+    panel.setOnLiteral(literal)
+    panel.setOnRetry(retry)
+    panel.showError('network failure')
+    const action = shadow().querySelector('.panel-actions button') as HTMLButtonElement
+    expect(action.textContent).toBe('点击重试')
+    action.click()
+    expect(retry).not.toHaveBeenCalled()
+    trustedClick(action)
+    expect(retry).toHaveBeenCalledTimes(1)
+    expect(literal).not.toHaveBeenCalled()
+    panel.showAssist('source', { decision: 'show', intent: 'define', translation: '', explanation: 'meaning' })
+    expect((shadow().querySelector('details.panel-source') as HTMLDetailsElement).open).toBe(false)
+    const more = shadow().querySelector('details.panel-more') as HTMLDetailsElement
+    expect(more.open).toBe(false)
+    more.open = true
+    const translate = [...more.querySelectorAll('button')].find((button) => button.textContent === '只翻译')!
+    trustedClick(translate)
+    expect(literal).toHaveBeenCalledTimes(1)
+    expect(retry).toHaveBeenCalledTimes(1)
+  })
+
   function chip(): HTMLElement {
     return shadow().querySelector('.pause-status') as HTMLElement
   }
@@ -47,8 +120,9 @@ describe('暂停状态条', () => {
     panel.showPauseStatus('凭证无效或没有访问权限', true)
     expect(host().style.display).toBe('block')
     expect(chip().style.display).not.toBe('none')
-    expect(chip().textContent).toContain('凭证无效或没有访问权限')
-    expect(resumeButton().textContent).toBe('继续翻译')
+    expect(chip().textContent).toContain('翻译已暂停')
+    expect(chip().querySelector('.notice-speech')?.getAttribute('title')).toBe('凭证无效或没有访问权限')
+    expect(resumeButton().querySelector('.notice-link')?.textContent).toBe('继续翻译')
     expect(resumeButton().style.display).not.toBe('none')
     expect(panel.isOpen()).toBe(false)
     expect((shadow().querySelector('.panel') as HTMLElement).style.display).toBe('none')
@@ -70,7 +144,7 @@ describe('暂停状态条', () => {
     panel.close()
     expect(host().style.display).toBe('block')
     expect(chip().style.display).not.toBe('none')
-    expect(chip().textContent).toContain('原因')
+    expect(chip().querySelector('.notice-speech')?.getAttribute('title')).toBe('原因')
   })
 
   it('点击继续调用回调并移除状态条', () => {
@@ -80,7 +154,7 @@ describe('暂停状态条', () => {
       resumed += 1
     })
     panel.showPauseStatus('原因', true)
-    resumeButton().click()
+    trustedClick(resumeButton())
     expect(resumed).toBe(1)
     expect(chip().style.display).toBe('none')
     expect(host().style.display).toBe('none')
@@ -93,15 +167,16 @@ describe('暂停状态条', () => {
       current.showPauseStatus('新原因', true)
     })
     current.showPauseStatus('原因', true)
-    resumeButton().click()
+    trustedClick(resumeButton())
     expect(chip().style.display).not.toBe('none')
-    expect(chip().textContent).toContain('新原因')
+    expect(chip().querySelector('.notice-speech')?.getAttribute('title')).toBe('新原因')
   })
 
-  it('不可继续时隐藏按钮；隐藏后面板仍可正常打开', () => {
+  it('不可继续时禁用动作且隐藏链接；隐藏后面板仍可正常打开', () => {
     panel = createTranslationPanel()
     panel.showPauseStatus('本页处理已达上限', false)
-    expect(resumeButton().style.display).toBe('none')
+    expect(resumeButton().disabled).toBe(true)
+    expect((resumeButton().querySelector('.notice-link') as HTMLElement).hidden).toBe(true)
     panel.hidePauseStatus()
     expect(host().style.display).toBe('none')
     panel.showError('划词失败')
@@ -112,9 +187,9 @@ describe('暂停状态条', () => {
   it('可指定按钮文案，之后的暂停状态恢复默认文案', () => {
     panel = createTranslationPanel()
     panel.showPauseStatus('Page limit', true, 'Resume translation')
-    expect(resumeButton().textContent).toBe('Resume translation')
+    expect(resumeButton().querySelector('.notice-link')?.textContent).toBe('Resume translation')
     panel.showPauseStatus('原因', true)
-    expect(resumeButton().textContent).toBe('继续翻译')
+    expect(resumeButton().querySelector('.notice-link')?.textContent).toBe('继续翻译')
   })
 
   it('普通提示不再带继续按钮', () => {
@@ -126,7 +201,9 @@ describe('暂停状态条', () => {
   it('恶意原因只作为文本呈现', () => {
     panel = createTranslationPanel()
     panel.showPauseStatus('<img src=x onerror=alert(1)>', true)
-    expect(chip().querySelector('img')).toBeNull()
+    expect(chip().querySelector('.notice-speech')?.getAttribute('title')).toBe('<img src=x onerror=alert(1)>')
+    expect(chip().querySelector('img:not(.notice-mascot), [onerror]')).toBeNull()
+    expect((chip().querySelector('.notice-mascot') as HTMLImageElement).hidden).toBe(true)
   })
 
   it('dispose 后从页面移除', () => {
@@ -168,7 +245,7 @@ describe('面板状态机', () => {
       translation: '<img src=x onerror=alert(1)>',
       explanation: '',
     })
-    expect(shadow().querySelector('img')).toBeNull()
+    expect(shadow().querySelector('.panel-body img, [onerror]')).toBeNull()
     expect(shadow().textContent).toContain('<img src=x onerror=alert(1)>')
   })
 
@@ -245,7 +322,7 @@ describe('原生弹层内的暂停条', () => {
     expect(h.getAttribute('popover')).toBeNull()
     expect(chip().style.display).not.toBe('none')
     expect(closed).toBe(0)
-    resumeButton().click()
+    trustedClick(resumeButton())
     expect(resumed).toBe(1)
     expect(h.style.display).toBe('none')
   })
@@ -273,7 +350,7 @@ describe('原生弹层内的暂停条', () => {
     nativeClose(dlg)
     expect(h.parentElement).toBe(document.documentElement)
     expect(closed).toBe(1)
-    resumeButton().click()
+    trustedClick(resumeButton())
     expect(resumed).toBe(1)
     expect(h.style.display).toBe('none')
   })
@@ -315,6 +392,11 @@ function labelsFrom(messages: Messages): PanelLabels {
     copied: messages.wtToolbarCopied,
     copyFailed: messages.wtToolbarCopyFailed,
     configureHint: messages.wtAssistConfigure,
+    failed: messages.wtRetryBubbleTitle,
+    retry: messages.wtRetryBubbleAction,
+    paused: messages.wtPausedBubbleTitle,
+    limit: messages.wtLimitBubbleTitle,
+    more: messages.wtMoreActions,
   }
 }
 
@@ -350,8 +432,9 @@ describe('卡片文案', () => {
     expect(shadow().querySelector('.panel-status')?.textContent).toBe(ja.wtPanelLoading)
     panel.showError('upstream failed')
     panel.setLabels(labelsFrom(ko))
-    expect(shadow().querySelector('.panel-status')?.textContent).toBe('upstream failed')
-    expect(shadow().querySelector('.panel-status')?.classList.contains('panel-status-error')).toBe(true)
+    expect(shadow().querySelector('.panel')?.getAttribute('title')).toBe('upstream failed')
+    expect(shadow().querySelector('.panel-title')?.textContent).toBe(ko.wtRetryBubbleTitle)
+    expect(shadow().querySelector('.panel-actions')?.textContent).toBe(ko.wtRetryBubbleAction)
     panel.close()
     panel.setLabels(labelsFrom(ja))
     expect(panel.isOpen()).toBe(false)
@@ -362,10 +445,10 @@ describe('卡片文案', () => {
     panel = createTranslationPanel()
     panel.showPauseStatus('reason', true, 'Custom action')
     panel.setLabels(labelsFrom(ja))
-    expect(shadow().querySelector('.pause-resume')?.textContent).toBe('Custom action')
+    expect(shadow().querySelector('.notice-link')?.textContent).toBe('Custom action')
     panel.showPauseStatus('reason', true)
     panel.setLabels(labelsFrom(ko))
-    expect(shadow().querySelector('.pause-resume')?.textContent).toBe(ko.wtPanelResume)
+    expect(shadow().querySelector('.notice-link')?.textContent).toBe(ko.wtPanelResume)
   })
 })
 
@@ -534,7 +617,7 @@ function floatingView(visible = true): FloatingView {
     configured: true,
     restored: false,
     canRestore: true,
-    paused: false,
+    resumable: false,
     busy: false,
     checking: false,
     error: '',
@@ -586,6 +669,46 @@ function floatingButton(): HTMLButtonElement {
 }
 
 describe('悬浮入口与面板', () => {
+  it('气泡被卡片遮挡时释放自动收起，重新可见后保持展开', async () => {
+    const floating = await import('../../../src/translation/floating')
+    const original = floating.createFloatingEntry
+    const notices: boolean[] = []
+    const factory = vi.spyOn(floating, 'createFloatingEntry').mockImplementation((...args) => {
+      const entry = original(...args)
+      const set = entry.setNoticeVisible
+      entry.setNoticeVisible = (visible) => {
+        notices.push(visible)
+        set(visible)
+      }
+      return entry
+    })
+    const originalRect = HTMLElement.prototype.getBoundingClientRect
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('panel')) return new DOMRect(0, 0, 5000, 5000)
+      if (this.classList.contains('pause-status')) return new DOMRect(0, 0, 176, 80)
+      return originalRect.call(this)
+    })
+    const frames = async (): Promise<void> => {
+      for (let i = 0; i < 4; i++) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    }
+    try {
+      panel = createTranslationPanel()
+      panel.setFloating(floatingView(), floatingLabels(), floatingCallbacks())
+      panel.showSelection('A selected sentence.')
+      panel.showPauseStatus('凭证无效', true, undefined, 'error')
+      await frames()
+      expect((shadow().querySelector('.pause-status') as HTMLElement).style.display).toBe('none')
+      expect(notices.at(-1)).toBe(false)
+      panel.close()
+      await frames()
+      expect((shadow().querySelector('.pause-status') as HTMLElement).style.display).not.toBe('none')
+      expect(notices.at(-1)).toBe(true)
+    } finally {
+      bounds.mockRestore()
+      factory.mockRestore()
+    }
+  })
+
   it('仅入口可见时卡片、提示、工具栏和暂停条都不渲染', () => {
     panel = createTranslationPanel()
     panel.setFloating(floatingView(), floatingLabels(), floatingCallbacks())
@@ -594,7 +717,7 @@ describe('悬浮入口与面板', () => {
       expect((shadow().querySelector(selector) as HTMLElement).style.display, selector).toBe('none')
     }
     expect((shadow().querySelector('.floating-menu') as HTMLElement).hidden).toBe(true)
-    expect((shadow().querySelector('.floating-consent') as HTMLElement).hidden).toBe(true)
+    expect(shadow().querySelector('.floating-consent')).toBeNull()
   })
 
   it('菜单和工具栏互斥，仅入口时 isOpen 为 false，关闭保留入口', () => {
@@ -818,8 +941,9 @@ describe('结果卡片复制', () => {
     panel.setCopyResultFeedback(true)
     panel.showError('x')
     vi.advanceTimersByTime(1500)
-    expect(statusEl.textContent).toBe('x')
-    expect(statusEl.style.display).not.toBe('none')
+    expect(shadow().querySelector('.panel')?.getAttribute('title')).toBe('x')
+    expect(shadow().querySelector('.panel-title')?.textContent).toBe('翻译失败')
+    expect(statusEl.style.display).toBe('none')
     expect((shadow().querySelector('.panel .panel-announcement') as HTMLElement).textContent).toBe('')
   })
 
@@ -835,7 +959,7 @@ describe('结果卡片复制', () => {
 })
 
 describe('封闭 Shadow DOM 与内部交互回归', () => {
-  it('host.shadowRoot 为 null，宿主与文档 querySelector 拿不到译文与同意框，内部事件、复制与焦点正常', () => {
+  it('host.shadowRoot 为 null，宿主与文档拿不到译文与开关，内部事件、复制与焦点正常', () => {
     panel = createTranslationPanel()
     const copied: string[] = []
     panel.setOnCopyResult((text) => {
@@ -852,9 +976,9 @@ describe('封闭 Shadow DOM 与内部交互回归', () => {
     const h = host()
     expect(h.shadowRoot).toBeNull()
     expect(h.querySelector('.panel-target')).toBeNull()
-    expect(h.querySelector('.floating-consent')).toBeNull()
+    expect(h.querySelector('.floating-auto')).toBeNull()
     expect(document.querySelector('.panel-target')).toBeNull()
-    expect(document.querySelector('.floating-consent')).toBeNull()
+    expect(document.querySelector('.floating-auto')).toBeNull()
     expect(h.textContent).toBe('')
 
     const target = shadow().querySelector('.panel-target') as HTMLElement
@@ -882,11 +1006,11 @@ describe('封闭 Shadow DOM 与内部交互回归', () => {
     trustedClick(floatingButton())
     const primary = shadow().querySelector('.floating-auto') as HTMLButtonElement
     trustedClick(primary)
-    const consentInput = shadow().querySelector('.floating-consent input') as HTMLInputElement
-    expect(consentInput.checked).toBe(false)
-    expect(primary.disabled).toBe(true)
-    expect(h.querySelector('.floating-consent input')).toBeNull()
-    expect(document.querySelector('.floating-consent input')).toBeNull()
+    expect(primary.getAttribute('role')).toBe('switch')
+    expect(primary.getAttribute('aria-checked')).toBe('false')
+    expect(primary.disabled).toBe(false)
+    expect(h.querySelector('.floating-auto')).toBeNull()
+    expect(document.querySelector('.floating-auto')).toBeNull()
 
     panel.showToolbar(ANCHOR, true, () => undefined)
     expect(panel.focusToolbar()).toBe(true)

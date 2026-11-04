@@ -55,20 +55,19 @@ export interface UseTranslationControls {
   readonly autoEnabled: ComputedRef<boolean>
   readonly canTranslate: ComputedRef<boolean>
   readonly floatingEnabled: ComputedRef<boolean>
+  readonly autoInteractionEnabled: ComputedRef<boolean>
   readonly configurationReady: ComputedRef<boolean>
   readonly pageError: Readonly<Ref<string>>
   readonly canRestore: ComputedRef<boolean>
   readonly canResume: ComputedRef<boolean>
   readonly failedCount: ComputedRef<number>
   readonly canRetryFailed: ComputedRef<boolean>
-  readonly asking: Ref<boolean>
+  readonly autoError: Readonly<Ref<MessageKey | ''>>
   readonly busy: Readonly<Ref<boolean>>
   translatePage(): Promise<void>
   setFloating(enabled: boolean): Promise<void>
-  confirmEnable(): Promise<void>
-  disableAuto(): Promise<void>
-  cancelConsent(): void
-  askConsent(): void
+  setAutoInteraction(enabled: boolean): Promise<void>
+  setAuto(enabled: boolean): Promise<void>
   restore(): Promise<void>
   resume(): Promise<void>
   retryFailed(): Promise<void>
@@ -113,7 +112,7 @@ export function useTranslationControls(): UseTranslationControls {
   const status = shallowRef<PageTranslationStatus>()
   const config = shallowRef<TranslationConfig>()
   const masterEnabled = ref(false)
-  const asking = ref(false)
+  const autoError = ref<MessageKey | ''>('')
   const busy = ref(false)
   const loaded = ref(false)
   const pageError = ref('')
@@ -132,6 +131,7 @@ export function useTranslationControls(): UseTranslationControls {
   })
   const configurationReady = computed(() => loaded.value && config.value !== undefined)
   const floatingEnabled = computed(() => config.value?.floatingButtonEnabled === true)
+  const autoInteractionEnabled = computed(() => config.value?.autoInteractionEnabled !== false)
   const canTranslate = computed(() =>
     supported.value && masterEnabled.value && configurationReady.value && !outOfScope.value,
   )
@@ -144,7 +144,8 @@ export function useTranslationControls(): UseTranslationControls {
       masterEnabled.value &&
       !outOfScope.value &&
       status.value?.supported === true &&
-      (status.value.paused || status.value.error !== ''),
+      (!status.value.capped || status.value.budgetCapped === true) &&
+      (status.value.paused || status.value.budgetCapped === true),
   )
   const failedCount = computed(() => (masterEnabled.value ? (status.value?.failed ?? 0) : 0))
   // 暂停时「继续翻译」已包含重试；上限时要先追加额度。
@@ -192,7 +193,6 @@ export function useTranslationControls(): UseTranslationControls {
     const currentConfig = config.value
     if (disposed || busy.value || !canTranslate.value || current === undefined || currentConfig === undefined) return
     busy.value = true
-    asking.value = false
     pageError.value = ''
     toast.clear()
     try {
@@ -215,6 +215,7 @@ export function useTranslationControls(): UseTranslationControls {
   async function setFloating(enabled: boolean): Promise<void> {
     if (disposed || busy.value || !configurationReady.value || enabled === floatingEnabled.value) return
     busy.value = true
+    autoError.value = ''
     pageError.value = ''
     toast.clear()
     try {
@@ -235,51 +236,61 @@ export function useTranslationControls(): UseTranslationControls {
     }
   }
 
-  function askConsent(): void {
-    toast.clear()
-    if (busy.value || tab.value === undefined) return
-    pageError.value = ''
-    if (outOfScope.value) {
-      asking.value = false
-      toast.show('danger', 'wtScopeBlocked')
-      return
-    }
-    asking.value = true
-  }
-
-  function cancelConsent(): void {
-    asking.value = false
-  }
-
-  async function confirmEnable(): Promise<void> {
+  async function enableAuto(): Promise<void> {
     const current = tab.value
     const currentConfig = config.value
     if (current === undefined || currentConfig === undefined || busy.value) return
     pageError.value = ''
+    autoError.value = ''
+    toast.clear()
     if (outOfScope.value) {
-      asking.value = false
-      toast.show('danger', 'wtScopeBlocked')
+      autoError.value = 'wtScopeBlocked'
       return
     }
     busy.value = true
     try {
-      const granted = await browser.permissions
-        .request({ origins: [hostPermissionPattern(current.origin)] })
-        .catch(() => false)
-      if (!granted) {
-        asking.value = false
-        toast.show('danger', 'wtPermissionDenied')
+      let granted: boolean
+      try {
+        granted = await browser.permissions.request({ origins: [hostPermissionPattern(current.origin)] })
+      } catch {
+        if (!disposed) autoError.value = 'wtPermissionDenied'
         return
       }
+      // 用户在权限框里取消：开关跟随持久化状态安静还原
+      if (!granted || disposed) return
       const reply = await sendTranslationMessage({ type: 'wt:set-site-auto', origin: current.origin, enabled: true })
+      if (disposed) return
       if (reply.ok && reply.config !== undefined) {
         config.value = reply.config
-        asking.value = false
-        toast.clear()
         status.value = await queryStatus(current.id)
         return
       }
-      toast.show('danger', 'saveFailed')
+      autoError.value = 'saveFailed'
+    } catch {
+      if (!disposed) autoError.value = 'saveFailed'
+    } finally {
+      busy.value = false
+    }
+  }
+
+  async function setAutoInteraction(enabled: boolean): Promise<void> {
+    if (disposed || busy.value || !configurationReady.value || enabled === autoInteractionEnabled.value) return
+    busy.value = true
+    autoError.value = ''
+    pageError.value = ''
+    toast.clear()
+    try {
+      const reply = await sendTranslationMessage({ type: 'wt:save-config', patch: { autoInteractionEnabled: enabled } })
+      if (disposed) return
+      if (!reply.ok || reply.config === undefined) {
+        if (!reply.ok) pageError.value = reply.error
+        else autoError.value = 'saveFailed'
+        return
+      }
+      config.value = reply.config
+      if (reply.warning !== undefined) pageError.value = reply.warning
+    } catch {
+      if (!disposed) autoError.value = 'saveFailed'
     } finally {
       busy.value = false
     }
@@ -289,23 +300,34 @@ export function useTranslationControls(): UseTranslationControls {
     const current = tab.value
     if (current === undefined || busy.value) return
     pageError.value = ''
+    autoError.value = ''
+    toast.clear()
     busy.value = true
     try {
       const reply = await sendTranslationMessage({ type: 'wt:set-site-auto', origin: current.origin, enabled: false })
+      if (disposed) return
       if (reply.ok && reply.config !== undefined) {
         config.value = reply.config
         status.value = await queryStatus(current.id)
         return
       }
-      toast.show('danger', 'saveFailed')
+      autoError.value = 'saveFailed'
+    } catch {
+      if (!disposed) autoError.value = 'saveFailed'
     } finally {
       busy.value = false
     }
   }
 
+  async function setAuto(enabled: boolean): Promise<void> {
+    if (enabled === autoEnabled.value) return
+    await (enabled ? enableAuto() : disableAuto())
+  }
+
   async function pageAction(action: PageAction): Promise<void> {
     const current = tab.value
     if (current === undefined || busy.value) return
+    autoError.value = ''
     pageError.value = ''
     busy.value = true
     toast.clear()
@@ -357,20 +379,19 @@ export function useTranslationControls(): UseTranslationControls {
     autoEnabled,
     canTranslate,
     floatingEnabled,
+    autoInteractionEnabled,
     configurationReady,
     pageError,
     canRestore,
     canResume,
     failedCount,
     canRetryFailed,
-    asking,
+    autoError,
     busy,
     translatePage,
     setFloating,
-    confirmEnable,
-    disableAuto,
-    cancelConsent,
-    askConsent,
+    setAutoInteraction,
+    setAuto,
     restore: () => pageAction('restore'),
     resume: () => pageAction('resume'),
     retryFailed: () => pageAction('retry-failed'),

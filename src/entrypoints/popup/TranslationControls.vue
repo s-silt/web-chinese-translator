@@ -11,7 +11,6 @@
         <UiButton variant="primary" :disabled="busy || !canTranslate" data-test="wt-translate-page" @click="translatePage">
           {{ t('wtTranslatePage') }}
         </UiButton>
-        <span class="wt-hint">{{ t('wtTranslatePageHint') }}</span>
       </div>
       <div v-if="failedCount > 0" class="wt-row">
         <span class="wt-state" role="status" data-test="wt-failed">{{ t('wtFailedCount', { count: failedCount }) }}</span>
@@ -19,36 +18,32 @@
           {{ t('wtRetryFailed') }}
         </UiButton>
       </div>
-      <UiButton
-        v-if="!autoEnabled && !asking"
-        size="sm"
-        :disabled="busy"
-        data-test="wt-enable"
-        @click="askConsent"
-      >
-        {{ t('wtEnableAuto') }}
-      </UiButton>
-      <div v-if="asking" class="wt-consent">
-        <p class="wt-consent-text">{{ t('wtConsent') }}</p>
-        <div class="wt-consent-actions">
-          <UiButton size="sm" variant="primary" :disabled="busy" data-test="wt-confirm" @click="confirmEnable">
-            {{ t('wtConsentAction') }}
-          </UiButton>
-          <UiButton size="sm" :disabled="busy" data-test="wt-cancel" @click="cancelConsent">
-            {{ t('cancel') }}
-          </UiButton>
-        </div>
-      </div>
-      <div v-if="autoEnabled || canRestore || canResume" class="wt-actions">
+      <UiSwitch
+        :checked="autoEnabled"
+        :disabled="busy || !configurationReady || (!autoEnabled && !canTranslate)"
+        :label="t('wtSiteAuto')"
+        data-test="wt-auto"
+        @change="setAuto"
+      />
+      <span class="wt-hint" data-test="wt-data-hint">{{ t('wtModelInlineHint') }}</span>
+      <div v-if="canRestore || canResume" class="wt-actions">
         <UiButton v-if="canRestore" size="sm" :disabled="busy" data-test="wt-restore" @click="restore">{{ t('wtRestore') }}</UiButton>
         <UiButton v-if="canResume" size="sm" :disabled="busy" data-test="wt-resume" @click="resume">
           {{ t('wtResume') }}
         </UiButton>
-        <UiButton v-if="autoEnabled" size="sm" :disabled="busy" data-test="wt-disable" @click="disableAuto">{{ t('wtDisableAuto') }}</UiButton>
       </div>
     </template>
+    <p v-if="autoError" class="wt-page-error" role="alert" data-test="wt-auto-error">{{ t(autoError) }}</p>
     <p v-if="pageError" class="wt-page-error" role="alert" data-test="wt-page-error">{{ pageError }}</p>
     <div class="wt-quick-floating">
+      <UiSwitch
+        :checked="autoInteractionEnabled"
+        :disabled="busy || !configurationReady"
+        :label="t('wtAutomaticInteractions')"
+        :title="t('wtAutomaticInteractionsHint')"
+        data-test="wt-popup-auto-interaction"
+        @change="setAutoInteraction"
+      />
       <UiSwitch
         :checked="floatingEnabled"
         :disabled="busy || !configurationReady"
@@ -56,11 +51,9 @@
         data-test="wt-popup-floating"
         @change="setFloating"
       />
-      <span class="wt-hint">{{ t('wtPopupFloatingHint') }}</span>
     </div>
     <div class="wt-footer">
       <UiButton size="sm" data-test="wt-settings" @click="openSettings">{{ t('wtOpenSettings') }}</UiButton>
-      <span class="wt-hint">{{ t('wtSelectHint') }}</span>
     </div>
   </section>
 </template>
@@ -78,20 +71,19 @@ const {
   autoEnabled,
   canTranslate,
   floatingEnabled,
+  autoInteractionEnabled,
   configurationReady,
   pageError,
   canRestore,
   canResume,
   failedCount,
   canRetryFailed,
-  asking,
+  autoError,
   busy,
   translatePage,
   setFloating,
-  askConsent,
-  cancelConsent,
-  confirmEnable,
-  disableAuto,
+  setAutoInteraction,
+  setAuto,
   restore,
   resume,
   retryFailed,
@@ -134,23 +126,6 @@ const {
   color: var(--gcn-fg-muted);
 }
 
-.wt-consent {
-  display: grid;
-  gap: 8px;
-  padding: 10px 12px;
-  background: var(--gcn-bg-muted);
-  border: 1px solid var(--gcn-border-muted);
-  border-radius: var(--gcn-radius);
-}
-
-.wt-consent-text {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--gcn-fg-muted);
-}
-
-.wt-consent-actions,
 .wt-actions {
   display: flex;
   flex-wrap: wrap;

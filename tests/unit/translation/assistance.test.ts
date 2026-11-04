@@ -81,6 +81,40 @@ afterEach(() => {
 })
 
 describe('assistance', () => {
+  it.each(['define', 'explain'] as const)('%s 失败重试保留原意图且生成新请求，取消后不重放', async (intent) => {
+    const assist = start()
+    assist.select('technical term', ANCHOR, 'mouse', () => true, intent)
+    const first = sent.at(-1)!
+    deferred.get(first.requestId!)!({ ok: false, error: 'network failure' })
+    await Promise.resolve()
+    assist.repeatRequest()
+    const retry = sent.at(-1)!
+    expect(retry.type).toBe('wt:assist')
+    expect(retry.input).toMatchObject({ text: 'technical term', requestedIntent: intent })
+    expect(retry.requestId).not.toBe(first.requestId)
+    assist.cancel()
+    const count = sent.length
+    assist.repeatRequest()
+    expect(sent).toHaveLength(count)
+  })
+
+  it('手动翻译重试保留票据，页面身份变化后不重放', async () => {
+    let pageId = 'page-one'
+    panel = createTranslationPanel()
+    const assist = createAssistance({ panel, enabled: () => true, configured: () => true, smart: () => true, pageId: () => pageId })
+    assist.literal('manual source', ANCHOR, () => true, 'manual-ticket')
+    const first = sent.at(-1)!
+    deferred.get(first.requestId!)!({ ok: false, error: 'network failure' })
+    await Promise.resolve()
+    assist.repeatRequest()
+    expect(sent.at(-1)).toMatchObject({ type: 'wt:translate', texts: ['manual source'], manualSelectionId: 'manual-ticket' })
+    expect(sent.at(-1)?.requestId).not.toBe(first.requestId)
+    pageId = 'page-two'
+    const count = sent.length
+    assist.repeatRequest()
+    expect(sent).toHaveLength(count)
+  })
+
   it('A 迟到失败不覆盖已成功的 B', async () => {
     const assist = start()
     assist.literal('first text', ANCHOR)
@@ -174,7 +208,8 @@ describe('assistance', () => {
     const literalBtn = [...(rootShadow()?.querySelectorAll('button') ?? [])].find(
       (b) => b.textContent === '只翻译',
     ) as HTMLElement | undefined
-    literalBtn?.click()
+    expect(literalBtn).toBeDefined()
+    literalBtn!.dispatchEvent(Object.assign(new MouseEvent('click', { bubbles: true }), { isTrusted: true }))
     await Promise.resolve()
     const translate = sent.filter((m) => m.type === 'wt:translate').at(-1)
     expect(translate?.texts).toEqual(['candidate paragraph content here'])
@@ -283,12 +318,13 @@ describe('assistance', () => {
     const idNet = sent.at(-1)!.requestId!
     deferred.get(idNet)!({ ok: false, error: '无法连接翻译服务' })
     await Promise.resolve()
-    expect(rootShadow()?.querySelector('.panel-status')?.textContent).toBe('无法连接翻译服务')
+    expect(rootShadow()?.querySelector('.panel')?.getAttribute('title')).toBe('无法连接翻译服务')
+    expect(rootShadow()?.querySelector('.panel-title')?.textContent).toBe('翻译失败')
     expect(rootShadow()?.querySelectorAll('.panel-actions button')).toHaveLength(1)
   })
 
   it.each(['literal', 'select'] as const)(
-    '在途手动请求期间变为未配置时调用 %s 取消旧请求并显示配置提示且无重试',
+    '在途请求变为未配置后 %s 取消旧请求，仅显式调用提示配置',
     async (mode) => {
       let configured = true
       panel = createTranslationPanel()
@@ -309,11 +345,13 @@ describe('assistance', () => {
       }
       expect(sent.map((m) => m.type)).toEqual(['wt:translate', 'wt:cancel-assist'])
       expect(sent[1]?.requestId).toBe(oldId)
-      expect(rootShadow()?.querySelector('.panel-status')?.textContent).toBe('请在扩展设置中配置模型')
+      const expected = mode === 'literal' ? '请在扩展设置中配置模型' : ''
+      expect(rootShadow()?.querySelector('.panel-status')?.textContent).toBe(expected)
+      expect(panel.isOpen()).toBe(mode === 'literal')
       expect(rootShadow()?.querySelectorAll('.panel-actions button')).toHaveLength(0)
       deferred.get(oldId)!({ ok: true, texts: ['旧译文'] })
       await Promise.resolve()
-      expect(rootShadow()?.querySelector('.panel-status')?.textContent).toBe('请在扩展设置中配置模型')
+      expect(rootShadow()?.querySelector('.panel-status')?.textContent).toBe(expected)
       expect(rootShadow()?.textContent ?? '').not.toContain('旧译文')
       expect(rootShadow()?.querySelectorAll('.panel-actions button')).toHaveLength(0)
     },

@@ -9,6 +9,27 @@ import {
 } from '../../../src/translation/messages'
 
 describe('wt:read-selection 消息与回复校验', () => {
+  it('状态中的字符预算标记兼容旧回复，但拒绝非布尔值', () => {
+    const message = { type: 'wt:status' } as const
+    const status = { supported: true, fixed: false, auto: false, paused: false, capped: true, failed: 0, error: '' }
+    expect(isContentTranslationReply({ ok: true, status }, message)).toBe(true)
+    for (const budgetCapped of [true, false]) {
+      expect(isContentTranslationReply({ ok: true, status: { ...status, budgetCapped } }, message)).toBe(true)
+    }
+    for (const budgetCapped of ['false', 1]) {
+      expect(isContentTranslationReply({ ok: true, status: { ...status, budgetCapped } }, message)).toBe(false)
+    }
+  })
+
+  it('自动弹窗仅接受布尔补丁及布尔配置回复', () => {
+    const message = { type: 'wt:save-config', patch: { autoInteractionEnabled: false } } as const
+    expect(isTranslationMessage(message)).toBe(true)
+    expect(isTranslationMessage({ ...message, patch: { autoInteractionEnabled: true } })).toBe(true)
+    expect(isTranslationMessage({ ...message, patch: { autoInteractionEnabled: 'false' } })).toBe(false)
+    expect(isTranslationReply({ ok: true, config: { ...DEFAULT_TRANSLATION_CONFIG, autoInteractionEnabled: false } }, message)).toBe(true)
+    expect(isTranslationReply({ ok: true, config: { ...DEFAULT_TRANSLATION_CONFIG, autoInteractionEnabled: 'false' } }, message)).toBe(false)
+  })
+
   it('wt:read-selection 通过消息校验', () => {
     expect(NO_SELECTION_ERROR).toBe('请先选中要翻译的文字')
     expect(isContentTranslationMessage({ type: 'wt:read-selection' })).toBe(true)

@@ -942,6 +942,7 @@ async function saveConfig(
       selectionToolbarEnabled: toolbarOn,
       proactiveAssistEnabled: proactiveOn,
       floatingButtonEnabled: patch.floatingButtonEnabled ?? previous.floatingButtonEnabled,
+      autoInteractionEnabled: patch.autoInteractionEnabled ?? previous.autoInteractionEnabled,
       excludedHosts: nextExcluded,
       siteScopeMode: nextMode,
       siteScopeHosts: nextScopeHosts,

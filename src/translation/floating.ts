@@ -15,7 +15,7 @@ export interface FloatingView {
   readonly configured: boolean
   readonly restored: boolean
   readonly canRestore: boolean
-  readonly paused: boolean
+  readonly resumable: boolean
   readonly busy: boolean
   readonly checking: boolean
   readonly error: string
@@ -32,6 +32,7 @@ export interface FloatingLabels {
   readonly translatePage: string
   readonly enable: string
   readonly disable: string
+  readonly autoTranslate?: string
   readonly fold: string
   readonly disclosure: string
   readonly consent: string
@@ -65,19 +66,29 @@ export interface FloatingEntry {
   closeMenu(returnFocus?: boolean): void
   isMenuOpen(): boolean
   reposition(): void
+  getAnchor(): FloatingAnchor | undefined
+  setNoticeVisible(visible: boolean): void
   dispose(): void
 }
 
-const BUTTON = 52
+export interface FloatingAnchor {
+  readonly side: 'left' | 'right'
+  readonly left: number
+  readonly top: number
+  readonly right: number
+  readonly bottom: number
+}
+
+const BUTTON = 40
 const MARGIN = 12
 const AVOID = 6
-const VISIBLE_COLLAPSED = 26
+const VISIBLE_COLLAPSED = 20
 const DRAG_PX = 5
-const EDGE_PX = 24
 const NUDGE_PX = 20
-const MENU_MAX = 286
+const MENU_MAX = 232
+const AUTO_DOCK_MS = 900
 
-const DEFAULT_POSITION: FloatingPosition = { side: 'right', ratio: 0.5, collapsed: false }
+const DEFAULT_POSITION: FloatingPosition = { side: 'right', ratio: 0.5, collapsed: true }
 
 const FLOATING_CSS = `
 .floating-entry, .floating-menu {
@@ -93,7 +104,7 @@ const FLOATING_CSS = `
   justify-content: center;
   width: calc(${BUTTON}px / var(--wt-floating-scale));
   height: calc(${BUTTON}px / var(--wt-floating-scale));
-  padding: calc(6px / var(--wt-floating-scale));
+  padding: 0;
   color: #1f2328;
   background: #ffffff;
   border: 1px solid #d0d7de;
@@ -108,8 +119,8 @@ const FLOATING_CSS = `
   border-color: #afb8c1;
 }
 .floating-entry img {
-  width: calc(36px / var(--wt-floating-scale));
-  height: calc(36px / var(--wt-floating-scale));
+  width: calc(38px / var(--wt-floating-scale));
+  height: calc(38px / var(--wt-floating-scale));
   border-radius: calc(9px / var(--wt-floating-scale));
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
   pointer-events: none;
@@ -131,9 +142,9 @@ const FLOATING_CSS = `
   z-index: 2147483647;
   display: flex;
   flex-direction: column;
-  gap: calc(10px / var(--wt-floating-scale));
-  width: calc(280px / var(--wt-floating-scale));
-  padding: calc(14px / var(--wt-floating-scale));
+  gap: calc(8px / var(--wt-floating-scale));
+  width: calc(${MENU_MAX}px / var(--wt-floating-scale));
+  padding: calc(12px / var(--wt-floating-scale));
   color: #1f2328;
   background: #ffffff;
   border: 1px solid #d0d7de;
@@ -528,6 +539,123 @@ const FLOATING_CSS = `
     }
   }
 }
+.floating-menu {
+  --wt-menu-bg: #f8fafc;
+  --wt-menu-text: #24374a;
+  --wt-menu-muted: #63778a;
+  --wt-menu-border: #d4dee8;
+  --wt-menu-primary: #e7eff5;
+  --wt-menu-accent: #355f7c;
+  color: var(--wt-menu-text);
+  background: var(--wt-menu-bg);
+  border-color: var(--wt-menu-border);
+}
+.floating-menu[data-style='cyber'] {
+  --wt-menu-bg: #101c29;
+  --wt-menu-text: #dce7ef;
+  --wt-menu-muted: #9aafbf;
+  --wt-menu-border: #304759;
+  --wt-menu-primary: #20384a;
+  --wt-menu-accent: #a9cddd;
+  color: var(--wt-menu-text);
+  background: var(--wt-menu-bg);
+  border-color: var(--wt-menu-border);
+  box-shadow: 0 8px 24px #06101e38;
+}
+.floating-menu[data-style='glass'] {
+  color: var(--wt-menu-text);
+  background: rgba(248,250,253,.94);
+  border-color: var(--wt-menu-border);
+}
+.floating-entry[data-style='cyber'], .floating-entry[data-style='cyber']:hover {
+  background: #101c29; border-color: #304759; box-shadow: 0 4px 14px #06101e24;
+}
+.floating-menu[data-style] .floating-title, .floating-menu[data-style] .floating-host,
+.floating-menu[data-style] .floating-disclosure { color: var(--wt-menu-muted); }
+@media (prefers-color-scheme: dark) {
+  .floating-menu:not([data-style='cyber']) {
+    --wt-menu-bg: #182534;
+    --wt-menu-text: #dce7ef;
+    --wt-menu-muted: #a6b6c4;
+    --wt-menu-border: #3a4c5d;
+    --wt-menu-primary: #2a4053;
+    --wt-menu-accent: #bad5e5;
+    color: var(--wt-menu-text);
+    background: var(--wt-menu-bg);
+    border-color: var(--wt-menu-border);
+  }
+}
+.floating-menu .floating-head {
+  position: relative;
+  padding: 0 calc(28px / var(--wt-floating-scale)) 0 0;
+  border: 0;
+}
+.floating-menu .floating-title { font-size: calc(12px / var(--wt-floating-scale)); letter-spacing: 0; }
+.floating-menu .floating-host, .floating-menu .floating-disclosure, .floating-menu .floating-fixed {
+  color: var(--wt-menu-muted);
+  font-size: calc(10px / var(--wt-floating-scale));
+  line-height: 1.5;
+}
+.floating-menu .floating-close, .floating-menu[data-style] .floating-close {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-height: calc(24px / var(--wt-floating-scale));
+  width: calc(24px / var(--wt-floating-scale));
+  padding: 0;
+  color: var(--wt-menu-muted);
+  background: transparent;
+  border: 0;
+}
+.floating-menu .floating-primary, .floating-menu[data-style] .floating-primary {
+  color: var(--wt-menu-accent);
+  background: var(--wt-menu-primary);
+  border-color: var(--wt-menu-border);
+}
+.floating-menu .floating-primary:hover:not(:disabled, [aria-disabled='true']),
+.floating-menu[data-style] .floating-primary:hover:not(:disabled, [aria-disabled='true']) {
+  color: var(--wt-menu-accent);
+  background: var(--wt-menu-primary);
+  border-color: var(--wt-menu-accent);
+}
+.floating-menu .floating-auto, .floating-menu[data-style] .floating-auto {
+  justify-content: space-between;
+  gap: calc(8px / var(--wt-floating-scale));
+  padding-left: 0;
+  padding-right: 0;
+  text-align: start;
+  color: var(--wt-menu-text);
+  background: transparent;
+  border-color: transparent;
+}
+.floating-auto::after {
+  content: '';
+  flex: none;
+  width: calc(32px / var(--wt-floating-scale));
+  height: calc(18px / var(--wt-floating-scale));
+  border-radius: calc(12px / var(--wt-floating-scale));
+  background: radial-gradient(circle at calc(9px / var(--wt-floating-scale)) 50%, #fff 0 calc(6px / var(--wt-floating-scale)), transparent calc(6.5px / var(--wt-floating-scale))), #8092a3;
+}
+.floating-auto[aria-checked='true']::after {
+  background: radial-gradient(circle at calc(23px / var(--wt-floating-scale)) 50%, #fff 0 calc(6px / var(--wt-floating-scale)), transparent calc(6.5px / var(--wt-floating-scale))), #497c99;
+}
+.floating-menu .floating-actions-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 0;
+  border: 0;
+}
+.floating-menu .floating-settings, .floating-menu[data-style] .floating-settings {
+  padding-left: 0;
+  padding-right: 0;
+  color: var(--wt-menu-muted);
+  background: transparent;
+  border-color: transparent;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .floating-menu[data-style='glass'] { background: var(--wt-menu-bg); }
+}
 @media (forced-colors: active) {
   .floating-entry, .floating-menu, .floating-menu button {
     background: Canvas;
@@ -538,6 +666,8 @@ const FLOATING_CSS = `
   .floating-entry:focus-visible, .floating-menu button:focus-visible, .floating-menu input:focus-visible {
     outline: 2px solid Highlight;
   }
+  .floating-auto::after { border: 1px solid ButtonText; }
+  .floating-auto[aria-checked='true']::after { background: Highlight; }
 }
 `
 
@@ -588,7 +718,7 @@ function readPosition(value: unknown): FloatingPosition {
   ) {
     return DEFAULT_POSITION
   }
-  return { side, ratio, collapsed }
+  return { side, ratio, collapsed: true }
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -612,6 +742,7 @@ export function createFloatingEntry(
   geometry: {
     viewport(): Viewport
     avoidRects(): readonly Rect[]
+    onPosition?(): void
   },
 ): FloatingEntry {
   const style = document.createElement('style')
@@ -638,23 +769,15 @@ export function createFloatingEntry(
   menu.setAttribute('aria-labelledby', title.id)
   const hostname = document.createElement('div')
   hostname.className = 'floating-host'
-  head.append(title, hostname)
-  const status = document.createElement('div')
-  status.className = 'floating-status'
-  const statusMain = document.createElement('div')
+  const closeButton = document.createElement('button')
+  closeButton.type = 'button'
+  closeButton.className = 'floating-close'
+  closeButton.textContent = '×'
+  head.append(title, hostname, closeButton)
   const statusFixed = document.createElement('div')
-  const statusPage = document.createElement('div')
-  status.append(statusMain, statusFixed, statusPage)
+  statusFixed.className = 'floating-fixed'
   const disclosure = document.createElement('p')
   disclosure.className = 'floating-disclosure'
-  const configure = document.createElement('p')
-  configure.className = 'floating-configure'
-  const consent = document.createElement('label')
-  consent.className = 'floating-consent'
-  const consentBox = document.createElement('input')
-  consentBox.type = 'checkbox'
-  const consentText = document.createElement('span')
-  consent.append(consentBox, consentText)
   const mainActions = document.createElement('div')
   mainActions.className = 'floating-actions-main'
   const translateButton = document.createElement('button')
@@ -663,26 +786,24 @@ export function createFloatingEntry(
   const primary = document.createElement('button')
   primary.type = 'button'
   primary.className = 'floating-auto'
+  primary.setAttribute('role', 'switch')
   const pageButton = document.createElement('button')
   pageButton.type = 'button'
   pageButton.className = 'floating-page'
-  const cancelButton = document.createElement('button')
-  cancelButton.type = 'button'
-  cancelButton.className = 'floating-cancel'
-  mainActions.append(translateButton, primary, pageButton, cancelButton)
+  const resumeButton = document.createElement('button')
+  resumeButton.type = 'button'
+  resumeButton.className = 'floating-resume'
+  mainActions.append(translateButton, pageButton, resumeButton, primary)
   const subActions = document.createElement('div')
   subActions.className = 'floating-actions-sub'
   const settingsButton = document.createElement('button')
   settingsButton.type = 'button'
   settingsButton.className = 'floating-settings'
-  const foldButton = document.createElement('button')
-  foldButton.type = 'button'
-  foldButton.className = 'floating-fold'
-  subActions.append(settingsButton, foldButton)
+  subActions.append(settingsButton, statusFixed)
   const error = document.createElement('div')
   error.className = 'floating-error'
   error.setAttribute('role', 'status')
-  menu.append(head, status, disclosure, configure, consent, mainActions, subActions, error)
+  menu.append(head, mainActions, disclosure, subActions, error)
   const move = document.createElement('p')
   move.className = 'floating-move'
   move.id = 'wt-floating-move'
@@ -700,8 +821,9 @@ export function createFloatingEntry(
   let readStarted = false
   let readEpoch = 0
   let menuOpen = false
-  let confirmOpen = false
-  let confirmAuto = false
+  let hovered = false
+  let noticeVisible = false
+  let dockTimer: ReturnType<typeof setTimeout> | undefined
   let positionFailed = false
   let suppressClick = false
   let drag: Drag | undefined
@@ -710,6 +832,58 @@ export function createFloatingEntry(
   let pendingWrite: FloatingPosition | undefined
   let viewport: Viewport = { width: 1, height: 1, scale: 1 }
   const menuObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(() => reposition()) : undefined
+
+  function clearDockTimer(): void {
+    if (dockTimer !== undefined) clearTimeout(dockTimer)
+    dockTimer = undefined
+  }
+
+  function keepExpanded(): boolean {
+    return menuOpen || hovered || noticeVisible || drag !== undefined || entry.matches(':focus-visible')
+  }
+
+  function expandEntry(): void {
+    clearDockTimer()
+    if (!position.collapsed) return
+    position = { ...position, collapsed: false }
+    place()
+    render()
+  }
+
+  function scheduleDock(): void {
+    clearDockTimer()
+    if (disposed || position.collapsed || keepExpanded()) return
+    dockTimer = setTimeout(() => {
+      dockTimer = undefined
+      if (disposed || keepExpanded()) return
+      position = { ...position, collapsed: true }
+      place()
+      render()
+    }, AUTO_DOCK_MS)
+  }
+
+  function onPointerEnter(event: PointerEvent): void {
+    if (!trusted(event) || event.pointerType === 'touch') return
+    hovered = true
+    expandEntry()
+  }
+
+  function onPointerLeave(event: PointerEvent): void {
+    if (!event.isTrusted) return
+    hovered = false
+    scheduleDock()
+  }
+
+  function onFocusIn(): void {
+    if (!disposed) expandEntry()
+  }
+
+  function onFocusOut(): void {
+    // focus-visible still refers to the old target during focusout.
+    queueMicrotask(() => {
+      if (!disposed) scheduleDock()
+    })
+  }
 
   function scaleOf(next: Viewport): number {
     return next.scale > 0 && Number.isFinite(next.scale) ? next.scale : 1
@@ -735,7 +909,7 @@ export function createFloatingEntry(
       current.configured === next.configured &&
       current.restored === next.restored &&
       current.canRestore === next.canRestore &&
-      current.paused === next.paused &&
+      current.resumable === next.resumable &&
       current.busy === next.busy &&
       current.checking === next.checking &&
       current.error === next.error
@@ -751,42 +925,32 @@ export function createFloatingEntry(
 
   function render(): void {
     if (view === undefined || labels === undefined) return
-    if (confirmOpen && (!view.configured || view.autoEnabled !== confirmAuto)) closeConfirm()
     setText(title, labels.title)
     setText(hostname, view.hostname)
     setText(move, labels.move)
     setText(disclosure, labels.disclosure)
-    setText(configure, labels.configure)
-    setHidden(configure, view.configured)
-    setText(consentText, labels.consent)
-    setHidden(consent, !confirmOpen)
-    const modelText = view.checking ? labels.loading
-      : view.pageOn === true ? labels.pageOn
-      : view.autoEnabled ? labels.modelOn : labels.modelOff
-    setText(statusMain, modelText)
     setText(statusFixed, view.fixedOn ? labels.fixedOn : '')
     setHidden(statusFixed, !view.fixedOn || view.checking)
-    const pageText = view.restored ? labels.restored : view.paused ? labels.paused : ''
-    setText(statusPage, pageText)
-    setHidden(statusPage, pageText === '' || view.checking)
-    setText(translateButton, labels.translatePage)
-    setHidden(translateButton, confirmOpen)
+    setText(translateButton, view.configured ? labels.translatePage : labels.configure)
     if (view.busy) translateButton.setAttribute('aria-disabled', 'true')
     else translateButton.removeAttribute('aria-disabled')
-    primary.classList.toggle('floating-primary', confirmOpen)
-    const primaryText = confirmOpen ? labels.confirm : view.autoEnabled ? labels.disable : labels.enable
-    setText(primary, primaryText)
-    primary.disabled = !view.configured || (confirmOpen && !consentBox.checked)
+    setText(primary, labels.autoTranslate ?? labels.enable)
+    primary.setAttribute('aria-checked', String(view.autoEnabled))
+    primary.disabled = (!view.configured && !view.autoEnabled) || view.checking
     if (view.busy) primary.setAttribute('aria-disabled', 'true')
     else primary.removeAttribute('aria-disabled')
-    setText(pageButton, view.restored ? labels.resume : labels.restore)
+    setText(pageButton, labels.restore)
     pageButton.disabled = !view.canRestore || view.checking
+    setHidden(pageButton, !view.canRestore || view.restored)
     if (view.busy) pageButton.setAttribute('aria-disabled', 'true')
     else pageButton.removeAttribute('aria-disabled')
+    setText(resumeButton, labels.resume)
+    resumeButton.disabled = !view.resumable || view.checking
+    setHidden(resumeButton, !view.resumable)
+    if (view.busy) resumeButton.setAttribute('aria-disabled', 'true')
+    else resumeButton.removeAttribute('aria-disabled')
     setText(settingsButton, labels.settings)
-    setText(foldButton, labels.fold)
-    setText(cancelButton, labels.cancel)
-    setHidden(cancelButton, !confirmOpen)
+    closeButton.setAttribute('aria-label', labels.close)
     const errorText = [positionFailed ? labels.positionFailed : '', view.error].filter((item) => item !== '').join('\n')
     setText(error, errorText)
     setHidden(error, errorText === '')
@@ -798,11 +962,6 @@ export function createFloatingEntry(
       entry.tabIndex = -1
       closeMenu(false)
     }
-  }
-
-  function closeConfirm(): void {
-    confirmOpen = false
-    consentBox.checked = false
   }
 
   function trusted(event: Event): boolean {
@@ -818,6 +977,7 @@ export function createFloatingEntry(
     callbacks.onOpen()
     if (disposed) return
     menuOpen = true
+    expandEntry()
     menu.hidden = false
     entry.setAttribute('aria-expanded', 'true')
     if (labels !== undefined && view !== undefined) {
@@ -827,21 +987,25 @@ export function createFloatingEntry(
     menuObserver?.observe(menu)
     place()
     if (keyboard) {
-      const target = [translateButton, primary, pageButton, settingsButton, foldButton, cancelButton].find((button) => !button.hidden && !blocked(button))
+      const target = [translateButton, primary, pageButton, resumeButton, settingsButton, closeButton].find((button) => !button.hidden && !blocked(button))
       target?.focus({ preventScroll: true })
     }
   }
 
   function closeMenu(returnFocus = false): void {
-    if (!menuOpen && menu.hidden) return
+    if (!menuOpen && menu.hidden) {
+      if (returnFocus) entry.focus({ preventScroll: true })
+      return
+    }
     menuOpen = false
     menu.hidden = true
     entry.classList.remove('is-covered')
-    closeConfirm()
     menuObserver?.unobserve(menu)
     entry.setAttribute('aria-expanded', 'false')
     if (labels !== undefined) entry.setAttribute('aria-label', position.collapsed ? labels.expand : labels.open)
     if (returnFocus) entry.focus({ preventScroll: true })
+    scheduleDock()
+    geometry.onPosition?.()
   }
 
   function buttonBox(left: number, top: number, size: number): Rect {
@@ -855,15 +1019,12 @@ export function createFloatingEntry(
     return min + (max - min) * position.ratio
   }
 
-  function dockX(next: Viewport, size: number, margin: number, collapsed: boolean): number {
+  function dockX(next: Viewport, size: number, collapsed: boolean): number {
     const scale = scaleOf(next)
     if (collapsed) {
       return position.side === 'left' ? -(BUTTON - VISIBLE_COLLAPSED) / scale : next.width - VISIBLE_COLLAPSED / scale
     }
-    const min = margin
-    const max = next.width - size - margin
-    if (max < min) return clamp(position.side === 'left' ? 0 : next.width - size, 0, Math.max(0, next.width - size))
-    return position.side === 'left' ? min : max
+    return position.side === 'left' ? 0 : Math.max(0, next.width - size)
   }
 
   function avoidY(preferred: number, size: number, next: Viewport, margin: number): number | undefined {
@@ -886,7 +1047,7 @@ export function createFloatingEntry(
     for (const candidate of candidates) {
       const top = clamp(candidate, 0, Math.max(0, next.height - size))
       if (top < min - 0.5 || top > max + 0.5) continue
-      const box = buttonBox(dockX(next, size, margin, position.collapsed), top, size)
+      const box = buttonBox(dockX(next, size, position.collapsed), top, size)
       if (obstacles.some((rect) => intersects(box, rect))) continue
       const distance = Math.abs(top - preferred)
       if (distance < bestDistance) {
@@ -909,6 +1070,7 @@ export function createFloatingEntry(
     if (view?.visible === false) {
       entry.style.visibility = 'hidden'
       entry.tabIndex = -1
+      geometry.onPosition?.()
       return
     }
     const preferred = restedY(viewport, size, margin)
@@ -918,13 +1080,15 @@ export function createFloatingEntry(
       entry.style.visibility = 'hidden'
       entry.tabIndex = -1
       if (menuOpen) closeMenu(false)
+      geometry.onPosition?.()
       return
     }
     entry.style.visibility = 'visible'
     entry.tabIndex = 0
-    entry.style.left = `${dockX(viewport, size, margin, position.collapsed)}px`
+    entry.style.left = `${dockX(viewport, size, position.collapsed)}px`
     entry.style.top = `${y}px`
     placeMenu(scale, size, margin)
+    geometry.onPosition?.()
   }
 
   function placeMenu(scale: number, size: number, margin: number): void {
@@ -989,7 +1153,7 @@ export function createFloatingEntry(
   }
 
   function persist(next: FloatingPosition): void {
-    pendingWrite = next
+    pendingWrite = { ...next, collapsed: true }
     if (writing || callbacks === undefined) return
     writing = true
     void flushWrites()
@@ -1042,6 +1206,7 @@ export function createFloatingEntry(
     if (!commit || !current.moved) {
       position = current.origin
       place()
+      scheduleDock()
       return
     }
     suppressClick = true
@@ -1050,21 +1215,23 @@ export function createFloatingEntry(
     const point = currentLeftTop()
     const center = point.left + size / 2
     const side = center < viewport.width / 2 ? 'left' : 'right'
-    const edge = side === 'left' ? point.left : viewport.width - (point.left + size)
-    const collapsed = edge <= EDGE_PX / scale
     const margin = MARGIN / scale
     const min = margin
     const max = viewport.height - size - margin
     const ratio = max <= min ? 0.5 : clamp((point.top - min) / (max - min), 0, 1)
-    position = { side, ratio, collapsed }
+    position = { side, ratio, collapsed: false }
+    hovered = false
     dirty = true
     place()
     persist(position)
+    render()
+    scheduleDock()
   }
 
   function onPointerDown(event: PointerEvent): void {
     if (!event.isTrusted || event.isPrimary !== true || event.button !== 0 || disposed || view?.visible !== true) return
     suppressClick = false
+    clearDockTimer()
     if (drag !== undefined) stopDrag(false)
     place()
     const point = currentLeftTop()
@@ -1085,6 +1252,7 @@ export function createFloatingEntry(
       entry.tabIndex = 0
       entry.style.left = `${left}px`
       entry.style.top = `${top}px`
+      geometry.onPosition?.()
     }
     const onUp = (up: PointerEvent): void => {
       if (drag === undefined || up.pointerId !== drag.pointerId) return
@@ -1126,14 +1294,7 @@ export function createFloatingEntry(
       suppressClick = false
       return
     }
-    if (position.collapsed) {
-      position = { ...position, collapsed: false }
-      dirty = true
-      place()
-      persist(position)
-      if (labels !== undefined) entry.setAttribute('aria-label', labels.open)
-      return
-    }
+    expandEntry()
     if (menuOpen) closeMenu(false)
     else openMenu(event.detail === 0)
   }
@@ -1158,6 +1319,7 @@ export function createFloatingEntry(
     dirty = true
     place()
     persist(position)
+    scheduleDock()
   }
 
   function onEntryKeyDown(event: KeyboardEvent): void {
@@ -1182,30 +1344,22 @@ export function createFloatingEntry(
 
   function onTranslate(event: MouseEvent): void {
     if (!trusted(event) || view === undefined || blocked(translateButton)) return
-    closeConfirm()
     callbacks?.onAction('translate-page')
   }
 
   function onPrimary(event: MouseEvent): void {
     if (!trusted(event) || view === undefined || blocked(primary)) return
-    if (!view.configured) return
-    if (view.autoEnabled) {
-      callbacks?.onAction('toggle-auto')
-      return
-    }
-    if (!confirmOpen) {
-      confirmOpen = true
-      confirmAuto = view.autoEnabled
-      render()
-      return
-    }
-    if (!consentBox.checked) return
     callbacks?.onAction('toggle-auto')
   }
 
   function onPage(event: MouseEvent): void {
     if (!trusted(event) || view === undefined || blocked(pageButton)) return
-    callbacks?.onAction(view.restored ? 'resume' : 'restore')
+    callbacks?.onAction('restore')
+  }
+
+  function onResume(event: MouseEvent): void {
+    if (!trusted(event) || view === undefined || !view.resumable || blocked(resumeButton)) return
+    callbacks?.onAction('resume')
   }
 
   function onSettings(event: MouseEvent): void {
@@ -1213,20 +1367,9 @@ export function createFloatingEntry(
     callbacks?.onAction('settings')
   }
 
-  function onFold(event: MouseEvent): void {
-    if (!trusted(event) || blocked(foldButton)) return
-    closeMenu(false)
-    position = { ...position, collapsed: true }
-    dirty = true
-    place()
-    persist(position)
-    if (labels !== undefined) entry.setAttribute('aria-label', labels.expand)
-  }
-
-  function onCancel(event: MouseEvent): void {
+  function onCloseClick(event: MouseEvent): void {
     if (!trusted(event)) return
-    closeConfirm()
-    render()
+    closeMenu(true)
   }
 
   function onBlur(): void {
@@ -1238,6 +1381,10 @@ export function createFloatingEntry(
   }
 
   entry.addEventListener('pointerdown', onPointerDown)
+  entry.addEventListener('pointerenter', onPointerEnter)
+  entry.addEventListener('pointerleave', onPointerLeave)
+  entry.addEventListener('focusin', onFocusIn)
+  entry.addEventListener('focusout', onFocusOut)
   entry.addEventListener('lostpointercapture', onLostCapture)
   entry.addEventListener('click', onEntryClick)
   entry.addEventListener('keydown', onEntryKeyDown)
@@ -1245,10 +1392,9 @@ export function createFloatingEntry(
   translateButton.addEventListener('click', onTranslate)
   primary.addEventListener('click', onPrimary)
   pageButton.addEventListener('click', onPage)
+  resumeButton.addEventListener('click', onResume)
   settingsButton.addEventListener('click', onSettings)
-  foldButton.addEventListener('click', onFold)
-  cancelButton.addEventListener('click', onCancel)
-  consentBox.addEventListener('change', () => render())
+  closeButton.addEventListener('click', onCloseClick)
   window.addEventListener('blur', onBlur)
   document.addEventListener('visibilitychange', onVisibility)
 
@@ -1272,7 +1418,9 @@ export function createFloatingEntry(
           .then((value) => {
             if (disposed || dirty || token !== readEpoch) return
             position = readPosition(value)
+            if (keepExpanded()) position = { ...position, collapsed: false }
             place()
+            render()
           })
           .catch(() => undefined)
       }
@@ -1289,15 +1437,32 @@ export function createFloatingEntry(
       return menuOpen
     },
     reposition,
+    getAnchor() {
+      if (disposed || view?.visible !== true || entry.style.visibility !== 'visible') return undefined
+      const { left, top } = currentLeftTop()
+      const size = BUTTON / scaleOf(viewport)
+      return { side: position.side, left, top, right: left + size, bottom: top + size }
+    },
+    setNoticeVisible(visible) {
+      if (disposed || noticeVisible === visible) return
+      noticeVisible = visible
+      if (visible) expandEntry()
+      else scheduleDock()
+    },
     dispose() {
       if (disposed) return
       disposed = true
+      clearDockTimer()
       readEpoch += 1
       if (drag !== undefined) stopDrag(false)
       if (raf !== 0) cancelAnimationFrame(raf)
       raf = 0
       menuObserver?.disconnect()
       entry.removeEventListener('pointerdown', onPointerDown)
+      entry.removeEventListener('pointerenter', onPointerEnter)
+      entry.removeEventListener('pointerleave', onPointerLeave)
+      entry.removeEventListener('focusin', onFocusIn)
+      entry.removeEventListener('focusout', onFocusOut)
       entry.removeEventListener('lostpointercapture', onLostCapture)
       entry.removeEventListener('click', onEntryClick)
       entry.removeEventListener('keydown', onEntryKeyDown)
@@ -1305,9 +1470,9 @@ export function createFloatingEntry(
       translateButton.removeEventListener('click', onTranslate)
       primary.removeEventListener('click', onPrimary)
       pageButton.removeEventListener('click', onPage)
+      resumeButton.removeEventListener('click', onResume)
       settingsButton.removeEventListener('click', onSettings)
-      foldButton.removeEventListener('click', onFold)
-      cancelButton.removeEventListener('click', onCancel)
+      closeButton.removeEventListener('click', onCloseClick)
       window.removeEventListener('blur', onBlur)
       document.removeEventListener('visibilitychange', onVisibility)
       style.remove()

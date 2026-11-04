@@ -37,6 +37,43 @@ beforeEach(() => {
 })
 
 describe('选项页真实挂载', () => {
+  it('自动弹窗一击保存且重载保留，不覆盖连接草稿或弹成功提示', async () => {
+    clearToasts()
+    let current = { ...CONFIG }
+    const patches: unknown[] = []
+    replies({
+      'wt:get-config': () => ({ ok: true, config: current, hasKey: true, keyState: 'ready' }),
+      'wt:save-config': (message) => {
+        patches.push(message.patch)
+        current = { ...current, ...(message.patch as Partial<TranslationConfig>) }
+        return { ok: true, config: current, hasKey: true, keyState: 'ready' }
+      },
+    })
+    const wrapper = mount(TranslationSection)
+    await flushPromises()
+    await wrapper.find('input').setValue('https://draft.example.com/v1')
+    await wrapper.get('[data-test="wt-auto-interaction"] [role="switch"]').trigger('click')
+    await flushPromises()
+    expect(patches).toEqual([{ autoInteractionEnabled: false }])
+    expect(wrapper.get('[data-test="wt-auto-interaction"] [role="switch"]').attributes('aria-checked')).toBe('false')
+    expect((wrapper.find('input').element as HTMLInputElement).value).toBe('https://draft.example.com/v1')
+    expect(useToasts().value).toEqual([])
+    wrapper.unmount()
+    const reloaded = mount(TranslationSection)
+    await flushPromises()
+    expect(reloaded.get('[data-test="wt-auto-interaction"] [role="switch"]').attributes('aria-checked')).toBe('false')
+    reloaded.unmount()
+    const popup = mount(TranslationControls)
+    await flushPromises()
+    await flushPromises()
+    expect(popup.get('[data-test="wt-popup-auto-interaction"] [role="switch"]').attributes('aria-checked')).toBe('false')
+    await popup.get('[data-test="wt-popup-auto-interaction"] [role="switch"]').trigger('click')
+    await flushPromises()
+    expect(patches).toEqual([{ autoInteractionEnabled: false }, { autoInteractionEnabled: true }])
+    expect(popup.get('[data-test="wt-popup-auto-interaction"] [role="switch"]').attributes('aria-checked')).toBe('true')
+    popup.unmount()
+  })
+
   it('排除列表保存期间拒绝第二次增删，且不申请网站权限', async () => {
     let release!: (value: unknown) => void
     const pending = new Promise((resolve) => { release = resolve })
@@ -170,10 +207,14 @@ describe('选项页真实挂载', () => {
     expect((inputs[1]?.element as HTMLInputElement).value).toBe('sk-draft')
   })
 
-  it('smart 确认取消后回到持久化模式', async () => {
+  it('smart 选择后直接保存，没有确认或取消弹窗', async () => {
+    const saved: Record<string, unknown>[] = []
     replies({
       'wt:get-config': () => ({ ok: true, config: CONFIG, hasKey: true, keyState: 'ready' }),
-      'wt:save-config': () => ({ ok: true, config: CONFIG, hasKey: true, keyState: 'ready' }),
+      'wt:save-config': (message) => {
+        saved.push(message)
+        return { ok: true, config: { ...CONFIG, ...(message.patch as object) }, hasKey: true, keyState: 'ready' }
+      },
     })
     vi.spyOn(fakeBrowser.permissions, 'request').mockImplementation(async () => true)
     const wrapper = mount(TranslationSection)
@@ -182,11 +223,13 @@ describe('选项页真实挂载', () => {
     const smart = wrapper.findAll('[role="option"]').find((o) => o.text() === en.wtModeSmart)
     await smart?.trigger('click')
     await flushPromises()
-    expect(wrapper.find('[data-test="wt-smart-confirm"]').exists()).toBe(true)
-    await wrapper.find('[data-test="wt-smart-cancel"]').trigger('click')
-    await flushPromises()
+    expect(wrapper.find('[data-test="wt-smart-confirm"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="wt-smart-cancel"]').exists()).toBe(false)
+    expect(saved).toHaveLength(1)
+    expect(saved[0]?.patch).toEqual({ selectionPopupEnabled: true, selectionToolbarEnabled: false, proactiveAssistEnabled: true })
     const select = wrapper.find('[data-test="wt-assist-mode"]')
-    expect(select.text()).toContain('Off')
+    expect(select.text()).toContain(en.wtModeSmart)
+    wrapper.unmount()
   })
 
   it('密钥状态不可用仍显示删除并可清除', async () => {
@@ -853,7 +896,7 @@ describe('选项页真实挂载', () => {
       await flushPromises()
       await wrapper.get('[data-test="wt-floating-toggle"] [role="switch"]').trigger('click')
       await flushPromises()
-      expect(useToasts().value.at(-1)?.key).toBe('saved')
+      expect(useToasts().value).toEqual([])
       await wrapper.get('[data-test="wt-floating-toggle"] [role="switch"]').trigger('click')
       await flushPromises()
       expect(saves).toBe(2)
@@ -1353,13 +1396,13 @@ describe('弹出页站点控制', () => {
     const wrapper = mount(TranslationControls)
     await flushPromises()
     await flushPromises()
-    await wrapper.find('[data-test="wt-enable"]').trigger('click')
-    const confirm = wrapper.find('[data-test="wt-confirm"]')
-    await confirm.trigger('click')
-    await confirm.trigger('click')
+    const toggle = wrapper.get('[data-test="wt-auto"] [role="switch"]')
+    await toggle.trigger('click')
+    await toggle.trigger('click')
+    expect(wrapper.find('[data-test="wt-confirm"]').exists()).toBe(false)
     expect(req).toHaveBeenCalledTimes(1)
     expect(req).toHaveBeenCalledWith({ origins: ['http://localhost/*'] })
-    expect((confirm.element as HTMLButtonElement).disabled).toBe(true)
+    expect((toggle.element as HTMLButtonElement).disabled).toBe(true)
     release(true)
     await flushPromises()
     wrapper.unmount()
@@ -1393,9 +1436,24 @@ describe('弹出页站点控制', () => {
     wrapper.unmount()
   })
 
-  it('达到上限后恢复原文：显示继续按钮，点击发送 resume 并刷新状态', async () => {
+  it.each([false, true])('硬上限且paused=%s时保留恢复，不显示无效的继续', async (paused) => {
     await settingsItem.setValue(DEFAULT_SETTINGS)
-    let status: unknown = { ok: true, status: { supported: true, fixed: false, auto: false, paused: true, capped: true, failed: 0, error: '' } }
+    tabAndStatus('https://app.devin.ai/work', {
+      ok: true,
+      status: { supported: true, fixed: false, auto: false, paused, capped: true, budgetCapped: false, failed: 0, error: 'limit' },
+    })
+    replies({ 'wt:get-config': () => ({ ok: true, config: CONFIG }) })
+    const wrapper = mount(TranslationControls)
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.find('[data-test="wt-restore"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="wt-resume"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('字符预算上限后恢复原文：显示继续按钮，点击发送 resume 并刷新状态', async () => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    let status: unknown = { ok: true, status: { supported: true, fixed: false, auto: false, paused: true, capped: true, budgetCapped: true, failed: 0, error: '' } }
     tabAndStatus('https://app.devin.ai/work', undefined)
     vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async () => status)
     const actions: unknown[] = []
@@ -1422,9 +1480,9 @@ describe('弹出页站点控制', () => {
     wrapper.unmount()
   })
 
-  it('达到上限但未暂停且无错误：不显示继续按钮，由页内状态条处理', async () => {
+  it('达到字符预算上限时弹出页仍可继续，不依赖自动气泡', async () => {
     await settingsItem.setValue(DEFAULT_SETTINGS)
-    tabAndStatus('https://app.devin.ai/work', { ok: true, status: { supported: true, fixed: false, auto: false, paused: false, capped: true, failed: 0, error: '' } })
+    tabAndStatus('https://app.devin.ai/work', { ok: true, status: { supported: true, fixed: false, auto: false, paused: false, capped: true, budgetCapped: true, failed: 0, error: '' } })
     replies({
       'wt:get-config': () => ({ ok: true, config: { ...CONFIG, autoOrigins: ['https://app.devin.ai'] } }),
     })
@@ -1432,7 +1490,7 @@ describe('弹出页站点控制', () => {
     await flushPromises()
     await flushPromises()
     expect(wrapper.find('[data-test="wt-state"]').text()).toBe(en.wtAutoCapped)
-    expect(wrapper.find('[data-test="wt-resume"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="wt-resume"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="wt-restore"]').exists()).toBe(true)
     wrapper.unmount()
   })
@@ -1557,7 +1615,7 @@ describe('弹出页站点控制', () => {
     off.unmount()
   })
 
-  it('范围外点击启用和确认不申请权限也不开启自动翻译', async () => {
+  it('范围外自动开关禁用；范围变化及时反映且不申请权限', async () => {
     await settingsItem.setValue(DEFAULT_SETTINGS)
     clearToasts()
     const sent: Record<string, unknown>[] = []
@@ -1586,12 +1644,14 @@ describe('弹出页站点控制', () => {
     await flushPromises()
     await flushPromises()
     expect(blocked.find('[data-test="wt-state"]').text()).toBe(en.wtScopeBlocked)
-    await blocked.find('[data-test="wt-enable"]').trigger('click')
+    const blockedSwitch = blocked.get('[data-test="wt-auto"] [role="switch"]')
+    expect((blockedSwitch.element as HTMLButtonElement).disabled).toBe(true)
+    await blockedSwitch.trigger('click')
     await flushPromises()
     expect(req).not.toHaveBeenCalled()
     expect(sent).toEqual([])
     expect(blocked.find('[data-test="wt-confirm"]').exists()).toBe(false)
-    expect(useToasts().value.at(-1)?.key).toBe('wtScopeBlocked')
+    expect(useToasts().value).toEqual([])
     blocked.unmount()
 
     narrowed = false
@@ -1599,18 +1659,20 @@ describe('弹出页站点控制', () => {
     const wrapper = mount(TranslationControls)
     await flushPromises()
     await flushPromises()
-    await wrapper.find('[data-test="wt-enable"]').trigger('click')
-    expect(wrapper.find('[data-test="wt-confirm"]').exists()).toBe(true)
+    expect((wrapper.get('[data-test="wt-auto"] [role="switch"]').element as HTMLButtonElement).disabled).toBe(false)
+    expect(wrapper.find('[data-test="wt-confirm"]').exists()).toBe(false)
     narrowed = true
     const { translationConfigItem, DEFAULT_TRANSLATION_CONFIG } = await import('../../../src/translation/config')
     await translationConfigItem.setValue({ ...DEFAULT_TRANSLATION_CONFIG, ...CONFIG, siteScopeMode: 'include', siteScopeHosts: [] })
     await flushPromises()
     await flushPromises()
-    await wrapper.find('[data-test="wt-confirm"]').trigger('click')
+    const updatedSwitch = wrapper.get('[data-test="wt-auto"] [role="switch"]')
+    expect((updatedSwitch.element as HTMLButtonElement).disabled).toBe(true)
+    await updatedSwitch.trigger('click')
     await flushPromises()
     expect(req).not.toHaveBeenCalled()
     expect(sent).toEqual([])
-    expect(useToasts().value.at(-1)?.key).toBe('wtScopeBlocked')
+    expect(useToasts().value).toEqual([])
     wrapper.unmount()
   })
 
@@ -1652,8 +1714,7 @@ describe('弹出页站点控制', () => {
     const smart = wrapper.findAll('[role="option"]').find((option) => option.text() === en.wtModeSmart)
     await smart?.trigger('click')
     await flushPromises()
-    await wrapper.find('[data-test="wt-smart-confirm"]').trigger('click')
-    await flushPromises()
+    expect(wrapper.find('[data-test="wt-smart-confirm"]').exists()).toBe(false)
     expect(saved.at(-1)?.patch).toEqual({
       selectionPopupEnabled: true,
       selectionToolbarEnabled: false,

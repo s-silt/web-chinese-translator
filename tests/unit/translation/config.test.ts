@@ -352,6 +352,19 @@ describe('floatingButtonEnabled 保存', () => {
     fakeBrowser.reset()
   })
 
+  it('自动弹窗旧配置默认开启，关闭持久化且不改变其他功能偏好', async () => {
+    expect(sanitizeTranslationConfig({ model: 'legacy' }).autoInteractionEnabled).toBe(true)
+    await updateTranslationConfig({ selectionPopupEnabled: true, proactiveAssistEnabled: true, floatingButtonEnabled: true })
+    await updateTranslationConfig({ autoInteractionEnabled: false })
+    expect(await getTranslationConfig()).toMatchObject({
+      autoInteractionEnabled: false, selectionPopupEnabled: true, proactiveAssistEnabled: true, floatingButtonEnabled: true,
+    })
+    await updateTranslationConfig({ model: 'different-model' })
+    expect((await getTranslationConfig()).autoInteractionEnabled).toBe(false)
+    await updateTranslationConfig({ autoInteractionEnabled: true })
+    expect((await getTranslationConfig()).autoInteractionEnabled).toBe(true)
+  })
+
   it('显式关闭和重新开启均保留，其他patch不会重置开关', async () => {
     expect((await getTranslationConfig()).floatingButtonEnabled).toBe(true)
     await updateTranslationConfig({ floatingButtonEnabled: false })

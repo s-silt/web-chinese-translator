@@ -156,6 +156,17 @@
     <div v-show="props.view === 'all' || props.view === 'general'" class="wt-reading-group" data-test="wt-general-view">
       <div class="wt-floating-group">
         <UiSwitch
+          :checked="autoInteractionEnabled"
+          :label="t('wtAutomaticInteractions')"
+          :disabled="!ready || saving"
+          aria-describedby="wt-auto-interaction-hint"
+          data-test="wt-auto-interaction"
+          @change="changeAutoInteraction"
+        />
+        <p id="wt-auto-interaction-hint" class="wt-hint">{{ t('wtAutomaticInteractionsHint') }}</p>
+      </div>
+      <div class="wt-floating-group">
+        <UiSwitch
           :checked="floatingButtonEnabled"
           :label="t('wtFloatingButton')"
           :disabled="!ready || saving"
@@ -185,19 +196,8 @@
           data-test="wt-assist-mode"
           @update:model-value="changeAssistMode($event as AssistMode)"
         />
-        <span id="wt-assist-mode-hint" class="wt-hint">{{ assistMode === 'toolbar' ? t('wtToolbarHint') : t('wtAssistModeHint') }}</span>
+        <span id="wt-assist-mode-hint" class="wt-hint">{{ assistMode === 'toolbar' ? t('wtToolbarHint') : assistMode === 'smart' ? t('wtSmartInlineHint') : t('wtAssistModeHint') }}</span>
       </label>
-      <div v-if="smartConfirm" class="wt-smart-confirm">
-        <p class="wt-hint">{{ t('wtProactiveHint') }}</p>
-        <div class="wt-smart-actions">
-          <UiButton size="sm" variant="primary" :disabled="saving" data-test="wt-smart-confirm" @click="confirmSmart">
-            {{ t('wtConsentAction') }}
-          </UiButton>
-          <UiButton size="sm" :disabled="saving" data-test="wt-smart-cancel" @click="cancelSmart">
-            {{ t('cancel') }}
-          </UiButton>
-        </div>
-      </div>
     </div>
 
     <div v-show="props.view === 'all' || props.view === 'general'" class="wt-language-pair">
@@ -274,6 +274,7 @@
         </div>
         <div class="wt-site-group">
           <h3 class="wt-subtitle">{{ t('wtAutoSites') }}</h3>
+          <p class="wt-hint">{{ t('wtModelInlineHint') }}</p>
           <ul v-if="origins.length" class="wt-sites">
             <li v-for="origin in origins" :key="origin" class="wt-site">
               <span class="wt-origin" data-test="wt-origin">{{ origin }}</span>
@@ -287,10 +288,6 @@
             <UiInput v-model="newSite" :disabled="!ready || saving" :placeholder="t('wtSitePlaceholder')" />
             <UiButton :disabled="!ready || saving" data-test="wt-add" @click="addSite">{{ t('wtAddSite') }}</UiButton>
           </div>
-          <label class="wt-consent">
-            <input v-model="consent" type="checkbox" :disabled="!ready || saving" data-test="wt-consent" />
-            <span>{{ t('wtConsent') }}</span>
-          </label>
         </div>
         <div class="wt-site-group">
           <h3 class="wt-subtitle">{{ t('wtExcludedSites') }}</h3>
@@ -414,10 +411,9 @@ const toolbarEnabled = ref(false)
 const proactiveAssistEnabled = ref(false)
 const assistMode = ref<AssistMode>('off')
 const floatingButtonEnabled = ref(false)
+const autoInteractionEnabled = ref(true)
 const shortcuts = ref<ShortcutItem[]>([])
-const smartConfirm = ref(false)
 const newSite = ref('')
-const consent = ref(false)
 const statusMessage = ref('')
 const statusError = ref(false)
 const modelChoices = ref<string[]>([])
@@ -539,6 +535,7 @@ function applyConfig(
   toolbarEnabled.value = config.selectionToolbarEnabled
   proactiveAssistEnabled.value = config.proactiveAssistEnabled
   floatingButtonEnabled.value = config.floatingButtonEnabled
+  autoInteractionEnabled.value = config.autoInteractionEnabled
   assistMode.value = persistedMode()
   keyState.value = state
 }
@@ -874,7 +871,6 @@ async function saveAndConnect(): Promise<void> {
     if (saved.warning !== undefined) return
     if (trimmed === '' || model.value.trim() === '') {
       setStatus(t('saved'), false)
-      toast.show('success', 'saved')
       return
     }
     testing.value = true
@@ -889,6 +885,17 @@ async function saveAndConnect(): Promise<void> {
   }
 }
 
+async function changeAutoInteraction(enabled: boolean): Promise<void> {
+  if (!ready.value || saving.value || enabled === autoInteractionEnabled.value) return
+  saving.value = true
+  setStatus('', false)
+  try {
+    await savePatch({ autoInteractionEnabled: enabled })
+  } finally {
+    saving.value = false
+  }
+}
+
 async function changeFloatingButton(enabled: boolean): Promise<void> {
   if (!ready.value || saving.value || enabled === floatingButtonEnabled.value) return
   saving.value = true
@@ -896,7 +903,6 @@ async function changeFloatingButton(enabled: boolean): Promise<void> {
   try {
     const saved = await savePatch({ floatingButtonEnabled: enabled })
     if (!saved) toast.show('danger', 'saveFailed')
-    else if (saved.warning === undefined) toast.show('success', 'saved')
     else toast.clear()
   } finally {
     saving.value = false
@@ -943,15 +949,9 @@ async function changeAssistMode(mode: AssistMode): Promise<void> {
     desiredProactive === proactiveAssistEnabled.value
   ) {
     assistMode.value = mode
-    smartConfirm.value = false
     return
   }
   assistMode.value = mode
-  smartConfirm.value = false
-  if (mode === 'smart') {
-    smartConfirm.value = true
-    return
-  }
   saving.value = true
   try {
     if (mode !== 'off') {
@@ -975,35 +975,6 @@ async function changeAssistMode(mode: AssistMode): Promise<void> {
   } finally {
     saving.value = false
   }
-}
-
-async function confirmSmart(): Promise<void> {
-  if (!ready.value || saving.value) return
-  saving.value = true
-  try {
-    const granted = await browser.permissions
-      .request({ origins: ['http://*/*', 'https://*/*'] })
-      .catch(() => false)
-    smartConfirm.value = false
-    if (!granted) {
-      assistMode.value = persistedMode()
-      setStatus(t('wtPermissionDenied'), true)
-      return
-    }
-    const saved = await savePatch({
-      selectionPopupEnabled: true,
-      selectionToolbarEnabled: false,
-      proactiveAssistEnabled: true,
-    })
-    if (!saved) assistMode.value = persistedMode()
-  } finally {
-    saving.value = false
-  }
-}
-
-function cancelSmart(): void {
-  smartConfirm.value = false
-  assistMode.value = persistedMode()
 }
 
 async function deleteKey(): Promise<void> {
@@ -1046,10 +1017,6 @@ async function addSite(): Promise<void> {
     setStatus(t('exists'), true)
     return
   }
-  if (!consent.value) {
-    setStatus(t('wtConsentRequired'), true)
-    return
-  }
   saving.value = true
   try {
     const granted = await browser.permissions
@@ -1066,7 +1033,6 @@ async function addSite(): Promise<void> {
     }
     applyConfig(reply.config, keyStateFrom(reply), false, reply.customHeadersState)
     newSite.value = ''
-    consent.value = false
   } finally {
     saving.value = false
   }
@@ -1358,20 +1324,6 @@ onBeforeUnmount(() => {
   font-weight: 500;
 }
 
-.wt-consent {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--gcn-fg-muted);
-}
-
-.wt-consent input[type='checkbox'] {
-  flex: none;
-  margin: 3px 0 0;
-}
-
 .wt-details {
   border: 1px solid var(--gcn-border-muted);
   border-radius: var(--gcn-radius-lg, 8px);
@@ -1406,21 +1358,6 @@ onBeforeUnmount(() => {
 .wt-site-group :deep(.ui-select) {
   width: 100%;
   max-width: 380px;
-}
-
-.wt-smart-confirm {
-  display: grid;
-  gap: 10px;
-  padding: 12px 14px;
-  background: var(--gcn-bg-muted);
-  border: 1px solid var(--gcn-border-muted);
-  border-radius: var(--gcn-radius-lg, 8px);
-}
-
-.wt-smart-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
 .wt-shortcuts {

@@ -27,6 +27,7 @@ export interface TranslationConfig {
   readonly selectionToolbarEnabled: boolean
   readonly proactiveAssistEnabled: boolean
   readonly floatingButtonEnabled: boolean
+  readonly autoInteractionEnabled: boolean
   readonly excludedHosts: readonly string[]
   readonly siteScopeMode: SiteScopeMode
   readonly siteScopeHosts: readonly string[]
@@ -47,6 +48,7 @@ export const DEFAULT_TRANSLATION_CONFIG: TranslationConfig = {
   selectionToolbarEnabled: false,
   proactiveAssistEnabled: false,
   floatingButtonEnabled: true,
+  autoInteractionEnabled: true,
   excludedHosts: [],
   siteScopeMode: 'all',
   siteScopeHosts: [],
@@ -219,6 +221,7 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
     selectionToolbarEnabled: toolbarOn,
     proactiveAssistEnabled: selectionOn && !toolbarOn && value.proactiveAssistEnabled === true,
     floatingButtonEnabled: value.floatingButtonEnabled !== false,
+    autoInteractionEnabled: value.autoInteractionEnabled !== false,
     excludedHosts: sanitizeExcludedHosts(value.excludedHosts),
     siteScopeMode: isSiteScopeMode(value.siteScopeMode) ? value.siteScopeMode : 'all',
     siteScopeHosts: sanitizeExcludedHosts(value.siteScopeHosts),

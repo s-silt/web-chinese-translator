@@ -1,14 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createFloatingEntry, type FloatingAction, type FloatingLabels, type FloatingPosition, type FloatingView } from '../../../src/translation/floating'
 
-const BUTTON = 52
-const VISIBLE = 26
+const BUTTON = 40
+const VISIBLE = 20
 
 let width = 800
 let height = 600
 let scale = 1
 let obstacles: readonly { left: number; top: number; right: number; bottom: number }[] = []
 let hosts: HTMLElement[] = []
+let entries: ReturnType<typeof createFloatingEntry>[] = []
 
 function labels(patch: Partial<FloatingLabels> = {}): FloatingLabels {
   return {
@@ -50,7 +51,7 @@ function view(patch: Partial<FloatingView> = {}): FloatingView {
     configured: true,
     restored: false,
     canRestore: true,
-    paused: false,
+    resumable: false,
     busy: false,
     checking: false,
     error: '',
@@ -107,6 +108,7 @@ function mount(options?: {
     viewport: () => ({ width, height, scale }),
     avoidRects: () => obstacles,
   })
+  entries.push(entry)
   const callbacks = {
     imageUrl: '/icon/48.png',
     readPosition: options?.read ?? (async () => ({ side: 'right' as const, ratio: 0.5, collapsed: false })),
@@ -133,6 +135,8 @@ function mount(options?: {
 }
 
 afterEach(() => {
+  for (const entry of entries) entry.dispose()
+  entries = []
   for (const host of hosts) host.remove()
   hosts = []
   width = 800
@@ -140,9 +144,109 @@ afterEach(() => {
   scale = 1
   obstacles = []
   vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 
 describe('悬浮入口', () => {
+  it.each([
+    ['暂停', false, true, true, true],
+    ['硬上限', false, false, true, false],
+    ['已恢复', true, true, false, true],
+  ] as const)('%s时恢复和继续是独立操作', async (_state, restored, resumable, showRestore, showResume) => {
+    const ui = mount()
+    ui.update(view({ restored, resumable, canRestore: true }))
+    await frames()
+    trustedClick(ui.button())
+    const restore = ui.root.querySelector('.floating-page') as HTMLButtonElement
+    const resume = ui.root.querySelector('.floating-resume') as HTMLButtonElement
+    expect(resume).not.toBeNull()
+    expect(restore.hidden).toBe(!showRestore)
+    expect(resume.hidden).toBe(!showResume)
+    const actions: FloatingAction[] = []
+    if (showRestore) {
+      trustedClick(restore)
+      actions.push('restore')
+    }
+    if (showResume) {
+      trustedClick(resume)
+      actions.push('resume')
+    }
+    expect(ui.onAction.mock.calls.map(([action]) => action)).toEqual(actions)
+  })
+
+  it('无存储时默认半收起，悬停展开，移开900ms后收起且不写存储', async () => {
+    const ui = mount({ read: async () => undefined })
+    await frames()
+    expect(Number.parseFloat(ui.button().style.left)).toBe(780)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    ui.button().dispatchEvent(trustedPointer('pointerenter', { pointerType: 'mouse' }))
+    expect(Number.parseFloat(ui.button().style.left)).toBe(760)
+    ui.button().dispatchEvent(trustedPointer('pointerleave', { pointerType: 'mouse' }))
+    vi.advanceTimersByTime(899)
+    expect(Number.parseFloat(ui.button().style.left)).toBe(760)
+    vi.advanceTimersByTime(1)
+    expect(Number.parseFloat(ui.button().style.left)).toBe(780)
+    expect(ui.writes).toEqual([])
+  })
+
+  it('菜单、通知和键盘焦点保持展开；鼠标留下的普通焦点不阻止收起', async () => {
+    const ui = mount()
+    await frames()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let keyboardFocus = false
+    vi.spyOn(ui.button(), 'matches').mockImplementation((selector) => selector === ':focus-visible' && keyboardFocus)
+    trustedClick(ui.button())
+    vi.advanceTimersByTime(1800)
+    expect(Number.parseFloat(ui.button().style.left)).toBe(760)
+    ui.entry.closeMenu()
+    ui.entry.setNoticeVisible(true)
+    vi.advanceTimersByTime(1800)
+    expect(Number.parseFloat(ui.button().style.left)).toBe(760)
+    ui.entry.setNoticeVisible(false)
+    keyboardFocus = true
+    ui.button().dispatchEvent(new FocusEvent('focusin'))
+    ui.button().dispatchEvent(trustedPointer('pointerleave'))
+    vi.advanceTimersByTime(1800)
+    expect(Number.parseFloat(ui.button().style.left)).toBe(760)
+    keyboardFocus = false
+    ui.button().dispatchEvent(new FocusEvent('focusout'))
+    await Promise.resolve()
+    vi.advanceTimersByTime(900)
+    expect(Number.parseFloat(ui.button().style.left)).toBe(780)
+    expect(ui.writes).toEqual([])
+  })
+
+  it('在中间松开后贴最近侧，自动收起并只保存稳定贴边位置', async () => {
+    const ui = mount()
+    await frames()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    ui.button().dispatchEvent(trustedPointer('pointerdown', { clientX: 790, clientY: 300 }))
+    document.dispatchEvent(trustedPointer('pointermove', { clientX: 210, clientY: 240 }))
+    document.dispatchEvent(trustedPointer('pointerup', { clientX: 210, clientY: 240 }))
+    expect(Number.parseFloat(ui.button().style.left)).toBe(0)
+    expect(ui.writes).toHaveLength(1)
+    expect(ui.writes[0]).toMatchObject({ side: 'left', collapsed: true })
+    vi.advanceTimersByTime(900)
+    expect(Number.parseFloat(ui.button().style.left)).toBe(-20)
+    expect(ui.writes).toHaveLength(1)
+  })
+
+  it('dispose 清理自动收起计时器，迟到读取不会复活入口', async () => {
+    let resolveRead!: (value: unknown) => void
+    const ui = mount({ read: () => new Promise((resolve) => { resolveRead = resolve }) })
+    await frames()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    ui.button().dispatchEvent(trustedPointer('pointerenter', { pointerType: 'mouse' }))
+    ui.button().dispatchEvent(trustedPointer('pointerleave'))
+    expect(vi.getTimerCount()).toBe(1)
+    ui.entry.dispose()
+    expect(vi.getTimerCount()).toBe(0)
+    resolveRead({ side: 'left', ratio: 0, collapsed: false })
+    await Promise.resolve()
+    expect(ui.root.querySelector('.floating-entry')).toBeNull()
+    expect(ui.entry.getAnchor()).toBeUndefined()
+  })
+
   it('普通点击开关菜单', async () => {
     const ui = mount()
     await frames()
@@ -204,7 +308,7 @@ describe('悬浮入口', () => {
     expect(() => window.dispatchEvent(new Event('blur'))).not.toThrow()
   })
 
-  it('左右贴边收起只露出 26px，缩放只除一次', async () => {
+  it('左右贴边收起只露出20px，缩放只除一次', async () => {
     let resolveRead: (value: unknown) => void = () => undefined
     const read = new Promise<unknown>((resolve) => {
       resolveRead = resolve
@@ -248,7 +352,7 @@ describe('悬浮入口', () => {
     const illegal = mount({ read: async () => read })
     resolveRead({ side: 'up', ratio: 4, collapsed: 'no' })
     await frames()
-    expect(Number.parseFloat(illegal.button().style.left)).toBeCloseTo(width - BUTTON - 12)
+    expect(Number.parseFloat(illegal.button().style.left)).toBe(780)
     illegal.entry.dispose()
 
     let resolveLate: (value: unknown) => void = () => undefined
@@ -322,45 +426,48 @@ describe('悬浮入口', () => {
     expect(ui.writes).toHaveLength(0)
   })
 
-  it('没有模型时设置和收起仍可用', async () => {
+  it('没有模型时设置和关闭菜单仍可用', async () => {
     const ui = mount()
     ui.update(view({ configured: false }))
     await frames()
     trustedClick(ui.button(), 1)
     const settings = ui.root.querySelector('.floating-settings') as HTMLButtonElement
-    const fold = ui.root.querySelector('.floating-fold') as HTMLButtonElement
+    const close = ui.root.querySelector('.floating-close') as HTMLButtonElement
     const primary = ui.root.querySelector('.floating-auto') as HTMLButtonElement
     expect(settings.disabled).toBe(false)
-    expect(fold.disabled).toBe(false)
+    expect(close.disabled).toBe(false)
+    expect(ui.root.querySelector('.floating-fold')).toBeNull()
     expect(primary.disabled).toBe(true)
     trustedClick(settings, 1)
     expect(ui.onAction).toHaveBeenCalledTimes(1)
     expect(ui.onAction).toHaveBeenCalledWith('settings')
-    trustedClick(fold, 1)
+    trustedClick(close, 1)
     expect(ui.onAction).toHaveBeenCalledTimes(1)
     expect(ui.entry.isMenuOpen()).toBe(false)
-    expect(ui.button().getAttribute('aria-label')).toBe('展开')
   })
 
-  it('未勾选确认不发动作，勾选后只发一次', async () => {
+  it('本站自动开关一次可信点击就生效，无二次确认；忙碌和不可信事件不重复提交', async () => {
     const ui = mount()
     ui.update(view({ configured: true, autoEnabled: false }))
     await frames()
     trustedClick(ui.button(), 1)
     const primary = ui.root.querySelector('.floating-auto') as HTMLButtonElement
-    const consent = ui.root.querySelector('.floating-consent') as HTMLElement
-    const box = consent.querySelector('input') as HTMLInputElement
-    trustedClick(primary, 1)
+    expect(primary.getAttribute('role')).toBe('switch')
+    expect(primary.getAttribute('aria-checked')).toBe('false')
+    expect(ui.root.querySelector('.floating-consent')).toBeNull()
+    primary.click()
     expect(ui.onAction).not.toHaveBeenCalled()
-    expect(consent.hidden).toBe(false)
-    expect(consent.textContent).toContain('私有内容')
-    trustedClick(primary, 1)
-    expect(ui.onAction).not.toHaveBeenCalled()
-    box.checked = true
-    box.dispatchEvent(new Event('change', { bubbles: true }))
     trustedClick(primary, 1)
     expect(ui.onAction).toHaveBeenCalledTimes(1)
     expect(ui.onAction).toHaveBeenCalledWith('toggle-auto')
+    ui.update(view({ autoEnabled: true, busy: true }))
+    expect(primary.getAttribute('aria-checked')).toBe('true')
+    trustedClick(primary)
+    expect(ui.onAction).toHaveBeenCalledTimes(1)
+    ui.update(view({ autoEnabled: true, configured: false }))
+    expect(primary.disabled).toBe(false)
+    trustedClick(primary)
+    expect(ui.onAction).toHaveBeenCalledTimes(2)
   })
 
   it('语言更新不发动作也不丢掉焦点', async () => {
@@ -404,7 +511,7 @@ describe('悬浮入口', () => {
     trustedClick(translate)
     expect(ui.onAction).toHaveBeenCalledTimes(1)
     expect(ui.onAction).toHaveBeenCalledWith('translate-page')
-    expect((ui.root.querySelector('.floating-consent') as HTMLElement).hidden).toBe(true)
+    expect(ui.root.querySelector('.floating-consent')).toBeNull()
     ui.update(view({ configured, busy: true }))
     trustedClick(translate)
     expect(ui.onAction).toHaveBeenCalledTimes(1)

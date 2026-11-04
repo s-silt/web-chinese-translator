@@ -4,6 +4,7 @@ import type { AssistResult } from './intent'
 import type { SelectionAnchor } from './selection'
 
 export type ToolbarAction = 'translate' | 'define' | 'explain' | 'copy'
+export type PauseKind = 'error' | 'paused' | 'limit'
 
 export interface PanelLabels {
   readonly translate: string
@@ -26,9 +27,15 @@ export interface PanelLabels {
   readonly copied: string
   readonly copyFailed: string
   readonly configureHint: string
+  readonly failed?: string
+  readonly retry?: string
+  readonly paused?: string
+  readonly limit?: string
+  readonly more?: string
+  readonly details?: string
 }
 
-export const DEFAULT_LABELS: PanelLabels = {
+export const DEFAULT_LABELS: Required<PanelLabels> = {
   translate: '译文',
   define: '释义',
   explain: '解释',
@@ -49,6 +56,12 @@ export const DEFAULT_LABELS: PanelLabels = {
   copied: '已复制',
   copyFailed: '复制失败',
   configureHint: '请先配置模型',
+  failed: '翻译失败',
+  retry: '点击重试',
+  paused: '翻译已暂停',
+  limit: '已达本页翻译上限',
+  more: '更多操作',
+  details: '查看原因',
 }
 
 export interface TranslationPanel {
@@ -65,7 +78,7 @@ export interface TranslationPanel {
   showHint(anchor: SelectionAnchor, onOpen: () => void): void
   showError(message: string): void
   showNotice(message: string): void
-  showPauseStatus(reason: string, resumable: boolean, actionLabel?: string): void
+  showPauseStatus(reason: string, resumable: boolean, actionLabel?: string, kind?: PauseKind): void
   hidePauseStatus(): void
   setAnchor(anchor: SelectionAnchor | undefined): void
   containsEvent(event: Event): boolean
@@ -75,6 +88,7 @@ export interface TranslationPanel {
   setOnClose(handler: () => void): void
   setOnResume(handler: () => void): void
   setOnLiteral(handler: () => void): void
+  setOnRetry(handler: () => void): void
   setOnDismissProactive(handler: () => void): void
   setOnCopyResult(handler: (text: string) => void): void
   setCopyResultFeedback(copied: boolean): void
@@ -457,6 +471,127 @@ details.panel-source > div { margin-top: 6px; }
   border-radius: 6px;
 }
 .panel-source details { font-size: 12px; }
+.error-details { min-width: 0; font-size: 11px; line-height: 1.5; color: var(--wt-muted); }
+.error-details > summary { cursor: pointer; width: fit-content; }
+.error-details > summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.error-reason { margin-top: 4px; max-height: 6em; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; user-select: text; }
+.panel-error-details { margin: 0 0 8px; }
+.notice-error-details {
+  margin: 0 calc(11px / var(--wt-notice-scale)) calc(8px / var(--wt-notice-scale));
+  font-size: calc(10px / var(--wt-notice-scale));
+}
+.panel, .hint, .pause-status, .selection-toolbar {
+  --wt-surface: #f8fafc;
+  --wt-ink: #24374a;
+  --wt-muted: #63778a;
+  --wt-border: #d4dee8;
+  --wt-soft: #e7eff5;
+  --wt-accent: #355f7c;
+}
+.panel[data-style='cyber'], .hint[data-style='cyber'], .pause-status[data-style='cyber'], .selection-toolbar[data-style='cyber'] {
+  --wt-surface: #101c29;
+  --wt-ink: #dce7ef;
+  --wt-muted: #9aafbf;
+  --wt-border: #304759;
+  --wt-soft: #20384a;
+  --wt-accent: #a9cddd;
+}
+@media (prefers-color-scheme: dark) {
+  .panel:not([data-style='cyber']), .hint:not([data-style='cyber']), .pause-status:not([data-style='cyber']), .selection-toolbar:not([data-style='cyber']) {
+    --wt-surface: #182534;
+    --wt-ink: #dce7ef;
+    --wt-muted: #a6b6c4;
+    --wt-border: #3a4c5d;
+    --wt-soft: #2a4053;
+    --wt-accent: #bad5e5;
+  }
+}
+.panel, .panel[data-style], .hint, .hint[data-style], .selection-toolbar, .selection-toolbar[data-style] {
+  color: var(--wt-ink);
+  background-color: var(--wt-surface);
+  border-color: var(--wt-border);
+  box-shadow: 0 8px 24px #06101e24;
+}
+.panel[data-style='cyber'], .hint[data-style='cyber'] { background-image: none; }
+.panel[data-style='glass'], .hint[data-style='glass'], .selection-toolbar[data-style='glass'] {
+  background-color: color-mix(in srgb, var(--wt-surface) 94%, transparent);
+}
+.panel .panel-header { gap: 8px; padding: 10px 14px 0; border: 0; }
+.panel .panel-title, .panel[data-style] .panel-title {
+  color: var(--wt-muted); font-size: 11px; line-height: 18px; letter-spacing: 0; text-transform: none;
+}
+.panel .panel-body { padding: 10px 14px; }
+.panel-body:empty, .panel-actions:empty { display: none; }
+.panel .panel-target { font-size: 14px; line-height: 1.6; text-wrap: pretty; }
+.panel .panel-source, .panel[data-style] .panel-source { color: var(--wt-muted); }
+.panel details.panel-source, .panel[data-style] details.panel-source {
+  padding: 0; border: 0; background: transparent; font-size: 11px;
+}
+.panel[data-style] .panel-source summary { color: var(--wt-muted); }
+.panel .panel-actions { gap: 10px; padding: 0 14px 10px; }
+.panel .panel-actions button, .panel[data-style] .panel-actions button,
+.panel .panel-actions button.panel-copy, .panel[data-style] .panel-actions button.panel-copy {
+  padding: 2px 0; color: var(--wt-accent); background: transparent; border-color: transparent; font-weight: 500;
+}
+.panel-more { margin-left: auto; color: var(--wt-muted); font-size: 12px; }
+.panel-more summary { cursor: pointer; list-style: none; min-width: 24px; min-height: 24px; text-align: center; }
+.panel-more summary::-webkit-details-marker { display: none; }
+.panel-more > div { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 6px; }
+.panel-mascot { width: 24px; height: 24px; border-radius: 6px; flex: none; }
+.panel.is-feedback .panel-actions { padding-top: 5px; padding-left: 46px; }
+.selection-toolbar button[data-action='translate'], .selection-toolbar[data-style] button[data-action='translate'] {
+  color: var(--wt-accent); background: var(--wt-soft); border-color: var(--wt-border);
+}
+.pause-status, .pause-status[data-style] {
+  --wt-notice-scale: 1;
+  align-items: flex-end;
+  gap: calc(8px / var(--wt-notice-scale));
+  padding: 0; border: 0; background: transparent; box-shadow: none; backdrop-filter: none;
+}
+.notice-mascot {
+  width: calc(40px / var(--wt-notice-scale)); height: calc(40px / var(--wt-notice-scale));
+  flex: none; border-radius: calc(10px / var(--wt-notice-scale));
+}
+.notice-speech {
+  position: relative; flex: 0 1 auto; min-width: 0; box-sizing: border-box;
+  width: calc(176px / var(--wt-notice-scale));
+  color: var(--wt-ink); background: var(--wt-surface); border: 1px solid var(--wt-border);
+  border-radius: calc(12px / var(--wt-notice-scale)); box-shadow: 0 6px 18px #06101e24;
+}
+.notice-speech::before {
+  content: ''; position: absolute; left: calc(-4px / var(--wt-notice-scale)); top: 60%;
+  width: calc(7px / var(--wt-notice-scale)); height: calc(7px / var(--wt-notice-scale));
+  transform: rotate(45deg); background: var(--wt-surface);
+  border-left: 1px solid var(--wt-border); border-bottom: 1px solid var(--wt-border);
+}
+.pause-status[data-side='right'] .notice-speech::before {
+  left: auto; right: calc(-4px / var(--wt-notice-scale)); transform: rotate(225deg);
+}
+.pause-status .pause-resume {
+  box-sizing: border-box; width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: calc(10px / var(--wt-notice-scale)) calc(28px / var(--wt-notice-scale)) calc(10px / var(--wt-notice-scale)) calc(10px / var(--wt-notice-scale));
+  font: inherit; font-size: calc(12px / var(--wt-notice-scale)); line-height: 1.5;
+  color: var(--wt-ink); background: transparent; border: 0; text-align: start;
+}
+.pause-status .pause-resume:disabled { cursor: default; }
+.pause-status .pause-reason { color: inherit; }
+.notice-link { color: var(--wt-accent); font-size: calc(11px / var(--wt-notice-scale)); }
+.notice-close {
+  position: absolute; right: calc(3px / var(--wt-notice-scale)); top: calc(3px / var(--wt-notice-scale));
+  width: calc(24px / var(--wt-notice-scale)); height: calc(24px / var(--wt-notice-scale)); padding: 0;
+  color: var(--wt-muted); font: inherit; background: transparent; border: 0; border-radius: 5px; cursor: pointer;
+}
+.notice-close:focus-visible { outline: 2px solid var(--wt-accent); outline-offset: 1px; }
+@media (prefers-reduced-transparency: reduce) {
+  .panel[data-style='glass'], .hint[data-style='glass'], .selection-toolbar[data-style='glass'] { background: var(--wt-surface); }
+}
+@media (forced-colors: active) {
+  .panel, .panel[data-style], .hint, .hint[data-style], .selection-toolbar, .selection-toolbar[data-style], .notice-speech {
+    --wt-ink: CanvasText; --wt-muted: CanvasText; --wt-accent: LinkText;
+    color: CanvasText; background: Canvas; border: 1px solid ButtonText; box-shadow: none;
+  }
+  .notice-speech::before { display: none; }
+}
 `
 
 const GAP = 8
@@ -474,6 +609,19 @@ export function createTranslationPanel(): TranslationPanel {
   let titleIntent: AssistResult['intent'] = 'translate'
   let loading = false
   let defaultResumeLabel = true
+  function createErrorDetails(className: string) {
+    const element = document.createElement('details')
+    element.className = `error-details ${className}`
+    element.hidden = true
+    const summary = document.createElement('summary')
+    summary.textContent = labels.details
+    const reason = document.createElement('div')
+    reason.className = 'error-reason'
+    element.append(summary, reason)
+    return { element, summary, reason }
+  }
+  const panelErrorDetails = createErrorDetails('panel-error-details')
+  const noticeErrorDetails = createErrorDetails('notice-error-details')
   const panel = document.createElement('div')
   panel.className = 'panel'
   panel.setAttribute('role', 'dialog')
@@ -486,12 +634,16 @@ export function createTranslationPanel(): TranslationPanel {
   const title = document.createElement('span')
   title.className = 'panel-title'
   title.textContent = labels.translate
+  const feedbackMascot = document.createElement('img')
+  feedbackMascot.className = 'panel-mascot'
+  feedbackMascot.alt = ''
+  feedbackMascot.hidden = true
   const closeButton = document.createElement('button')
   closeButton.className = 'panel-close'
   closeButton.type = 'button'
   closeButton.textContent = '✕'
   closeButton.setAttribute('aria-label', labels.close)
-  header.append(title, closeButton)
+  header.append(feedbackMascot, title, closeButton)
   const body = document.createElement('div')
   body.className = 'panel-body'
   body.setAttribute('aria-live', 'polite')
@@ -508,17 +660,38 @@ export function createTranslationPanel(): TranslationPanel {
   const literalButton = document.createElement('button')
   literalButton.type = 'button'
   literalButton.textContent = labels.literal
+  const moreActions = document.createElement('details')
+  moreActions.className = 'panel-more'
+  const moreSummary = document.createElement('summary')
+  moreSummary.textContent = '⋯'
+  moreSummary.setAttribute('aria-label', labels.more ?? DEFAULT_LABELS.more)
+  const moreBody = document.createElement('div')
+  moreActions.append(moreSummary, moreBody)
   const pauseStatus = document.createElement('div')
   pauseStatus.className = 'pause-status'
   pauseStatus.setAttribute('role', 'status')
   pauseStatus.style.display = 'none'
   const pauseReason = document.createElement('span')
   pauseReason.className = 'pause-reason'
+  const pauseMascot = document.createElement('img')
+  pauseMascot.className = 'notice-mascot'
+  pauseMascot.alt = ''
+  pauseMascot.hidden = true
+  const pauseSpeech = document.createElement('div')
+  pauseSpeech.className = 'notice-speech'
+  const pauseLink = document.createElement('span')
+  pauseLink.className = 'notice-link'
   const resumeButton = document.createElement('button')
   resumeButton.className = 'pause-resume'
   resumeButton.type = 'button'
-  resumeButton.textContent = labels.resume
-  pauseStatus.append(pauseReason, resumeButton)
+  resumeButton.append(pauseReason, pauseLink)
+  const pauseClose = document.createElement('button')
+  pauseClose.className = 'notice-close'
+  pauseClose.type = 'button'
+  pauseClose.textContent = '×'
+  pauseClose.setAttribute('aria-label', labels.close)
+  pauseSpeech.append(resumeButton, noticeErrorDetails.element, pauseClose)
+  pauseStatus.append(pauseMascot, pauseSpeech)
   const dismissProactiveButton = document.createElement('button')
   dismissProactiveButton.type = 'button'
   dismissProactiveButton.textContent = labels.dismiss
@@ -571,13 +744,19 @@ export function createTranslationPanel(): TranslationPanel {
   panelAnnouncement.className = 'panel-announcement'
   panelAnnouncement.setAttribute('role', 'status')
   panelAnnouncement.setAttribute('aria-live', 'polite')
-  panel.append(header, body, status, actions, panelAnnouncement)
+  panel.append(header, body, status, panelErrorDetails.element, actions, panelAnnouncement)
   shadow.append(style, panel, hint, pauseStatus, toolbar)
 
   let attached = false
   let modalHost: HTMLDialogElement | undefined
   let state: PanelState = 'hidden'
   let pauseShown = false
+  let pauseKind: PauseKind | undefined
+  let pauseDismissed = false
+  let pauseRaf = 0
+  let feedbackError = false
+  let mascotUrl = ''
+  let disposed = false
   let currentUiStyle: UiStyle = 'classic'
   let floatingEntry: FloatingEntry | undefined
   let modalObserver: MutationObserver | undefined
@@ -586,6 +765,7 @@ export function createTranslationPanel(): TranslationPanel {
   let onClose: () => void = () => undefined
   let onResume: () => void = () => undefined
   let onLiteral: () => void = () => undefined
+  let onRetry: () => void = () => undefined
   let onDismissProactive: () => void = () => undefined
   let onCopyResult: (text: string) => void = () => undefined
   let onHintOpen: () => void = () => undefined
@@ -641,7 +821,7 @@ export function createTranslationPanel(): TranslationPanel {
     const viewH = Math.min(window.innerHeight, document.documentElement.clientHeight || window.innerHeight) / scale
     const margin = MARGIN / scale
     const gapCss = gap / scale
-    const maxWidth = Math.max(1, Math.min(360 / scale, viewW - margin * 2))
+    const maxWidth = Math.max(1, Math.min((feedbackError && element === panel ? 224 : 300) / scale, viewW - margin * 2))
     element.style.maxHeight = `${Math.max(1, Math.min(480 / scale, viewH - margin * 2))}px`
     if (element === panel) element.style.width = `${maxWidth}px`
     else {
@@ -820,7 +1000,6 @@ export function createTranslationPanel(): TranslationPanel {
     if (state === 'panel') elements.push(panel)
     if (state === 'toolbar') elements.push(toolbar)
     if (state === 'hint') elements.push(hint)
-    if (pauseShown) elements.push(pauseStatus)
     return elements.map((element) => {
       const rect = element.getBoundingClientRect()
       return { left: rect.left / scale, top: rect.top / scale, right: rect.right / scale, bottom: rect.bottom / scale }
@@ -840,6 +1019,11 @@ export function createTranslationPanel(): TranslationPanel {
   }
 
   function setFloating(view: FloatingView, labelsForFloating: FloatingLabels, callbacks: FloatingCallbacks): void {
+    if (mascotUrl !== callbacks.imageUrl) {
+      mascotUrl = callbacks.imageUrl
+      pauseMascot.src = mascotUrl
+      feedbackMascot.src = mascotUrl
+    }
     if (!view.visible) {
       if (floatingEntry !== undefined) {
         floatingEntry.dispose()
@@ -848,6 +1032,7 @@ export function createTranslationPanel(): TranslationPanel {
         disconnectModalObserver()
         syncHostAttachment()
       }
+      schedulePausePosition()
       return
     }
     if (floatingEntry === undefined) {
@@ -859,6 +1044,7 @@ export function createTranslationPanel(): TranslationPanel {
           return { width, height, scale }
         },
         avoidRects,
+        onPosition: schedulePausePosition,
       })
       floatingEntry.setStyle(currentUiStyle)
       document.addEventListener('focusin', onDocumentFocusIn, true)
@@ -870,6 +1056,7 @@ export function createTranslationPanel(): TranslationPanel {
         callbacks.onOpen()
       },
     })
+    if (!pauseShown) floatingEntry.setNoticeVisible(false)
     syncHostAttachment()
     floatingEntry.reposition()
   }
@@ -895,6 +1082,7 @@ export function createTranslationPanel(): TranslationPanel {
       resizeObserver?.observe(toolbar)
       positionElement(toolbar, 6)
     }
+    schedulePausePosition()
   }
 
   function appendPair(source: string, target: string, collapsible: boolean): void {
@@ -921,16 +1109,85 @@ export function createTranslationPanel(): TranslationPanel {
     }
   }
 
-  /** 暂停状态独立于卡片：滚动、点击页面或关闭卡片都不会让它消失，只有继续或恢复才移除。 */
-  function setPauseStatus(reason: string | undefined, resumable: boolean, actionLabel?: string): void {
-    pauseShown = reason !== undefined
-    pauseReason.textContent = reason ?? ''
+  function schedulePausePosition(): void {
+    if (disposed || !pauseShown || pauseRaf !== 0) return
+    pauseRaf = requestAnimationFrame(() => {
+      pauseRaf = 0
+      if (disposed || !pauseShown) return
+      if (floatingEntry?.isMenuOpen() === true) {
+        pauseStatus.style.display = 'none'
+        floatingEntry.setNoticeVisible(false)
+        return
+      }
+      pauseStatus.style.display = ''
+      const scale = zoomScale()
+      const margin = 12 / scale
+      const width = Math.min(window.innerWidth, document.documentElement.clientWidth || window.innerWidth) / scale
+      const height = Math.min(window.innerHeight, document.documentElement.clientHeight || window.innerHeight) / scale
+      pauseStatus.style.setProperty('--wt-notice-scale', String(scale))
+      pauseStatus.style.maxWidth = `${Math.max(1, width - margin * 2)}px`
+      const anchor = floatingEntry?.getAnchor()
+      pauseMascot.hidden = anchor !== undefined || mascotUrl === ''
+      pauseStatus.dataset.side = anchor?.side ?? 'left'
+      const rect = pauseStatus.getBoundingClientRect()
+      const w = rect.width / scale
+      const h = rect.height / scale
+      let x = margin
+      let y = height - h - margin
+      if (anchor !== undefined) {
+        x = anchor.side === 'left' ? anchor.right + 8 / scale : anchor.left - w - 8 / scale
+        y = (anchor.top + anchor.bottom - h) / 2
+        if (x < margin || x + w > width - margin) {
+          x = anchor.left
+          y = anchor.top - h - 8 / scale
+          if (y < margin) y = anchor.bottom + 8 / scale
+        }
+      }
+      const clampX = (left: number): number => Math.max(margin, Math.min(left, width - w - margin))
+      const clampY = (top: number): number => Math.max(margin, Math.min(top, height - h - margin))
+      const candidates = [{ x, y }]
+      if (anchor !== undefined) {
+        candidates.push({ x: anchor.left, y: anchor.top - h - 8 / scale }, { x: anchor.left, y: anchor.bottom + 8 / scale })
+      }
+      const obstacles = avoidRects()
+      const point = candidates.map(({ x, y }) => ({ x: clampX(x), y: clampY(y) }))
+        .find(({ x, y }) => !obstacles.some((rect) => x < rect.right && x + w > rect.left && y < rect.bottom && y + h > rect.top))
+      if (point === undefined) {
+        pauseStatus.style.display = 'none'
+        floatingEntry?.setNoticeVisible(false)
+        return
+      }
+      floatingEntry?.setNoticeVisible(true)
+      pauseStatus.style.left = `${point.x}px`
+      pauseStatus.style.top = `${point.y}px`
+      pauseStatus.style.bottom = 'auto'
+    })
+  }
+
+  /** 同类失败只提醒一次，关闭提示不会改变暂停或失败状态。 */
+  function setPauseStatus(reason: string | undefined, resumable: boolean, actionLabel?: string, kind: PauseKind = 'paused'): void {
+    if (reason === undefined || pauseKind !== kind) {
+      pauseDismissed = false
+      noticeErrorDetails.element.open = false
+    }
+    noticeErrorDetails.reason.textContent = reason ?? ''
+    noticeErrorDetails.element.hidden = reason === undefined || kind !== 'error'
+    pauseKind = reason === undefined ? undefined : kind
+    pauseShown = reason !== undefined && !pauseDismissed
+    const text = reason === undefined ? '' : kind === 'error' ? labels.failed ?? DEFAULT_LABELS.failed
+      : kind === 'limit' ? labels.limit ?? DEFAULT_LABELS.limit : labels.paused ?? DEFAULT_LABELS.paused
+    if (pauseReason.textContent !== text) pauseReason.textContent = text
+    if (pauseSpeech.title !== (reason ?? '')) pauseSpeech.title = reason ?? ''
     defaultResumeLabel = actionLabel === undefined
-    resumeButton.textContent = actionLabel ?? labels.resume
-    resumeButton.style.display = resumable ? '' : 'none'
+    const action = kind === 'error' ? labels.retry ?? DEFAULT_LABELS.retry : actionLabel ?? labels.resume
+    if (pauseLink.textContent !== action) pauseLink.textContent = action
+    pauseLink.hidden = !resumable
+    resumeButton.disabled = !resumable
     pauseStatus.style.display = pauseShown ? '' : 'none'
+    if (!pauseShown) floatingEntry?.setNoticeVisible(false)
     applyState(state)
     floatingEntry?.reposition()
+    schedulePausePosition()
   }
 
   function toolbarLabel(action: ToolbarAction): string {
@@ -974,12 +1231,16 @@ export function createTranslationPanel(): TranslationPanel {
   }
 
   function setLabels(next: PanelLabels): void {
-    labels = next
+    labels = { ...DEFAULT_LABELS, ...next }
     panel.setAttribute('aria-label', labels.result)
     closeButton.setAttribute('aria-label', labels.close)
-    title.textContent = labels[titleIntent]
+    title.textContent = feedbackError ? labels.failed ?? DEFAULT_LABELS.failed : labels[titleIntent]
     if (copyResultTimer === undefined) copyResultButton.textContent = labels.copy
-    literalButton.textContent = labels.literal
+    literalButton.textContent = feedbackError ? labels.retry ?? DEFAULT_LABELS.retry : labels.literal
+    moreSummary.setAttribute('aria-label', labels.more ?? DEFAULT_LABELS.more)
+    panelErrorDetails.summary.textContent = labels.details
+    noticeErrorDetails.summary.textContent = labels.details
+    pauseClose.setAttribute('aria-label', labels.close)
     dismissProactiveButton.textContent = labels.dismiss
     hint.textContent = labels.hint
     toolbar.setAttribute('aria-label', labels.toolbar)
@@ -994,7 +1255,8 @@ export function createTranslationPanel(): TranslationPanel {
     if (!configureHint.hidden) configureHint.textContent = labels.configureHint
     toolbarClose.setAttribute('aria-label', labels.close)
     if (toolbarAnnouncement.textContent !== '') toolbarAnnouncement.textContent = copyButton.textContent
-    if (defaultResumeLabel) resumeButton.textContent = labels.resume
+    if (pauseKind === 'error') pauseLink.textContent = labels.retry ?? DEFAULT_LABELS.retry
+    else if (defaultResumeLabel) pauseLink.textContent = labels.resume
     if (loading) status.textContent = labels.loading
     for (const summary of shadow.querySelectorAll('.panel-source > summary')) summary.textContent = labels.source
     if (state !== 'hidden' || pauseShown) applyState(state)
@@ -1015,6 +1277,17 @@ export function createTranslationPanel(): TranslationPanel {
     panelAnnouncement.textContent = ''
     body.textContent = ''
     actions.textContent = ''
+    moreActions.open = false
+    moreBody.textContent = ''
+    panelErrorDetails.element.hidden = true
+    panelErrorDetails.element.open = false
+    panelErrorDetails.reason.textContent = ''
+    feedbackError = false
+    feedbackMascot.hidden = true
+    panel.classList.remove('is-feedback')
+    panel.removeAttribute('aria-description')
+    panel.removeAttribute('title')
+    literalButton.textContent = labels.literal
   }
 
   function close(options?: { keepFloatingMenu?: boolean }): void {
@@ -1064,6 +1337,7 @@ export function createTranslationPanel(): TranslationPanel {
     dismissOutside(event)
   }
   function onGlobalResize(): void {
+    schedulePausePosition()
     if (state === 'panel') positionPanel()
     else if (state === 'hint') positionElement(hint, 6)
     else if (state === 'toolbar') positionElement(toolbar, 6)
@@ -1085,12 +1359,31 @@ export function createTranslationPanel(): TranslationPanel {
     copyArmed = true
     onCopyResult(resultText)
   })
-  literalButton.addEventListener('click', () => {
-    onLiteral()
+  function onErrorDetailsToggle(event: Event): void {
+    if (disposed) return
+    if (event.currentTarget === panelErrorDetails.element && state === 'panel') positionPanel()
+    if (event.currentTarget === noticeErrorDetails.element) schedulePausePosition()
+  }
+  panelErrorDetails.element.addEventListener('toggle', onErrorDetailsToggle)
+  noticeErrorDetails.element.addEventListener('toggle', onErrorDetailsToggle)
+  literalButton.addEventListener('click', (event) => {
+    if (!event.isTrusted) return
+    if (feedbackError) onRetry()
+    else onLiteral()
   })
-  resumeButton.addEventListener('click', () => {
+  resumeButton.addEventListener('click', (event) => {
+    if (!event.isTrusted || resumeButton.disabled || !pauseShown) return
     setPauseStatus(undefined, false)
     onResume()
+  })
+  pauseClose.addEventListener('click', (event) => {
+    if (!event.isTrusted) return
+    pauseDismissed = true
+    pauseShown = false
+    pauseStatus.style.display = 'none'
+    floatingEntry?.setNoticeVisible(false)
+    if (event.detail === 0) floatingEntry?.closeMenu(true)
+    applyState(state)
   })
   dismissProactiveButton.addEventListener('click', () => {
     close()
@@ -1177,7 +1470,8 @@ export function createTranslationPanel(): TranslationPanel {
       title.textContent = labels.translate
       resetBody()
       const answer = translations.join('\n')
-      appendPair(source, answer, false)
+      appendPair('', answer, false)
+      appendPair(source, '', true)
       if (answer !== '') {
         resultText = answer
         actions.append(copyResultButton)
@@ -1202,8 +1496,9 @@ export function createTranslationPanel(): TranslationPanel {
         resultText = answer
         actions.append(copyResultButton)
       }
-      actions.append(literalButton)
-      if (result.intent !== 'none') actions.append(dismissProactiveButton)
+      moreBody.append(literalButton)
+      if (result.intent !== 'none') moreBody.append(dismissProactiveButton)
+      actions.append(moreActions)
       setStatus('', false)
       applyState('panel')
     },
@@ -1216,8 +1511,17 @@ export function createTranslationPanel(): TranslationPanel {
     },
     showError(message) {
       resetBody()
+      feedbackError = true
+      panel.classList.add('is-feedback')
+      feedbackMascot.hidden = mascotUrl === ''
+      title.textContent = labels.failed ?? DEFAULT_LABELS.failed
+      literalButton.textContent = labels.retry ?? DEFAULT_LABELS.retry
+      panel.title = message
+      panel.setAttribute('aria-description', message)
+      panelErrorDetails.reason.textContent = message
+      panelErrorDetails.element.hidden = message === ''
       if (message !== '') actions.append(literalButton)
-      setStatus(message, true)
+      setStatus('', false)
       applyState('panel')
     },
     showNotice(message) {
@@ -1225,11 +1529,11 @@ export function createTranslationPanel(): TranslationPanel {
       setStatus(message, true)
       applyState('panel')
     },
-    showPauseStatus(reason, resumable, actionLabel) {
-      setPauseStatus(reason, resumable, actionLabel)
+    showPauseStatus(reason, resumable, actionLabel, kind) {
+      setPauseStatus(reason, resumable, actionLabel, kind)
     },
     hidePauseStatus() {
-      if (pauseShown) setPauseStatus(undefined, false)
+      if (pauseKind !== undefined) setPauseStatus(undefined, false)
     },
     setAnchor(next) {
       anchor = next
@@ -1239,7 +1543,12 @@ export function createTranslationPanel(): TranslationPanel {
     },
     close,
     dispose() {
+      disposed = true
+      panelErrorDetails.element.removeEventListener('toggle', onErrorDetailsToggle)
+      noticeErrorDetails.element.removeEventListener('toggle', onErrorDetailsToggle)
       pauseShown = false
+      if (pauseRaf !== 0) cancelAnimationFrame(pauseRaf)
+      pauseRaf = 0
       close()
       if (floatingEntry !== undefined) {
         floatingEntry.dispose()
@@ -1264,6 +1573,9 @@ export function createTranslationPanel(): TranslationPanel {
     },
     setOnLiteral(handler) {
       onLiteral = handler
+    },
+    setOnRetry(handler) {
+      onRetry = handler
     },
     setOnDismissProactive(handler) {
       onDismissProactive = handler

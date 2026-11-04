@@ -161,6 +161,7 @@ export interface PageTranslationStatus {
   readonly auto: boolean
   readonly paused: boolean
   readonly capped: boolean
+  readonly budgetCapped?: boolean
   /** 已放弃、仍保留原文的文本段数。 */
   readonly failed: number
   readonly error: string
@@ -233,6 +234,7 @@ const PATCH_KEYS = new Set([
   'selectionToolbarEnabled',
   'proactiveAssistEnabled',
   'floatingButtonEnabled',
+  'autoInteractionEnabled',
   'excludedHosts',
   'siteScopeMode',
 ])
@@ -254,7 +256,7 @@ function isSaveConfig(value: unknown): boolean {
   }
   if (patch.baseUrl !== undefined && (typeof patch.baseUrl !== 'string' || patch.baseUrl.length > 2048)) return false
   if (patch.model !== undefined && (typeof patch.model !== 'string' || patch.model.length > 200)) return false
-  for (const key of ['selectionPopupEnabled', 'selectionToolbarEnabled', 'proactiveAssistEnabled', 'floatingButtonEnabled'] as const) {
+  for (const key of ['selectionPopupEnabled', 'selectionToolbarEnabled', 'proactiveAssistEnabled', 'floatingButtonEnabled', 'autoInteractionEnabled'] as const) {
     if (patch[key] !== undefined && typeof patch[key] !== 'boolean') return false
   }
   if (!isOptionalApiKey(value.apiKey)) return false
@@ -426,6 +428,7 @@ export function isPageTranslationStatus(value: unknown): value is PageTranslatio
     typeof value.auto === 'boolean' &&
     typeof value.paused === 'boolean' &&
     typeof value.capped === 'boolean' &&
+    (value.budgetCapped === undefined || typeof value.budgetCapped === 'boolean') &&
     Number.isSafeInteger(value.failed) &&
     (value.failed as number) >= 0 &&
     typeof value.error === 'string'
@@ -451,6 +454,7 @@ function isConfigShape(value: unknown): value is TranslationConfig {
     typeof value.selectionToolbarEnabled === 'boolean' &&
     typeof value.proactiveAssistEnabled === 'boolean' &&
     typeof value.floatingButtonEnabled === 'boolean' &&
+    typeof value.autoInteractionEnabled === 'boolean' &&
     isExcludedHosts(value.excludedHosts) &&
     isSiteScopeMode(value.siteScopeMode) &&
     isExcludedHosts(value.siteScopeHosts)

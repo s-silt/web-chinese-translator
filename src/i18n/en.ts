@@ -290,6 +290,17 @@ export default {
   wtPageUnavailable: 'Translation cannot run on this page. Try a regular webpage or check the extension’s site access permissions.',
   wtPageDisabled: 'The extension is turned off. Enable it in the extension popup, then try again.',
   wtNoticeDismiss: 'Dismiss notice',
+  wtSiteAuto: 'Auto-translate this site',
+  wtRetryBubbleTitle: 'Translation failed',
+  wtRetryBubbleAction: 'Retry',
+  wtPausedBubbleTitle: 'Translation paused',
+  wtLimitBubbleTitle: 'Page translation limit reached',
+  wtModelInlineHint: 'Text and necessary context are sent to your model',
+  wtSmartInlineHint: 'Sends selected text, nearby context and short-lived reading clues when needed',
+  wtMoreActions: 'More actions',
+  wtErrorDetails: 'View details',
+  wtAutomaticInteractions: 'Automatic popups',
+  wtAutomaticInteractionsHint: 'Controls selection popups, proactive reading hints and background errors. Manual translation remains available.',
 
   badgeOff: 'OFF',
 } satisfies Messages

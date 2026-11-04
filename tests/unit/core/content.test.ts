@@ -88,6 +88,7 @@ function scopeConfig(mode: SiteScopeMode, hosts: readonly string[]): Translation
     selectionToolbarEnabled: false,
     proactiveAssistEnabled: false,
     floatingButtonEnabled: false,
+    autoInteractionEnabled: true,
     excludedHosts: [],
     siteScopeMode: mode,
     siteScopeHosts: hosts,

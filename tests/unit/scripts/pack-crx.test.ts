@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process'
 import { createHash, generateKeyPairSync, sign, verify } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -135,6 +135,35 @@ describe('pack-crx 命令', { timeout: CLI_TIMEOUT_MS * 4 }, () => {
     const byEnv = run([zips[0]!], { CRX_PRIVATE_KEY: pkcs1 })
     expect(byEnv.status, byEnv.output).toBe(0)
     expect(byEnv.output).toContain(`扩展 ID ${id}`)
+  })
+
+  it('匹配固定扩展ID才生成Chrome与Edge包', () => {
+    const zips = ['chrome.zip', 'edge.zip'].map((name) => join(dir, name))
+    for (const zip of zips) writeFileSync(zip, ZIP)
+    const expectedId = createHash('sha256').update(SPKI).digest('hex').slice(0, 32)
+      .split('').map((digit) => String.fromCharCode(97 + Number.parseInt(digit, 16))).join('')
+    const result = run(['--expected-id', expectedId, ...zips], {
+      CRX_PRIVATE_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    })
+    expect(result.status, result.output).toBe(0)
+    for (const zip of zips) expect(readFileSync(zip.replace(/\.zip$/, '.crx')).subarray(0, 4).toString()).toBe('Cr24')
+    expect(result.output).toContain(`扩展 ID ${expectedId}`)
+  })
+
+  it('固定ID不匹配不创建或覆盖任何输出，非法ID也拒绝', () => {
+    const zips = ['chrome.zip', 'edge.zip'].map((name) => join(dir, name))
+    for (const zip of zips) writeFileSync(zip, ZIP)
+    const extra = { CRX_PRIVATE_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString() }
+    const mismatch = 'a'.repeat(32)
+    expect(createHash('sha256').update(SPKI).digest('hex').slice(0, 32)).not.toBe('0'.repeat(32))
+    const result = run(['--expected-id', mismatch, ...zips], extra)
+    expect(result.status, result.output).toBe(1)
+    expect(result.output).toContain('签名密钥不匹配')
+    for (const zip of zips) expect(existsSync(zip.replace(/\.zip$/, '.crx'))).toBe(false)
+    for (const zip of zips) writeFileSync(zip.replace(/\.zip$/, '.crx'), 'sentinel')
+    expect(run(['--expected-id', mismatch, ...zips], extra).status).toBe(1)
+    for (const zip of zips) expect(readFileSync(zip.replace(/\.zip$/, '.crx'), 'utf8')).toBe('sentinel')
+    expect(run(['--expected-id', 'invalid-id', ...zips], extra)).toMatchObject({ status: 1, output: expect.stringContaining('32 位 a-p') })
   })
 
   it('缺少参数、私钥，私钥无法解析，不是 .zip：退出码 1', () => {

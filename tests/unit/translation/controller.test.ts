@@ -85,6 +85,10 @@ function triggerMessage(message: unknown): Promise<unknown> {
   })
 }
 
+function trustedClick(element: Element): void {
+  element.dispatchEvent(Object.assign(new MouseEvent('click', { bubbles: true }), { isTrusted: true }))
+}
+
 beforeEach(async () => {
   const { sendTranslationMessage } = await import('../../../src/translation/client')
   const { copySelectionText } = await import('../../../src/translation/clipboard')
@@ -117,7 +121,74 @@ async function settle(ms = 600): Promise<void> {
   await Promise.resolve()
 }
 
+describe('自动弹窗开关', () => {
+  it('关闭自动划词和阅读监听，手动消息仍带票据显示结果', async () => {
+    smartMode.enabled = true
+    await translationConfigItem.setValue({ ...CONFIG, selectionPopupEnabled: true, proactiveAssistEnabled: true, autoInteractionEnabled: false })
+    document.body.innerHTML = '<p>English selection candidate.</p>'
+    const listeners = vi.spyOn(document, 'addEventListener')
+    const { sendTranslationMessage } = await import('../../../src/translation/client')
+    await startPageTranslation()
+    await settle(100)
+    expect(listeners.mock.calls.some(([type]) => type === 'selectionchange')).toBe(false)
+    expect(vi.mocked(sendTranslationMessage).mock.calls.some(([message]) => message.type === 'wt:assist')).toBe(false)
+    await triggerMessage({ type: 'wt:show-selection', text: 'Manual English selection.', manualSelectionId: 'synthetic-manual-ticket' })
+    await settle(30)
+    expect(vi.mocked(sendTranslationMessage).mock.calls.map(([message]) => message)).toContainEqual(expect.objectContaining({
+      type: 'wt:translate', texts: ['Manual English selection.'], manualSelectionId: 'synthetic-manual-ticket',
+    }))
+    expect(requireRootShadow().querySelector('.panel-target')?.textContent).toBe('译文')
+  })
+
+  it('关闭自动弹窗不影响固定词典和网页原位翻译', async () => {
+    await translationConfigItem.setValue({ ...CONFIG, autoInteractionEnabled: false })
+    document.body.innerHTML = '<button>Settings</button><p>An English paragraph for automatic translation.</p>'
+    await startPageTranslation()
+    await settle(1200)
+    expect(document.querySelector('button')?.textContent).toBe('设置')
+    expect(document.querySelector('p')?.textContent).toBe('译文')
+  })
+})
+
 describe('页面额度上限', () => {
+  it.each([true, false])('固定词典记录上限遵守自动弹窗=%s', async (autoInteractionEnabled) => {
+    await translationConfigItem.setValue({ ...CONFIG, autoInteractionEnabled })
+    const { sendTranslationMessage } = await import('../../../src/translation/client')
+    vi.mocked(sendTranslationMessage).mockImplementation(async (message) => {
+      if (message.type === 'wt:page-modes') {
+        return { ok: true, modes: { enabled: true, fixed: true, auto: false, selection: false, smart: false, fixedEntries: DEVIN_ENTRIES } }
+      }
+      return { ok: true }
+    })
+    const dom = await import('../../../src/translation/dom')
+    const original = dom.createDomEngine
+    vi.spyOn(dom, 'createDomEngine').mockImplementation((options) => original({ ...options, recordBudget: 1 }))
+    document.body.innerHTML = '<button>Settings</button><button>Security</button><button>General</button>'
+    await startPageTranslation()
+    await settle(1000)
+    expect(document.querySelector('button')?.textContent).toBe('设置')
+    expect(await pageStatus()).toMatchObject({ capped: true, budgetCapped: false })
+    const card = rootShadow()?.querySelector<HTMLElement>('.panel')
+    expect(Boolean(card && card.style.display !== 'none')).toBe(autoInteractionEnabled)
+  })
+
+  it('记录数硬上限不标为可追加的字符预算', async () => {
+    await settingsItem.setValue({ ...DEFAULT_SETTINGS, uiLanguage: 'zh-CN' })
+    const dom = await import('../../../src/translation/dom')
+    const original = dom.createDomEngine
+    vi.spyOn(dom, 'createDomEngine').mockImplementation((options) => ({
+      ...original(options),
+      isCapped: () => true,
+      isBudgetCapped: () => false,
+    }))
+    document.body.innerHTML = '<p>An English paragraph.</p>'
+    await startPageTranslation()
+    await settle(200)
+    expect(await pageStatus()).toMatchObject({ capped: true, budgetCapped: false, auto: false })
+    const reply = await triggerMessage({ type: 'wt:page-action', action: 'resume' })
+    expect(reply).toEqual({ ok: false, error: zhCN.wtAutoCapped })
+  })
+
   const PARAGRAPHS = 15
 
   /** 每段 1400 字符独立成批：14 批后再发就超过 20000 字符。 */
@@ -130,7 +201,7 @@ describe('页面额度上限', () => {
     })
     await startPageTranslation()
     await settle(5000)
-    expect(await pageStatus()).toMatchObject({ capped: true, auto: false })
+    expect(await pageStatus()).toMatchObject({ capped: true, budgetCapped: true, auto: false })
     expect(translated(paragraphs)).toBe(PARAGRAPHS - 1)
     expect(await translateCalls()).toBe(PARAGRAPHS - 1)
     return paragraphs
@@ -213,12 +284,12 @@ describe('页面额度上限', () => {
     await settingsItem.setValue({ ...DEFAULT_SETTINGS, uiLanguage: 'zh-CN' })
     const paragraphs = await capPage()
     expect(chip().style.display).not.toBe('none')
-    expect(chip().textContent).toContain(zhCN.wtCapNotice)
+    expect(chip().textContent).toContain(zhCN.wtLimitBubbleTitle)
     expect(chipButton().style.display).not.toBe('none')
-    expect(chipButton().textContent).toBe(zhCN.wtResume)
+    expect(chipButton().querySelector('.notice-link')?.textContent).toBe(zhCN.wtResume)
     document.dispatchEvent(new Event('scroll'))
     expect(chip().style.display).not.toBe('none')
-    chipButton().click()
+    trustedClick(chipButton())
     expect(chip().style.display).toBe('none')
     await settle(2000)
     expect(translated(paragraphs)).toBe(PARAGRAPHS)
@@ -229,12 +300,12 @@ describe('页面额度上限', () => {
   it('状态条跟随界面语言', async () => {
     await settingsItem.setValue({ ...DEFAULT_SETTINGS, uiLanguage: 'en' })
     await capPage()
-    expect(chip().textContent).toContain(en.wtCapNotice)
-    expect(chipButton().textContent).toBe(en.wtResume)
+    expect(chip().textContent).toContain(en.wtLimitBubbleTitle)
+    expect(chipButton().querySelector('.notice-link')?.textContent).toBe(en.wtResume)
     await settingsItem.setValue({ ...DEFAULT_SETTINGS, uiLanguage: 'zh-TW' })
     await settle(100)
-    expect(chip().textContent).toContain(zhTW.wtCapNotice)
-    expect(chipButton().textContent).toBe(zhTW.wtResume)
+    expect(chip().textContent).toContain(zhTW.wtLimitBubbleTitle)
+    expect(chipButton().querySelector('.notice-link')?.textContent).toBe(zhTW.wtResume)
   })
 
   it('恢复原文期间不显示上限状态条', async () => {
@@ -564,6 +635,26 @@ describe('controller 自动翻译失败处理', () => {
 describe('controller 暂停状态与继续', () => {
   const AUTH = { ok: false, error: '凭证无效或没有访问权限', code: 'auth' }
 
+  it('关闭自动弹窗抑制后台错误，手动继续可反馈，导航后恢复抑制', async () => {
+    await translationConfigItem.setValue({ ...CONFIG, autoInteractionEnabled: false })
+    await pausedPage([AUTH, AUTH])
+    expect(await status()).toMatchObject({ paused: true })
+    expect(chipVisible()).toBe(false)
+    await triggerMessage({ type: 'wt:page-action', action: 'resume' })
+    await settle(1500)
+    expect(await status()).toMatchObject({ paused: true })
+    expect(chipVisible()).toBe(true)
+    const { sendTranslationMessage } = await import('../../../src/translation/client')
+    vi.mocked(sendTranslationMessage).mockImplementation((async (message: { type: string; texts?: string[] }) =>
+      message.type === 'wt:translate' ? AUTH : await defaultTransport(message)) as never)
+    vi.stubGlobal('location', new URL('https://app.devin.ai/work/new'))
+    window.dispatchEvent(new Event('popstate'))
+    document.body.innerHTML = '<p>Another English page with an error.</p>'
+    await settle(2000)
+    expect(await status()).toMatchObject({ paused: true })
+    expect(chipVisible()).toBe(false)
+  })
+
   function chip(): HTMLElement | null {
     return rootShadow()?.querySelector('.pause-status') ?? null
   }
@@ -600,7 +691,7 @@ describe('controller 暂停状态与继续', () => {
     await pausedPage([AUTH])
     expect(await status()).toMatchObject({ paused: true, error: AUTH.error })
     expect(chipVisible()).toBe(true)
-    expect(chip()?.textContent).toContain(AUTH.error)
+    expect(chip()?.querySelector('.notice-speech')?.getAttribute('title')).toBe(AUTH.error)
     document.dispatchEvent(new Event('scroll'))
     document.dispatchEvent(new Event('pointerdown'))
     await settle(5000)
@@ -624,8 +715,8 @@ describe('controller 暂停状态与继续', () => {
     const before = sent.length
     expect(sent.at(-1)).toEqual(['Next english paragraph.'])
     const button = chip()?.querySelector('button')
-    expect(button?.textContent).toBe('继续翻译')
-    button?.click()
+    expect(button?.querySelector('.notice-link')?.textContent).toBe('点击重试')
+    trustedClick(button!)
     expect(chipVisible()).toBe(false)
     await settle(1200)
     expect(await status()).toMatchObject({ paused: false, error: '' })
@@ -725,12 +816,13 @@ describe('失败段数量与全部重试', () => {
     expect(document.querySelector('#short')?.textContent).toBe('译文')
     expect(await status()).toMatchObject({ failed: 1, auto: true, paused: false })
     expect(chip().style.display).not.toBe('none')
-    expect(chip().textContent).toContain('1 段翻译失败')
+    expect(chip().textContent).toContain('翻译失败')
+    expect(chip().querySelector('.notice-speech')?.getAttribute('title')).toBe('1 段翻译失败')
     const button = chip().querySelector('button')!
-    expect(button.textContent).toBe(zhCN.wtRetryFailed)
+    expect(button.querySelector('.notice-link')?.textContent).toBe(zhCN.wtRetryBubbleAction)
     heal()
     const before = sent.length
-    button.click()
+    trustedClick(button)
     expect(chip().style.display).toBe('none')
     await settle(5000)
     expect(document.querySelector('#long')?.textContent).toMatch(/^(译文)+$/)
@@ -772,12 +864,12 @@ describe('失败段数量与全部重试', () => {
     await failedPage()
     await settingsItem.setValue({ ...DEFAULT_SETTINGS, uiLanguage: 'en' })
     await settle(100)
-    expect(chip().textContent).toContain(en.wtFailedCount.replace('{count}', '1'))
-    expect(chip().querySelector('button')?.textContent).toBe(en.wtRetryFailed)
+    expect(chip().textContent).toContain(en.wtRetryBubbleTitle)
+    expect(chip().querySelector('.notice-link')?.textContent).toBe(en.wtRetryBubbleAction)
     await settingsItem.setValue({ ...DEFAULT_SETTINGS, uiLanguage: 'zh-TW' })
     await settle(100)
-    expect(chip().textContent).toContain(zhTW.wtFailedCount.replace('{count}', '1'))
-    expect(chip().querySelector('button')?.textContent).toBe(zhTW.wtRetryFailed)
+    expect(chip().textContent).toContain(zhTW.wtRetryBubbleTitle)
+    expect(chip().querySelector('.notice-link')?.textContent).toBe(zhTW.wtRetryBubbleAction)
   })
 })
 

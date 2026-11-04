@@ -55,11 +55,12 @@
 ### 网页翻译
 
 - **阅读辅助**：启用划词辅助后，在 HTTP/HTTPS 网页选中文字即可弹出小窗，由模型判断是否需要翻译、释义或解释。智能陪读还会参考近期阅读主题，并以可忽略的小提示提供帮助。右键「翻译选中文字」保留为手动入口。
+- **自动弹窗**：关闭后不再自动显示划词、陪读和后台状态提示（失败、暂停与上限）；手动调用、固定词典和网页原位翻译仍可使用。蚂蚁悬浮入口有独立的显示开关。
 - **界面词库**：26 个预置站点（涵盖 AI 开发、AI 与模型、云与部署、代码与包管理、设计与协作、社区与学习六分类，完整域名见 src/translation/dictionaries/metadata.json，如 devin.ai、cursor.com、claude.ai、vercel.com、linear.app 等）的菜单、按钮等常见界面文字用内置词典本地化（离线、不联网；可在设置页关闭单个词典）；站点子域访问权限由元数据逐一列出并在安装时声明。还可以在设置页新建、编辑、导入自定义词典，为其他站点添加本地词条。自定义词典只存本机，启用前需要对应网站的访问权限，词条只用于本地替换、不发送内容。
 - **翻译目标语言**：模型翻译与固定词典支持简体中文、繁体中文、English、日本語、한국어（设置页选择，切换后已翻译页面自动重译）；GitHub 汉化引擎不受此影响，仍只支持简体、繁体。
-- **站点自动翻译**：把页面上的可见英文文本翻译为中文。默认关闭；在设置页或弹出页逐站点开启时需明确同意并授予站点权限，文本才会发送给你自己配置的 OpenAI 兼容接口（可选自定义 Chat Completions 或自定义 Responses 两种协议，填到 `/v1` 或完整 `/chat/completions`、`/responses` 地址均可按所选协议派生请求地址；`http` 仅允许 localhost/127.0.0.1/[::1]；不支持原生 Gemini 等协议，请使用兼容中继）。
+- **站点自动翻译**：把页面上的可见英文文本翻译为中文。默认关闭；在设置页或弹出页逐站点开启，按浏览器提示授予站点权限。开启后，页面可见英文文本及标题等必要上下文会发送给你自己配置的 OpenAI 兼容接口（数据使用说明显示在操作界面中；可选自定义 Chat Completions 或自定义 Responses 两种协议，填到 `/v1` 或完整 `/chat/completions`、`/responses` 地址均可按所选协议派生请求地址；`http` 仅允许 localhost/127.0.0.1/[::1]；不支持原生 Gemini 等协议，请使用兼容中继）。
   1. 选择接口类型，填写接口地址和 API Key，点击"获取模型"选择模型或手动填写模型名；按需展开"高级设置"配置可选温度（0–2）、附加请求参数（JSON 对象）与自定义请求头（JSON 对象），保存并连接。
-  2. 辅助模式选择关闭、划词辅助或智能陪读；智能陪读需确认额外的数据使用说明。
+  2. 辅助模式选择关闭、划词辅助或智能陪读，按浏览器提示授予网站访问权限；界面内说明所选模式会发送的文字、上下文及短期阅读线索。
   3. 在扩展弹窗逐站开启自动翻译；「恢复本页原文」暂停本页替换，「继续翻译」恢复处理。
   密钥与自定义请求头均与接口来源（协议、主机、端口）绑定。同一来源下，密钥或请求头输入留空会保留已保存的值；自定义请求头填写 `{}` 并保存可清空；更换来源需重新填写对应密钥/请求头或显式删除/清空。
 - API Key 与自定义请求头只保存在本机扩展的 IndexedDB 中，不随浏览器账号同步；单页自动翻译量有上限，可在弹出页恢复原文、继续或暂停。
@@ -269,10 +270,10 @@ wxt.config.ts            WXT 配置与 manifest
 
 | 产物                                                | 说明                                                    |
 | --------------------------------------------------- | ------------------------------------------------------- |
-| `github-chinese-<版本>-chrome.zip`、`-edge.zip`     | Chrome、Edge 扩展包（上架商店用）                       |
-| `github-chinese-<版本>-firefox.zip`、`-sources.zip` | Firefox 扩展包、源码包（AMO 审核用）                    |
-| `github-chinese-<版本>-chrome.crx`、`-edge.crx`     | CRX3 扩展包                                             |
-| `github-chinese-<版本>-firefox.xpi`                 | Firefox 扩展包                                          |
+| `web-chinese-translator-<版本>-chrome.zip`、`-edge.zip`     | Chrome、Edge 扩展包（解压后加载，或用于上架商店）         |
+| `web-chinese-translator-<版本>-firefox.zip`、`-sources.zip` | Firefox 扩展包、源码包（AMO 审核用）                    |
+| `web-chinese-translator-<版本>-chrome.crx`、`-edge.crx`     | CRX3 扩展包                                             |
+| `web-chinese-translator-<版本>-firefox.xpi`                 | Firefox 扩展包                                          |
 | `SHA256SUMS.txt`                                    | 以上文件的 SHA-256，校验：`sha256sum -c SHA256SUMS.txt` |
 
 <details>
@@ -285,6 +286,7 @@ wxt.config.ts            WXT 配置与 manifest
 
 - 生成私钥：`openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out crx-key.pem`，文件内容填入 `CRX_PRIVATE_KEY`。私钥不提交到存储库（`.gitignore` 已忽略 `*.pem`）；更换私钥后扩展 ID 随之改变。
 - 本地打包 crx：`bun run pack:crx --key crx-key.pem .output/web-chinese-translator-<版本>-chrome.zip`，在 zip 旁生成同名 `.crx`；不带 `--key` 时读环境变量 `CRX_PRIVATE_KEY`。
+- 发布工作流通过 `--expected-id` 核对固定扩展 ID，密钥不匹配时不会生成新 CRX。分叉项目使用自己的签名密钥时，需同步修改工作流中的 `CRX_EXPECTED_ID`。
 - xpi 只在推送正式版标记时签名；手动运行、预发行版（Firefox 的版本号去掉 `-` 之后的部分，签名会占用正式版的版本号）产出未签名 xpi。
 - AMO 上同一版本号只能提交一次：签名包下载后立即存进发行版草稿，重跑时沿用；以 unlisted 签名过的版本，不能再以同一版本号上架（listed）。
 
@@ -314,7 +316,7 @@ wxt.config.ts            WXT 配置与 manifest
 
 ## 许可证
 
-[MIT](LICENSE) © 2026 github-chinese contributors
+[MIT](LICENSE) © 2026 github-chinese contributors、web-chinese-translator contributors
 
 打包产物中包含的第三方运行时包及其许可证文本见 [public/THIRD_PARTY_NOTICES.txt](public/THIRD_PARTY_NOTICES.txt)。
 

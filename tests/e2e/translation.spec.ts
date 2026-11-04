@@ -403,6 +403,19 @@ test.describe('网页翻译真实流程', () => {
       await page.setViewportSize({ width: 360, height: 640 })
       await page.goto(`${readingUrl()}/page`)
       await waitForSiteScript(context, page)
+      await options.bringToFront()
+      await options.locator('[data-test="wt-auto-interaction"] [role="switch"]').click()
+      await expect.poll(() => configFlag(options, 'autoInteractionEnabled')).toBe(false)
+      await page.reload()
+      await waitForSiteScript(context, page)
+      const beforeQuietSelection = api.calls.length
+      await dragText(page, '#p1')
+      // 关闭后的静默窗口覆盖选区防抖；后续同一选区开启后必须实际返回结果。
+      await page.waitForTimeout(600)
+      await expect(page.locator('.panel')).toBeHidden()
+      await expect(page.locator('.hint')).toBeHidden()
+      expect(api.calls).toHaveLength(beforeQuietSelection)
+      await page.evaluate(() => getSelection()?.removeAllRanges())
       const worker = context.serviceWorkers()[0]!
       const tabId = await worker.evaluate(async (url) => {
         const { chrome } = globalThis as unknown as {
@@ -441,7 +454,12 @@ test.describe('网页翻译真实流程', () => {
       await assertInViewport()
       await page.screenshot({ path: testInfo.outputPath('manual-no-anchor.png') })
       await page.keyboard.press('Escape')
-      for (const variant of [
+      await options.bringToFront()
+      await options.locator('[data-test="wt-auto-interaction"] [role="switch"]').click()
+      await expect.poll(() => configFlag(options, 'autoInteractionEnabled')).toBe(true)
+      for (const style of ['cyber', 'glass'] as const) {
+        await setUiStyle(options, style)
+        for (const variant of [
         { width: 1280, height: 800, zoom: 1 },
         { width: 360, height: 640, zoom: 1 },
         { width: 360, height: 640, zoom: 2 },
@@ -479,7 +497,8 @@ test.describe('网页翻译真实流程', () => {
           }
         })
         expect(overlap.collides, JSON.stringify({ ...variant, ...overlap })).toBe(false)
-        await page.screenshot({ path: testInfo.outputPath(`layout-${variant.width}-zoom-${variant.zoom}.png`) })
+        await expect(page.locator('.panel')).toHaveAttribute('data-style', style)
+        await page.screenshot({ path: testInfo.outputPath(`layout-${style}-${variant.width}-zoom-${variant.zoom}.png`) })
         if (variant.zoom === 0.8) {
           const target = await page.locator('.panel-target').boundingBox()
           expect(target).not.toBeNull()
@@ -496,6 +515,7 @@ test.describe('网页翻译真实流程', () => {
           await expect(page.getByRole('dialog', { name: '翻译结果' })).toBeVisible()
         }
         await page.keyboard.press('Escape')
+        }
       }
     } finally {
       await context.close()
@@ -609,7 +629,6 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await options.bringToFront()
       await showOptionsSection(options, 'sites')
       await options.locator('.wt-add:has([data-test="wt-add"]) input').fill('https://app.devin.ai')
-      await options.locator('[data-test="wt-consent"]').check()
       await options.locator('[data-test="wt-add"]').click()
       await expect(options.locator('[data-test="wt-origin"]')).toHaveText('https://app.devin.ai')
       await page.bringToFront()
@@ -713,7 +732,7 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await showOptionsSection(options, 'general')
       await options.locator('[data-test="wt-assist-mode"]').click()
       await options.getByRole('option', { name: /Smart reading|智能陪读|智能陪讀/ }).click()
-      await options.locator('[data-test="wt-smart-confirm"]').click()
+      await expect(options.locator('[data-test="wt-smart-confirm"]')).toHaveCount(0)
       await acceptOwnedPermission(options, ['http://*/*', 'https://*/*'])
       await expect(options.locator('[data-test="wt-assist-mode"]')).toBeEnabled()
       const page = await context.newPage()
@@ -853,11 +872,10 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await showOptionsSection(options, 'general')
       await options.locator('[data-test="wt-assist-mode"]').click()
       await options.getByRole('option', { name: /Smart reading|智能陪读|智能陪讀/ }).click()
-      await options.locator('[data-test="wt-smart-confirm"]').click()
+      await expect(options.locator('[data-test="wt-smart-confirm"]')).toHaveCount(0)
       await expect(options.locator('[data-test="wt-assist-mode"]')).toBeEnabled()
       await showOptionsSection(options, 'sites')
       await options.locator('.wt-add').first().locator('input').fill('https://reading.example.test')
-      await options.locator('[data-test="wt-consent"]').check()
       await options.locator('[data-test="wt-add"]').click()
       await expect(options.locator('[data-test="wt-origin"]')).toHaveText('https://reading.example.test')
       await options.locator('[data-test="wt-excluded-input"]').fill('reading.example.test')
@@ -1312,7 +1330,8 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         const chip = page.locator('.pause-status')
         const retry = page.locator('.pause-resume')
         await expect(chip).toBeVisible()
-        await expect(chip).toContainText('1')
+        await expect(chip).toContainText('翻译失败')
+        await expect(chip.locator('.notice-speech')).toHaveAttribute('title', '1 段翻译失败')
         await expect(retry).toBeVisible()
         await expect(retry).toBeEnabled()
         expect(includes(poison)).toHaveLength(2)
@@ -1326,6 +1345,31 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         await expect(page.locator('#p3')).toHaveText('中文译文')
         await expect(chip).toBeHidden()
         expect(textCalls().slice(beforeRetry).map((call) => call.payload.texts)).toEqual([[poison]])
+        api.wrongCountWhen((texts) => texts.some((text) => text.startsWith('Another poison')))
+        await appendParagraph(page, 'second-failure', 'Another poison paragraph.')
+        await expect(chip).toBeVisible()
+        for (const style of ['cyber', 'glass'] as const) {
+          const options = context.pages().find((candidate) => candidate.url().includes('options.html'))!
+          await setUiStyle(options, style)
+          await page.bringToFront()
+          await expect(chip).toHaveAttribute('data-style', style)
+          expect((await chip.locator('.notice-speech').boundingBox())!.width).toBeLessThanOrEqual(177)
+          await page.screenshot({ path: test.info().outputPath(`retry-${style}.png`) })
+          const details = chip.locator('.notice-error-details')
+          await expect(details).not.toHaveAttribute('open', '')
+          await details.locator('summary').focus()
+          await page.keyboard.press('Enter')
+          await expect(details).toHaveAttribute('open', '')
+          await expect(details.locator('.error-reason')).not.toBeEmpty()
+          await page.keyboard.press('Enter')
+          await expect(details).not.toHaveAttribute('open', '')
+        }
+        await chip.locator('.notice-close').click()
+        await expect(chip).toBeHidden()
+        await appendParagraph(page, 'third-failure', 'Another poison paragraph with changed count.')
+        const tabId = await tabIdOf(context, page)
+        await expect.poll(() => pageStatus(context, tabId).then((status) => status?.failed)).toBe(2)
+        await expect(chip).toBeHidden()
       } finally {
         await context.close()
       }
@@ -1430,7 +1474,6 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         await options.bringToFront()
         await showOptionsSection(options, 'sites')
         await options.locator('.wt-add').first().locator('input').fill('https://reading.example.test')
-        await options.locator('[data-test="wt-consent"]').check()
         await options.locator('[data-test="wt-add"]').click()
         await expect(options.locator('[data-test="wt-origin"]', { hasText: 'reading.example.test' })).toBeVisible()
         await options.locator('[data-test="wt-excluded-input"]').fill('unrelated.example.test')
@@ -1687,7 +1730,8 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await page.locator('.floating-translate').click()
       await expect(page.locator('#p1')).toHaveText('中文译文')
       await expect(page.locator('.floating-menu')).toBeVisible()
-      await expect(page.locator('.floating-status')).toContainText(zhCN.wtPageOn)
+      await expect.poll(() => pageStatus(context, tabId).then((status) => status?.auto)).toBe(true)
+      await expect(page.locator('.floating-page')).toHaveText(zhCN.wtRestore)
       await expect(page.locator('.floating-consent')).toBeHidden()
       expect((await entryConfig(options)).autoOrigins).toEqual([])
       await page.screenshot({ path: test.info().outputPath('entry-floating-page.png') })
@@ -1711,8 +1755,8 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       if (await page.locator('.floating-menu').isHidden()) await page.locator('.floating-entry').click()
       await page.locator('.floating-page').click()
       await expect(page.locator('#p1')).toHaveText(PHYSICS)
-      await expect(page.locator('.floating-page')).toHaveText('继续翻译')
-      await page.locator('.floating-page').click()
+      await expect(page.locator('.floating-resume')).toHaveText('继续翻译')
+      await page.locator('.floating-resume').click()
       await expect(page.locator('#p1')).toHaveText('中文译文')
       await page.reload()
       await waitForSiteScript(context, page)
@@ -1763,6 +1807,10 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       })
       expect(actual).toEqual({ activeId: tabId, ownTabId: null, isPopup: true })
       await expect(popup.locator('[data-test="wt-origin"]')).toHaveText(new URL(page.url()).origin)
+      const autoInteraction = popup.locator('[data-test="wt-popup-auto-interaction"] [role="switch"]')
+      await autoInteraction.click()
+      await expect(autoInteraction).toHaveAttribute('aria-checked', 'false')
+      await expect.poll(() => configFlag(options, 'autoInteractionEnabled')).toBe(false)
       await popup.locator('[data-test="wt-translate-page"]').click()
       await expect(page.locator('#p1')).toHaveText('中文译文')
       await expect(popup.locator('[data-test="wt-state"]')).toHaveText(zhCN.wtPageOn)
@@ -1864,14 +1912,14 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
     }, page.url())
   }
 
-  async function pageStatus(context: BrowserContext, tabId: number): Promise<{ auto?: boolean; paused?: boolean; fixed?: boolean } | undefined> {
+  async function pageStatus(context: BrowserContext, tabId: number): Promise<{ auto?: boolean; paused?: boolean; fixed?: boolean; failed?: number } | undefined> {
     const worker = context.serviceWorkers()[0]!
     return worker.evaluate(async (id) => {
       const { chrome } = globalThis as unknown as {
         chrome: { tabs: { sendMessage(id: number, message: unknown): Promise<unknown> } }
       }
       const reply = await chrome.tabs.sendMessage(id, { type: 'wt:status' }).catch(() => undefined)
-      return (reply as { status?: { auto?: boolean; paused?: boolean; fixed?: boolean } } | undefined)?.status
+      return (reply as { status?: { auto?: boolean; paused?: boolean; fixed?: boolean; failed?: number } } | undefined)?.status
     }, tabId)
   }
 
@@ -1921,30 +1969,30 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       const menu = page.locator('.floating-menu')
       await expect(entry).toBeVisible({ timeout: 15_000 })
       const { w } = await cssViewport(page)
+      await expect.poll(() => entry.boundingBox().then((box) => Math.abs(box!.x - (w - 20)))).toBeLessThan(1.5)
+      const initial = (await entry.boundingBox())!
+      await page.mouse.move(w - 10, initial.y + 20)
+      await expect.poll(() => entry.boundingBox().then((box) => Math.abs(box!.x - (w - 40)))).toBeLessThan(1.5)
       const start = (await entry.boundingBox())!
-      expect(Math.abs(start.x + start.width - (w - 12))).toBeLessThan(1.5)
-      // 真实拖拽到左边缘 10px 处松开：贴边收起，只露 26px
-      await page.mouse.move(start.x + 26, start.y + 26)
+      // 在页面中间松开也会靠近最近一侧，移开后自动半收起。
+      await page.mouse.move(start.x + 20, start.y + 20)
       await page.mouse.down()
-      await page.mouse.move(600, start.y + 26, { steps: 6 })
-      await page.mouse.move(10, 300, { steps: 10 })
+      await page.mouse.move(600, start.y + 20, { steps: 6 })
+      await page.mouse.move(210, 300, { steps: 10 })
       await page.mouse.up()
-      await expect.poll(() => entry.boundingBox().then((b) => b!.x), { timeout: 10_000 }).toBeLessThan(-20)
+      await page.mouse.move(600, 500)
+      await expect.poll(() => entry.boundingBox().then((b) => Math.abs(b!.x + 20)), { timeout: 10_000 }).toBeLessThan(1.5)
       const collapsed = (await entry.boundingBox())!
-      expect(Math.abs(collapsed.x + 26)).toBeLessThan(1.5)
-      expect(Math.abs(collapsed.x + collapsed.width - 26)).toBeLessThan(1.5)
+      expect(Math.abs(collapsed.x + 20)).toBeLessThan(1.5)
+      expect(Math.abs(collapsed.x + collapsed.width - 20)).toBeLessThan(1.5)
       await expect(entry).toHaveAttribute('aria-label', '展开翻译工具')
       await expect(menu).toBeHidden()
       expect(await entry.evaluate((el) => el.classList.contains('is-dragging'))).toBe(false)
       await page.screenshot({ path: `${SCREENS}/floating-classic-collapsed.png` })
-      // 可信点击收起态：只展开，不开菜单
-      await page.mouse.click(13, collapsed.y + 26)
+      // 半收起状态一次点击即展开并打开菜单。
+      await page.mouse.click(10, collapsed.y + 20)
       await expect.poll(() => entry.boundingBox().then((b) => b!.x), { timeout: 10_000 }).toBeGreaterThanOrEqual(0)
-      expect(Math.abs((await entry.boundingBox())!.x - 12)).toBeLessThan(1.5)
-      await expect(menu).toBeHidden()
-      await expect(entry).toHaveAttribute('aria-label', '打开翻译工具')
-      // 再次可信点击：打开菜单；Escape 关闭并把焦点还给入口
-      await entry.click()
+      expect(Math.abs((await entry.boundingBox())!.x)).toBeLessThan(1.5)
       await expect(menu).toBeVisible({ timeout: 10_000 })
       await expect(entry).toHaveAttribute('aria-expanded', 'true')
       await expect(menu).toHaveAttribute('aria-labelledby', 'wt-floating-title')
@@ -1957,19 +2005,19 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await entry.press('Shift+ArrowUp')
       await expect.poll(() => entry.boundingBox().then((b) => Math.abs(b!.y - (yBefore - 20))), { timeout: 5_000 }).toBeLessThan(1.5)
       await entry.press('Shift+ArrowRight')
-      await expect.poll(() => entry.boundingBox().then((b) => Math.abs(b!.x - (w - 64))), { timeout: 5_000 }).toBeLessThan(1.5)
+      await expect.poll(() => entry.boundingBox().then((b) => Math.abs(b!.x - (w - 40))), { timeout: 5_000 }).toBeLessThan(1.5)
       await expect.poll(() => options.evaluate(async () => {
         const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
         const data = await chrome.storage.local.get('translationFloatingPosition')
         return (data.translationFloatingPosition as { side?: string; collapsed?: boolean } | undefined)
-      }), { timeout: 5_000 }).toMatchObject({ side: 'right', collapsed: false })
+      }), { timeout: 5_000 }).toMatchObject({ side: 'right', collapsed: true })
       // 刷新后位置保持（新脚本先按默认位置出现，再读到存储的位置：等它落到保存的位置）
       const saved = (await entry.boundingBox())!
       await page.reload()
       await expect(entry).toBeVisible({ timeout: 15_000 })
       await expect.poll(async () => {
         const after = (await entry.boundingBox())!
-        return Math.max(Math.abs(after.x - saved.x), Math.abs(after.y - saved.y))
+        return Math.max(Math.abs(after.x - (w - 20)), Math.abs(after.y - saved.y))
       }, { timeout: 10_000 }).toBeLessThan(2)
     } finally {
       await context.close()
@@ -1995,16 +2043,15 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       }
       await expect(entry).toBeVisible({ timeout: 15_000 })
       // 只有入口可见：卡片、陪读提示、工具栏与关闭态菜单都不得渲染（曾在页面左上角露出空卡片和提示）
-      for (const selector of ['.panel', '.hint', '.selection-toolbar', '.pause-status', '.floating-menu', '.floating-consent']) {
+      for (const selector of ['.panel', '.hint', '.selection-toolbar', '.pause-status', '.floating-menu']) {
         expect(await page.locator(selector).evaluate((el) => getComputedStyle(el).display), selector).toBe('none')
       }
       await openMenu()
-      // 未配置模型：开启按钮禁用、显示配置提示；设置、收起仍可用
+      // 未配置模型时主动作引导配置，设置和关闭仍可用。
       await expect(primary).toBeDisabled()
-      await expect(page.locator('.floating-configure')).toBeVisible()
-      await expect(page.locator('.floating-configure')).toHaveText('请在扩展设置中配置模型')
-      await expect(page.locator('.floating-status')).toContainText('本站模型自动翻译未启用')
-      await expect(page.locator('.floating-fold')).toBeEnabled()
+      await expect(page.locator('.floating-translate')).toHaveText('请在扩展设置中配置模型')
+      await expect(page.locator('.floating-close')).toBeEnabled()
+      await expect(page.locator('.floating-consent')).toHaveCount(0)
       // openOptionsPage 会复用已打开的设置页：先关掉再点「设置」，应新开一个设置页且菜单无错误提示
       await options.close()
       await page.bringToFront()
@@ -2020,40 +2067,34 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         await openMenu()
         await page.screenshot({ path: `${SCREENS}/floating-${style}-menu.png` })
       }
-      // 配置模型后：开启需要完整同意。连接变化会让内容脚本重载并关闭菜单，重试直到菜单稳定后点开确认区
+      // 配置模型后只点一次开关；等待条件中不重复执行切换。
       await saveAndConnect(context, extensionId)
       await expect(async () => {
         await openMenu()
         await expect(primary).toBeEnabled({ timeout: 2_000 })
-        await expect(primary).toHaveText('开启本站自动翻译')
-        await expect(page.locator('.floating-configure')).toBeHidden()
-        await primary.click({ timeout: 2_000 })
-        await expect(page.locator('.floating-consent')).toBeVisible({ timeout: 2_000 })
+        await expect(primary).toHaveAttribute('role', 'switch')
+        await expect(primary).toHaveAttribute('aria-checked', 'false')
       }).toPass({ timeout: 30_000 })
-      await expect(page.locator('.floating-consent')).toContainText('可见文本')
-      await expect(primary).toHaveText('同意并开启')
-      await expect(primary).toBeDisabled()
-      // 主世界隔离断言：闭合 ShadowRoot 下网页主世界不可读取同意框或卡片 DOM
+      // 闭合 ShadowRoot 下网页主世界不可读取开关或卡片 DOM。
       expect(
         await page.evaluate(() => {
           const host = document.querySelector('[data-wt-root]')
           return {
             hasHost: host !== null,
             shadowRoot: host?.shadowRoot ?? null,
-            hostConsent: host?.querySelector('.floating-consent') ?? null,
-            docConsent: document.querySelector('.floating-consent'),
+            hostControl: host?.querySelector('.floating-auto') ?? null,
+            docControl: document.querySelector('.floating-auto'),
             hostText: host?.textContent ?? '',
           }
         }),
       ).toEqual({
         hasHost: true,
         shadowRoot: null,
-        hostConsent: null,
-        docConsent: null,
+        hostControl: null,
+        docControl: null,
         hostText: '',
       })
-      await page.screenshot({ path: `${SCREENS}/floating-glass-consent.png` })
-      await page.locator('.floating-consent input').check()
+      await page.screenshot({ path: `${SCREENS}/floating-glass-immediate.png` })
       await expect(primary).toBeEnabled()
       const callsBefore = api.calls.length
       await primary.click()
@@ -2064,20 +2105,19 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       // 恢复本页原文 → 继续翻译（开启后的重载可能关闭菜单，同样重试到稳定）
       await expect(async () => {
         await openMenu()
-        await expect(page.locator('.floating-status')).toContainText('本站模型自动翻译已启用', { timeout: 2_000 })
+        await expect(primary).toHaveAttribute('aria-checked', 'true', { timeout: 2_000 })
         await expect(page.locator('.floating-page')).toHaveText('恢复本页原文', { timeout: 2_000 })
         await page.locator('.floating-page').click({ timeout: 2_000 })
       }).toPass({ timeout: 30_000 })
       await expect(page.locator('#p1')).toHaveText(PHYSICS, { timeout: 10_000 })
       await expect(async () => {
         await openMenu()
-        await expect(page.locator('.floating-status')).toContainText('本页已恢复原文', { timeout: 2_000 })
-        await expect(page.locator('.floating-page')).toHaveText('继续翻译', { timeout: 2_000 })
-        await page.locator('.floating-page').click({ timeout: 2_000 })
+        await expect(page.locator('.floating-resume')).toHaveText('继续翻译', { timeout: 2_000 })
+        await page.locator('.floating-resume').click({ timeout: 2_000 })
       }).toPass({ timeout: 30_000 })
       await expect(page.locator('#p1')).toHaveText('中文译文', { timeout: 15_000 })
       await openMenu()
-      await expect(page.locator('.floating-status')).not.toContainText('本页已恢复原文')
+      await expect(page.locator('.floating-page')).toHaveText('恢复本页原文')
     } finally {
       await context.close()
     }
@@ -2485,7 +2525,7 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await expect(entry).toBeVisible({ timeout: 15_000 })
       // 关闭态的菜单必须真正不渲染：类选择器的 display 会盖过 [hidden]，曾在 400px 宽下挡住入口的点击
       expect(await menu.evaluate((el) => getComputedStyle(el).display)).toBe('none')
-      expect(await page.locator('.floating-consent').evaluate((el) => getComputedStyle(el).display)).toBe('none')
+      await expect(page.locator('.floating-consent')).toHaveCount(0)
       // 浏览器缩放下 boundingBox 是视觉像素，与页面 CSS 像素的视口不可比：几何一律用 getBoundingClientRect
       const cssRect = (locator: Locator) =>
         locator.evaluate((el) => {
@@ -2496,7 +2536,9 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         box.x >= 0 && box.y >= 0 && box.x + box.width <= w + 0.5 && box.y + box.height <= h + 0.5
       const check = async (label: string): Promise<void> => {
         const { w, h } = await cssViewport(page)
-        // 入口位置有 120ms 过渡，缩放后等它落定再判断
+        // 半收起入口保持可点击；悬停展开后才检查整个入口在视口内。
+        const initial = await cssRect(entry)
+        await page.mouse.move(Math.min(w - 5, Math.max(5, initial.x + initial.width / 2)), initial.y + initial.height / 2)
         await expect.poll(async () => inside(await cssRect(entry), w, h), { timeout: 5_000, message: `${label} 入口在视口内` }).toBe(true)
         await entry.click()
         await expect(menu).toBeVisible({ timeout: 10_000 })

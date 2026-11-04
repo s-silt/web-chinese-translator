@@ -79,6 +79,7 @@ function createInstance(): Instance {
   let fixedActive = false
   let autoActive = false
   let proactiveSuppressed = false
+  let manualFeedback = false
   let domEpoch = 0
   let reloadEpoch = 0
   let pageId = createId()
@@ -122,7 +123,7 @@ function createInstance(): Instance {
   }
 
   function selectionOn(): boolean {
-    return modes.enabled && modes.selection && !suspended
+    return modes.enabled && modes.selection && !suspended && config?.autoInteractionEnabled !== false
   }
 
   function smartOn(): boolean {
@@ -140,6 +141,7 @@ function createInstance(): Instance {
       auto: autoActive && engine !== undefined && !engine.isAutoPaused() && !engine.isCapped() && !pageRestored,
       paused: pageRestored || (modes.auto && (engine?.isAutoPaused() ?? false)),
       capped: engine?.isCapped() ?? false,
+      budgetCapped: engine?.isBudgetCapped() ?? false,
       failed: engine?.failedCount() ?? 0,
       error: lastError,
     }
@@ -169,6 +171,7 @@ function createInstance(): Instance {
       /* 地址无效时主机名留空。 */
     }
     const origin = normalizeOrigin(location.href)
+    const currentStatus = status()
     return {
       visible: floatingEligible(),
       hostname,
@@ -178,7 +181,8 @@ function createInstance(): Instance {
       configured: Boolean(config?.baseUrl && config?.model),
       restored,
       canRestore: restored || fixedOn || autoOn(),
-      paused: !restored && modes.auto && status().paused,
+      resumable: (!currentStatus.capped || currentStatus.budgetCapped === true) &&
+        (restored || currentStatus.paused || currentStatus.budgetCapped === true),
       busy: floatingBusy,
       checking: floatingChecking,
       error: floatingError,
@@ -196,7 +200,8 @@ function createInstance(): Instance {
       enable: t('wtFloatingEnable'),
       disable: t('wtFloatingDisable'),
       fold: t('wtFloatingFold'),
-      disclosure: t('wtFloatingDisclosure'),
+      disclosure: t('wtModelInlineHint'),
+      autoTranslate: t('wtSiteAuto'),
       consent: t('wtConsent'),
       confirm: t('wtConsentAction'),
       cancel: t('cancel'),
@@ -260,7 +265,8 @@ function createInstance(): Instance {
   function onFloatingAction(action: FloatingAction): void {
     if (floatingBusy || !floatingEligible()) return
     const view = floatingView()
-    if (action === 'toggle-auto' && !view.configured) return
+    if (action === 'resume' && !view.resumable) return
+    if (action === 'toggle-auto' && !view.configured && !view.autoEnabled) return
     if ((action === 'restore' || action === 'resume') && (!view.canRestore || view.checking)) return
     const token = ++floatingEpoch
     const page = pageId
@@ -366,12 +372,12 @@ function createInstance(): Instance {
 
   function syncPauseStatus(): void {
     chipAction = 'resume'
-    if (!autoOn() || engine === undefined) panel.hidePauseStatus()
-    else if (engine.isCapped()) panel.showPauseStatus(t('wtCapNotice'), engine.isBudgetCapped(), t('wtResume'))
-    else if (engine.isAutoPaused()) panel.showPauseStatus(lastError === '' ? '自动翻译已暂停' : lastError, true)
+    if (!autoOn() || engine === undefined || (config?.autoInteractionEnabled === false && !manualFeedback)) panel.hidePauseStatus()
+    else if (engine.isCapped()) panel.showPauseStatus(t('wtCapNotice'), engine.isBudgetCapped(), t('wtResume'), 'limit')
+    else if (engine.isAutoPaused()) panel.showPauseStatus(lastError === '' ? t('wtPausedBubbleTitle') : lastError, true, undefined, lastError === '' ? 'paused' : 'error')
     else if (engine.failedCount() > 0) {
       chipAction = 'retry-failed'
-      panel.showPauseStatus(t('wtFailedCount', { count: engine.failedCount() }), true, t('wtRetryFailed'))
+      panel.showPauseStatus(t('wtFailedCount', { count: engine.failedCount() }), true, t('wtRetryFailed'), 'error')
     } else panel.hidePauseStatus()
     syncFloating()
   }
@@ -506,7 +512,9 @@ function createInstance(): Instance {
         modes.fixedEntries === undefined ? undefined : fixedTranslationWith(modes.fixedEntries, text),
       onCapped() {
         if (autoOn()) syncPauseStatus()
-        else if (!panel.isOpen()) panel.showNotice(t('wtCapNotice'))
+        else if (!panel.isOpen() && (config?.autoInteractionEnabled !== false || manualFeedback)) {
+          panel.showNotice(t('wtCapNotice'))
+        }
       },
       onCapReleased: syncPauseStatus,
       onFailedChanged: syncPauseStatus,
@@ -603,6 +611,7 @@ function createInstance(): Instance {
     if (pageUrl !== undefined && pageIdentity(pageUrl) !== pageIdentity(location.href)) {
       return { ok: false, error: '页面已变化' }
     }
+    manualFeedback = action !== 'restore'
     if (action === 'retry-failed') {
       if (engine?.retryFailed() !== true) {
         return { ok: false, error: t(engine?.isCapped() === true ? 'wtAutoCapped' : 'wtAutoPaused') }
@@ -641,6 +650,7 @@ function createInstance(): Instance {
     resetFloating()
     pageId = createId()
     proactiveSuppressed = false
+    manualFeedback = false
     pageRestored = false
     lastError = ''
     panel.hidePauseStatus()
@@ -698,6 +708,12 @@ function createInstance(): Instance {
         copied: t('wtToolbarCopied'),
         copyFailed: t('wtToolbarCopyFailed'),
         configureHint: t('wtToolbarConfigureHint'),
+        failed: t('wtRetryBubbleTitle'),
+        retry: t('wtRetryBubbleAction'),
+        paused: t('wtPausedBubbleTitle'),
+        limit: t('wtLimitBubbleTitle'),
+        more: t('wtMoreActions'),
+        details: t('wtErrorDetails'),
       })
       if (!modesReply.ok && modesReply.code === 'disconnected' && modesRetries < MAX_MODES_RETRIES) {
         // 后台正在重启：保持当前模式，不还原页面，稍后重读。
@@ -721,7 +737,9 @@ function createInstance(): Instance {
         nextModes.enabled !== hadEnabled ||
         nextModes.selection !== hadSelection ||
         nextModes.smart !== hadSmart ||
-        nextConfig.selectionToolbarEnabled !== hadToolbar
+        nextConfig.selectionToolbarEnabled !== hadToolbar ||
+        nextConfig.autoInteractionEnabled !== previousConfig?.autoInteractionEnabled
+      if (nextConfig.autoInteractionEnabled !== previousConfig?.autoInteractionEnabled) manualFeedback = false
       const manualNotice = nextSettings.enabled && nextModes.enabled
         ? assist.manualCancellationNotice(connectionChanged)
         : undefined
@@ -812,10 +830,17 @@ function createInstance(): Instance {
     watcher?.dismiss()
   })
   panel.setOnResume(() => {
-    onPageAction(chipAction)
+    const reply = onPageAction(chipAction)
+    if (!reply.ok) {
+      lastError = reply.error
+      syncPauseStatus()
+    }
   })
   panel.setOnLiteral(() => {
     assist.repeatLiteral()
+  })
+  panel.setOnRetry(() => {
+    assist.repeatRequest()
   })
   panel.setOnDismissProactive(() => {
     proactiveSuppressed = true
@@ -835,6 +860,7 @@ function createInstance(): Instance {
     onSuspend() {
       reloadEpoch += 1
       suspended = true
+      manualFeedback = false
       resetFloating()
       cancelAll()
       // 打开的端口会让部分浏览器放弃往返缓存，恢复后由下一个请求重新连接。

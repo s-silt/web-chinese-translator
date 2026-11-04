@@ -18,6 +18,7 @@ jobs:
       contents: write
     env:
       OUT: .output/release
+      CRX_EXPECTED_ID: odoaopdndpdkddemmkegaohgdabnfcba
       # 推送标签时发布；在标签上手动运行也只打包
       RELEASE: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
     steps:
@@ -76,7 +77,7 @@ jobs:
             echo "::error title=crx::请先配置固定的 CRX_PRIVATE_KEY；禁止使用临时私钥发布不同扩展 ID 的安装包"
             exit 1
           fi
-          bun run pack:crx "$OUT/web-chinese-translator-$VERSION-chrome.zip" "$OUT/web-chinese-translator-$VERSION-edge.zip"
+          bun run pack:crx --expected-id "$CRX_EXPECTED_ID" "$OUT/web-chinese-translator-$VERSION-chrome.zip" "$OUT/web-chinese-translator-$VERSION-edge.zip"
 
       # 先建 Release 草稿：签名后的 xpi 立即存进去，重跑时沿用（AMO 同一版本号只能提交一次）
       - name: 创建 Release 草稿

@@ -181,7 +181,7 @@ describe('translateTexts 请求', () => {
     }
     const content = body.messages[0]?.content ?? ''
     expect(createHash('sha256').update(content).digest('hex')).toBe(
-      'c7a61055020a045db38099ad3e7bc24a1d3c933ff7f2445c6caf4ab9b37b24e6',
+      'd1bb8fd225a1d66c86283fff67b624edfbd99847ef5909a5dc943e820fd2c5f8',
     )
     expect(content).not.toContain('The source language is')
 
@@ -196,7 +196,7 @@ describe('translateTexts 请求', () => {
     }
     const contextContent = contextBody.messages[0]?.content ?? ''
     expect(createHash('sha256').update(contextContent).digest('hex')).toBe(
-      '61be786767b026e3b8005a6a0c3ca0008af4fc62f150205eee63eb267b285457',
+      '7c01ca1c337a6acae1cc92ddf438dc0dcd1210925e9cd465b2e0cad1ca9e6f75',
     )
     expect(contextContent).not.toContain('The source language is')
   })

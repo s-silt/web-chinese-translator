@@ -287,6 +287,17 @@ export default {
   wtPageUnavailable: '無法在目前頁面執行翻譯。請嘗試一般網頁，或檢查擴充功能的網站存取權限。',
   wtPageDisabled: '擴充功能總開關已關閉，請在擴充功能彈出視窗中開啟後再試。',
   wtNoticeDismiss: '關閉提示',
+  wtSiteAuto: '本站自動翻譯',
+  wtRetryBubbleTitle: '翻譯失敗',
+  wtRetryBubbleAction: '點擊重試',
+  wtPausedBubbleTitle: '翻譯已暫停',
+  wtLimitBubbleTitle: '已達本頁翻譯上限',
+  wtModelInlineHint: '文字與必要上下文傳送至你的模型',
+  wtSmartInlineHint: '按需傳送選取文字、附近上下文及短期閱讀線索',
+  wtMoreActions: '更多操作',
+  wtErrorDetails: '查看原因',
+  wtAutomaticInteractions: '自動彈窗',
+  wtAutomaticInteractionsHint: '控制自動選取文字、主動閱讀及背景失敗提示；手動翻譯不受影響。',
 
   badgeOff: '關'
 } satisfies Messages

@@ -349,7 +349,7 @@ describe.skipIf(!App)('弹出页组件', () => {
       mockContent(contentWith())
       const wrapper = await render()
       expect(wrapper.findAll('label').filter((item) => item.text() === '启用')).toHaveLength(1)
-      expect(wrapper.findAll('[role="switch"]')).toHaveLength(4)
+      expect(wrapper.findAll('[role="switch"]')).toHaveLength(5)
       expect(wrapper.get('[data-test="wt-popup-floating"] [role="switch"]').attributes('disabled')).toBeDefined()
       expect(wrapper.findAll('[role="combobox"]').map((item) => item.attributes('data-test'))).toEqual([
         'ui-language',
@@ -368,13 +368,15 @@ describe.skipIf(!App)('弹出页组件', () => {
       const disabled = (): boolean[] =>
         wrapper
           .findAll('[role="switch"], [data-test="theme-toggle"], [role="combobox"]')
-          .filter((item) => item.element.closest('[data-test="wt-popup-floating"]') === null)
+          .filter((item) => item.element.closest('[aria-labelledby="wt-popup-title"]') === null)
           .map((item) => (item.element as HTMLButtonElement).disabled)
       expect(disabled()).toEqual([true, true, true, true, true, true])
       expect((wrapper.get('[data-test="wt-popup-floating"] [role="switch"]').element as HTMLButtonElement).disabled).toBe(true)
+      expect((wrapper.get('[data-test="wt-popup-auto-interaction"] [role="switch"]').element as HTMLButtonElement).disabled).toBe(true)
       await settle()
       expect(disabled()).toEqual([false, false, false, false, false, false])
       expect((wrapper.get('[data-test="wt-popup-floating"] [role="switch"]').element as HTMLButtonElement).disabled).toBe(true)
+      expect((wrapper.get('[data-test="wt-popup-auto-interaction"] [role="switch"]').element as HTMLButtonElement).disabled).toBe(true)
     })
 
     it.each([

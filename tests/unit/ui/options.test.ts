@@ -94,7 +94,7 @@ describe.skipIf(!App)('设置页组件', () => {
       expect(wrapper.get('[data-test="wt-general-view"]').isVisible()).toBe(true)
       expect(wrapper.get('[data-test="wt-model-view"]').isVisible()).toBe(false)
       expect(wrapper.get('[data-test="wt-sites-view"]').isVisible()).toBe(false)
-      expect(wrapper.findAll('[role="switch"]')).toHaveLength(27)
+      expect(wrapper.findAll('[role="switch"]')).toHaveLength(28)
       expect(wrapper.get('[data-test="wt-dict-devin"]').find('[role="switch"]').exists()).toBe(true)
       expect(wrapper.get('[data-test="wt-dict-cursor"]').find('[role="switch"]').exists()).toBe(true)
       // 接口协议、模型、源语言、目标语言、辅助模式、网站运行范围，外观里的界面风格与主题

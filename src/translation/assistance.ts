@@ -43,6 +43,7 @@ export function createAssistance(o: AssistOptions) {
   let lastAnchor: SelectionAnchor | undefined
   let lastGuard: (() => boolean) | undefined
   let lastManualSelectionId: string | undefined
+  let lastRetry: (() => void) | undefined
   let lastManualCancellationNotice: 'wtTranslationConfigChanged' | 'wtTranslationPermissionRemoved' | undefined
 
   function manualCancellationNotice(
@@ -102,6 +103,7 @@ export function createAssistance(o: AssistOptions) {
     lastGuard = undefined
     lastManualSelectionId = undefined
     lastManualCancellationNotice = undefined
+    lastRetry = undefined
   }
 
   function guardFor(source: string): (() => boolean) | undefined {
@@ -133,10 +135,15 @@ export function createAssistance(o: AssistOptions) {
       o.panel.showNotice(message('wtAssistConfigure'))
       return
     }
-    const { id, doc, current, valid } = begin(source, anchor, guard ?? guardFor(source), manualSelectionId)
+    const sourceGuard = guard ?? guardFor(source)
+    const { id, doc, current, valid } = begin(source, anchor, sourceGuard, manualSelectionId)
     if (!valid()) {
       cancel()
       return
+    }
+    const retryHref = location.href
+    lastRetry = () => {
+      if (doc === o.pageId() && retryHref === location.href) literal(source, anchor, sourceGuard, manualSelectionId)
     }
     o.panel.setAnchor(anchor)
     o.panel.showSelection(source)
@@ -181,13 +188,18 @@ export function createAssistance(o: AssistOptions) {
   ): void {
     if (!o.enabled() || !o.configured()) {
       cancel()
-      if (o.enabled()) o.panel.showNotice(message('wtAssistConfigure'))
+      if (o.enabled() && requestedIntent !== undefined) o.panel.showNotice(message('wtAssistConfigure'))
+      else o.panel.close()
       return
     }
     const { id, doc, current, valid } = begin(text, anchor, stillValid)
     if (!valid()) {
       cancel()
       return
+    }
+    const retryHref = location.href
+    lastRetry = () => {
+      if (doc === o.pageId() && retryHref === location.href) select(text, anchor, method, stillValid, requestedIntent)
     }
     o.panel.setAnchor(anchor)
     o.panel.showSelection(text)
@@ -275,5 +287,9 @@ export function createAssistance(o: AssistOptions) {
     literal(lastSource, lastAnchor, lastGuard, lastManualSelectionId)
   }
 
-  return { select, literal, revisit, repeatLiteral, cancel, manualCancellationNotice }
+  function repeatRequest(): void {
+    lastRetry?.()
+  }
+
+  return { select, literal, revisit, repeatLiteral, repeatRequest, cancel, manualCancellationNotice }
 }

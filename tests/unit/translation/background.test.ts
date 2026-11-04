@@ -176,6 +176,16 @@ beforeEach(() => {
 })
 
 describe('模型隐私边界真实消息入口', () => {
+  it('保存自动弹窗偏好经真实消息入口持久化，不改连接、语言和其他开关', async () => {
+    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [] as never)
+    const original = { ...DEFAULT_TRANSLATION_CONFIG, baseUrl: 'https://api.example.com/v1', model: 'synthetic-model', targetLanguage: 'ja' as const, sourceLanguage: 'en' as const, temperature: 0.2, selectionPopupEnabled: true, proactiveAssistEnabled: true }
+    await translationConfigItem.setValue(original)
+    expect(await trigger({ type: 'wt:save-config', patch: { autoInteractionEnabled: false } }, extSender))
+      .toMatchObject({ ok: true, config: { ...original, autoInteractionEnabled: false } })
+    expect(await translationConfigItem.getValue()).toEqual({ ...original, autoInteractionEnabled: false })
+    expect(await trigger({ type: 'wt:get-config' }, extSender)).toMatchObject({ ok: true, config: { autoInteractionEnabled: false } })
+  })
+
   const text = 'A deliberately selected synthetic sentence about physics.'
   const sensitiveSender = { ...contentSender, url: 'https://app.devin.ai/#/settings/tokens' }
   const input = {

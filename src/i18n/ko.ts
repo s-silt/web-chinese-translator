@@ -278,6 +278,17 @@ const messages: Messages = {
   wtPageUnavailable: '이 페이지에서는 번역을 실행할 수 없습니다. 일반 웹페이지에서 다시 시도하거나 확장 프로그램의 사이트 접근 권한을 확인하세요.',
   wtPageDisabled: '확장 프로그램이 꺼져 있습니다. 확장 프로그램 팝업에서 켠 뒤 다시 시도하세요.',
   wtNoticeDismiss: '알림 닫기',
+  wtSiteAuto: '이 사이트 자동 번역',
+  wtRetryBubbleTitle: '번역에 실패했습니다',
+  wtRetryBubbleAction: '다시 시도',
+  wtPausedBubbleTitle: '번역 일시 중지됨',
+  wtLimitBubbleTitle: '페이지 번역 한도에 도달했습니다',
+  wtModelInlineHint: '텍스트와 필요한 문맥을 설정한 모델로 전송합니다',
+  wtSmartInlineHint: '필요할 때 선택한 텍스트, 주변 문맥, 단기 읽기 단서를 전송합니다',
+  wtMoreActions: '추가 작업',
+  wtErrorDetails: '자세히 보기',
+  wtAutomaticInteractions: '자동 팝업',
+  wtAutomaticInteractionsHint: '선택 팝업, 읽기 도움말, 백그라운드 오류 알림을 제어합니다. 수동 번역은 계속 사용할 수 있습니다.',
   "badgeOff": "꺼짐"
 }
 

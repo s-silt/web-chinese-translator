@@ -278,6 +278,17 @@ const messages: Messages = {
   wtPageUnavailable: 'このページでは翻訳を実行できません。通常のウェブページで試すか、拡張機能のサイトへのアクセス権限を確認してください。',
   wtPageDisabled: '拡張機能がオフになっています。拡張機能のポップアップで有効にしてから、もう一度お試しください。',
   wtNoticeDismiss: '通知を閉じる',
+  wtSiteAuto: 'このサイトを自動翻訳',
+  wtRetryBubbleTitle: '翻訳できませんでした',
+  wtRetryBubbleAction: '再試行',
+  wtPausedBubbleTitle: '翻訳を一時停止中',
+  wtLimitBubbleTitle: 'このページの翻訳上限に達しました',
+  wtModelInlineHint: 'テキストと必要な文脈を設定したモデルに送信します',
+  wtSmartInlineHint: '必要に応じて選択テキスト、周辺の文脈、一時的な閲覧の手がかりを送信します',
+  wtMoreActions: 'その他の操作',
+  wtErrorDetails: '詳細を見る',
+  wtAutomaticInteractions: '自動ポップアップ',
+  wtAutomaticInteractionsHint: '選択時のポップアップ、読書ヒント、バックグラウンドのエラー通知を制御します。手動翻訳は引き続き使えます。',
   "badgeOff": "OFF"
 }
 

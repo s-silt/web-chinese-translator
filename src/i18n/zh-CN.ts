@@ -285,6 +285,17 @@ const zhCN = {
   wtPageUnavailable: '无法在当前页面运行翻译。请尝试普通网页，或检查扩展的网站访问权限。',
   wtPageDisabled: '扩展总开关已关闭，请在扩展弹窗中开启后重试。',
   wtNoticeDismiss: '关闭提示',
+  wtSiteAuto: '本站自动翻译',
+  wtRetryBubbleTitle: '翻译失败',
+  wtRetryBubbleAction: '点击重试',
+  wtPausedBubbleTitle: '翻译已暂停',
+  wtLimitBubbleTitle: '已达本页翻译上限',
+  wtModelInlineHint: '文字与必要上下文发送至你的模型',
+  wtSmartInlineHint: '按需发送选中文字、附近上下文及短期阅读线索',
+  wtMoreActions: '更多操作',
+  wtErrorDetails: '查看原因',
+  wtAutomaticInteractions: '自动弹窗',
+  wtAutomaticInteractionsHint: '控制自动划词、主动阅读和后台失败提示；手动翻译不受影响。',
 
   badgeOff: '关'
 }
