@@ -569,6 +569,8 @@ test.describe('网页翻译真实流程', () => {
       expect(await page.locator('#modal-source').boundingBox()).toEqual(before)
       await page.screenshot({ path: testInfo.outputPath('modal-panel.png') })
       const textsBefore = api.calls.filter((call) => call.kind === 'texts').length
+      await expect(page.locator('.panel-more')).not.toHaveAttribute('open')
+      await page.locator('.panel-more > summary').click()
       await page.getByRole('button', { name: '只翻译', exact: true }).click()
       await expect.poll(() => api.calls.filter((call) => call.kind === 'texts').length).toBe(textsBefore + 1)
       expect(api.calls.at(-1)?.payload.texts).toEqual([PHYSICS])
@@ -579,14 +581,11 @@ test.describe('网页翻译真实流程', () => {
       await dragText(page, '#modal-source')
       await expect(page.locator('.panel')).toBeVisible()
       await page.locator('#modal-fixture').evaluate((dialog) => (dialog as HTMLDialogElement).close())
-      await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const host = document.querySelector('[data-wt-root]') as HTMLElement | null
-            return { display: host?.style.display ?? null, open: host?.matches(':popover-open') ?? null }
-          }),
-        )
-        .toEqual({ display: 'none', open: false })
+      await expect(page.locator('.panel')).toBeHidden()
+      await expect.poll(() =>
+        page.locator('[data-wt-root]').evaluate((host) => host.matches(':popover-open')),
+      ).toBe(false)
+      await expect(page.locator('.floating-entry')).toBeVisible()
       await page.locator('#modal-fixture').evaluate((dialog) => dialog.remove())
       await dragText(page, '#p2')
       await expect(page.locator('.panel-target')).toHaveText(LONG_RESULT)
@@ -763,6 +762,8 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       expect(revisits[0]?.payload.text).toBe(PHYSICS)
       await page.locator('.hint').click()
       await expect(page.locator('.panel-target')).toHaveText('量子退相干')
+      await expect(page.locator('.panel-more')).not.toHaveAttribute('open')
+      await page.locator('.panel-more > summary').click()
       await page.getByRole('button', { name: '只翻译', exact: true }).click()
       await expect(page.locator('.panel-target')).toHaveText('中文译文')
       expect(api.calls.at(-1)?.payload.texts).toEqual([PHYSICS])
@@ -3147,16 +3148,31 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         await setZoom(2)
         await expect.poll(() => options.evaluate(() => innerWidth), { timeout: 10_000 }).toBe(640)
         await assertHorizontalBounds()
-        await paramsArea.focus()
-        expect(await paramsArea.evaluate((el) => document.activeElement === el)).toBe(true)
-        await headersArea.focus()
-        expect(await headersArea.evaluate((el) => document.activeElement === el)).toBe(true)
-        const focusedBounds = await headersArea.evaluate((el) => {
-          const rect = el.getBoundingClientRect()
-          return { top: rect.top, bottom: rect.bottom, height: innerHeight }
-        })
-        expect(focusedBounds.top).toBeGreaterThanOrEqual(0)
-        expect(focusedBounds.bottom).toBeLessThanOrEqual(focusedBounds.height + 1)
+        for (const { previous, field } of [
+          { previous: options.locator('[data-test="wt-temperature"]'), field: paramsArea },
+          { previous: paramsArea, field: headersArea },
+        ]) {
+          await previous.focus()
+          expect(await previous.evaluate((el) => document.activeElement === el)).toBe(true)
+          // 首行露出但控件底部越界，分别验证两处真实 Tab 入口。
+          await field.evaluate((el) => {
+            const textarea = el as HTMLTextAreaElement
+            textarea.setSelectionRange(0, 0)
+            scrollBy({ top: textarea.getBoundingClientRect().top - (innerHeight - 32), behavior: 'instant' })
+          })
+          const clipped = await field.evaluate((el) => ({
+            bottom: el.getBoundingClientRect().bottom, height: innerHeight,
+          }))
+          expect(clipped.bottom).toBeGreaterThan(clipped.height)
+          await options.keyboard.press('Tab')
+          expect(await field.evaluate((el) => document.activeElement === el)).toBe(true)
+          const focusedBounds = await field.evaluate((el) => {
+            const rect = el.getBoundingClientRect()
+            return { top: rect.top, bottom: rect.bottom, height: innerHeight }
+          })
+          expect(focusedBounds.top).toBeGreaterThanOrEqual(0)
+          expect(focusedBounds.bottom).toBeLessThanOrEqual(focusedBounds.height + 1)
+        }
         // 原生缩放时不传截图裁剪坐标，直接捕获当前视口。
         const cdp = await context.newCDPSession(options)
         try {

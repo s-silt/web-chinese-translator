@@ -115,6 +115,7 @@
             aria-describedby="wt-request-params-hint"
             :aria-invalid="invalidField === 'requestParams' ? 'true' : undefined"
             data-test="wt-request-params"
+            @focus="keepFocusedFieldVisible"
             @input="clearInvalid('requestParams')"
           ></textarea>
           <span id="wt-request-params-hint" class="wt-hint">{{ t('wtRequestParamsHint') }}</span>
@@ -133,6 +134,7 @@
             :aria-describedby="customHeadersStatusHint === '' ? 'wt-custom-headers-hint' : 'wt-custom-headers-hint wt-custom-headers-state'"
             :aria-invalid="invalidField === 'customHeaders' ? 'true' : undefined"
             data-test="wt-custom-headers"
+            @focus="keepFocusedFieldVisible"
             @input="clearInvalid('customHeaders')"
           ></textarea>
           <span id="wt-custom-headers-hint" class="wt-hint">{{ t('wtCustomHeadersHint') }}</span>
@@ -485,6 +487,19 @@ watch(() => props.view, () => setStatus('', false))
 
 function clearInvalid(field: Exclude<InvalidAdvancedField, null>): void {
   if (invalidField.value === field) invalidField.value = null
+}
+
+function keepFocusedFieldVisible(event: FocusEvent): void {
+  const field = event.currentTarget as HTMLTextAreaElement
+  // 原生聚焦可能只滚到插入点；鼠标按下时不移动页面，以免干扰拖选。
+  queueMicrotask(() => {
+    const view = field.ownerDocument.defaultView
+    if (view === null || !field.isConnected || field.ownerDocument.activeElement !== field || field.matches(':active')) return
+    const rect = field.getBoundingClientRect()
+    if (rect.height <= view.innerHeight && (rect.top < 0 || rect.bottom > view.innerHeight)) {
+      field.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' })
+    }
+  })
 }
 
 function onTemperatureInput(value: string | number): void {
