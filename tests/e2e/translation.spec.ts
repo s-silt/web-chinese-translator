@@ -1117,7 +1117,8 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
     try {
       const targetUrl = 'https://app.devin.ai/list'
       const items = Array.from({ length: 1200 }, (_, i) => `<p id="n${i}">Offscreen list entry number ${i}.</p>`).join('')
-      const html = `<!doctype html><html><body><main>${items}</main></body></html>`
+      // 固定行高，避免中英文字体度量差异把滚入视口的末项再次推到屏外。
+      const html = `<!doctype html><html><head><style>p{line-height:22px}</style></head><body><main>${items}</main></body></html>`
       await context.route('https://app.devin.ai/**', (route) => route.fulfill({ contentType: 'text/html', body: html }))
       const options = await saveAndConnect(context, extensionId)
       await enableSelection(options)
@@ -1135,9 +1136,12 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await waitForSiteContentReady(options, page, { supported: true, auto: true })
       await expect(page.locator('#n0')).toHaveText('中文译文', { timeout: 20000 })
       const tailPhrase = 'Offscreen list entry number 1199.'
+      const tail = page.locator('#n1199')
       expect(api.calls.filter((call) => JSON.stringify(call.payload.texts ?? []).includes('number 1199'))).toHaveLength(0)
-      await page.locator('#n1199').scrollIntoViewIfNeeded()
-      await expect(page.locator('#n1199')).toHaveText('中文译文', { timeout: 30000 })
+      await tail.scrollIntoViewIfNeeded()
+      await expect(tail).toBeInViewport({ ratio: 1 })
+      await expect(tail).toHaveText('中文译文', { timeout: 30000 })
+      await expect(tail).toBeInViewport({ ratio: 1 })
       expect(api.calls.filter((call) => JSON.stringify(call.payload.texts ?? []).includes(tailPhrase)).length).toBeGreaterThan(0)
     } finally {
       await context.close()
