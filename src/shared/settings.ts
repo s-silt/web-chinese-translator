@@ -15,6 +15,12 @@ export function isThemePreference(value: unknown): value is ThemePreference {
   return (THEME_PREFERENCES as readonly unknown[]).includes(value)
 }
 
+export type UiStyle = 'classic' | 'cyber' | 'glass'
+export const UI_STYLES: readonly UiStyle[] = ['classic', 'cyber', 'glass']
+export function isUiStyle(value: unknown): value is UiStyle {
+  return (UI_STYLES as readonly unknown[]).includes(value)
+}
+
 export interface Settings {
   /** 总开关 */
   readonly enabled: boolean
@@ -33,6 +39,8 @@ export interface Settings {
   readonly uiLanguage: UiLanguagePreference
   /** 扩展界面外观；auto 跟随浏览器 */
   readonly theme: ThemePreference
+  /** 扩展界面风格；cyber 固定深色 */
+  readonly uiStyle: UiStyle
 }
 
 /**
@@ -49,6 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
   language: 'auto',
   uiLanguage: 'auto',
   theme: 'auto',
+  uiStyle: 'classic',
 }
 
 /**
@@ -83,6 +92,7 @@ export function mergeSettings(stored: unknown): Settings {
     language: isPageLocalePreference(value.language) ? value.language : DEFAULT_SETTINGS.language,
     uiLanguage: isUiLanguagePreference(value.uiLanguage) ? value.uiLanguage : DEFAULT_SETTINGS.uiLanguage,
     theme: isThemePreference(value.theme) ? value.theme : DEFAULT_SETTINGS.theme,
+    uiStyle: isUiStyle(value.uiStyle) ? value.uiStyle : DEFAULT_SETTINGS.uiStyle,
   }
 }
 

@@ -7,6 +7,8 @@
  * - 文档解析期间，解析器把分块到达的文字追加到已写入的文本节点：原文为记录的原文加追加部分（见 appendedPart）。
  */
 
+import { textOwnership, type TextOwnershipScope } from '../shared/text-ownership'
+
 export const CONTESTED: unique symbol = Symbol('contested')
 export type Contested = typeof CONTESTED
 
@@ -17,6 +19,7 @@ export const FIGHT_LIMIT = 8
 /** 单词字符：字母、组合附加符号、数字、连接符（下划线） */
 const WORD_RE = /[\p{L}\p{M}\p{N}\p{Pc}]/u
 const NON_SPACE_RE = /\S/
+const ownership = textOwnership()
 
 interface WriteRecord<T extends string | null> {
   readonly original: T
@@ -104,6 +107,7 @@ function appendedPart(node: Text, record: TextRecord, data: string): string | un
 export function createRecordStore(clock: () => number): RecordStore {
   let texts = new WeakMap<Text, TextRecord>()
   let attributes = new WeakMap<Element, Map<string, AttributeRecord>>()
+  let scope: TextOwnershipScope = { active: true }
 
   function getAttributeRecord(element: Element, name: string): AttributeRecord | undefined {
     return attributes.get(element)?.get(name)
@@ -124,6 +128,7 @@ export function createRecordStore(clock: () => number): RecordStore {
 
   return {
     textSource(node) {
+      if (ownership.ownerOf(node) === 'web') return CONTESTED
       const data = node.data
       const record = texts.get(node)
       if (record === undefined) return data
@@ -136,6 +141,7 @@ export function createRecordStore(clock: () => number): RecordStore {
         return counted.reverts > FIGHT_LIMIT ? CONTESTED : data
       }
       texts.delete(node)
+      ownership.release(node, 'github')
       if (appended === undefined) return data
       const source = record.original + appended
       // 追加到置空节点，或追加部分含字母、数字（「编辑」+「 file」、「展开第 1 行」+「2」）、只有空白：
@@ -144,6 +150,7 @@ export function createRecordStore(clock: () => number): RecordStore {
       // 只追加标点、符号（「编辑」+「…」）：显示不变，记录改为追加后的原文，停用时能还原。
       // 返回 CONTESTED 让调用方本次跳过；返回当前文字会被当作原文写回（如标题），记录随之清除
       texts.set(node, nextTextRecord(record, node, source, data))
+      ownership.claim(node, 'github', data, scope)
       return CONTESTED
     },
 
@@ -153,12 +160,22 @@ export function createRecordStore(clock: () => number): RecordStore {
     },
 
     writeText(node, source, desired) {
+      if (ownership.ownerOf(node) === 'web') {
+        texts.delete(node)
+        return
+      }
       if (node.data !== desired) node.data = desired
-      if (desired === source) texts.delete(node)
-      else texts.set(node, nextTextRecord(texts.get(node), node, source, desired))
+      if (desired === source) {
+        texts.delete(node)
+        ownership.release(node, 'github')
+      } else {
+        texts.set(node, nextTextRecord(texts.get(node), node, source, desired))
+        ownership.claim(node, 'github', desired, scope)
+      }
     },
 
     ownText(node) {
+      if (ownership.ownerOf(node) === 'web') return false
       const record = texts.get(node)
       return record !== undefined && node.data === record.written
     },
@@ -168,10 +185,15 @@ export function createRecordStore(clock: () => number): RecordStore {
     },
 
     restoreText(node) {
+      if (ownership.ownerOf(node) === 'web') {
+        texts.delete(node)
+        return
+      }
       const record = texts.get(node)
       if (record === undefined) return
       if (node.data === record.written) node.data = record.original
       texts.delete(node)
+      ownership.release(node, 'github')
     },
 
     attributeSource(element, name, current) {
@@ -232,6 +254,9 @@ export function createRecordStore(clock: () => number): RecordStore {
     },
 
     clear() {
+      // WeakMap 不可遍历；停用旧 scope 使此前登记的所有权在 ownerOf 时失效，其余过期登记由文字比对自然失效
+      scope.active = false
+      scope = { active: true }
       texts = new WeakMap()
       attributes = new WeakMap()
     },

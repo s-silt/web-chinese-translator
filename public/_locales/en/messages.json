@@ -1,4 +1,17 @@
 {
-  "extName": { "message": "GitHub Chinese" },
-  "extDescription": { "message": "Translates the GitHub interface into Chinese (Simplified and Traditional)" }
+  "extName": {
+    "message": "Web Chinese Translator"
+  },
+  "extDescription": {
+    "message": "Localizes the GitHub UI into Chinese; optional selection and per-site auto translation via your own OpenAI-compatible endpoint"
+  },
+  "extDescriptionFirefox": {
+    "message": "Translate GitHub interfaces into Chinese with local dictionaries and custom rules."
+  },
+  "cmdTogglePage": {
+    "message": "Translate page / show original"
+  },
+  "cmdTranslateSelection": {
+    "message": "Translate selected text"
+  }
 }

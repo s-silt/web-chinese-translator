@@ -64,7 +64,7 @@ describe('mergeSettings', () => {
       uiLanguage: 'en',
       theme: 'dark',
     })
-    expect(mergeSettings({ language: 'en', uiLanguage: 'ja', theme: 'neon' })).toEqual(DEFAULT_SETTINGS)
+    expect(mergeSettings({ language: 'en', uiLanguage: 'zz', theme: 'neon' })).toEqual(DEFAULT_SETTINGS)
     expect(mergeSettings({ language: null, uiLanguage: 1, theme: ['dark'] })).toEqual(DEFAULT_SETTINGS)
   })
 })

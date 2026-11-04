@@ -1,4 +1,17 @@
 {
-  "extName": { "message": "GitHub 中文化" },
-  "extDescription": { "message": "GitHub 界面中文化（简体、繁体）" }
+  "extName": {
+    "message": "网页汉化助手"
+  },
+  "extDescription": {
+    "message": "把 GitHub 界面翻译成中文；支持划词翻译与逐站点自动翻译（自选模型接口）"
+  },
+  "extDescriptionFirefox": {
+    "message": "使用本地词库与自定义规则，将 GitHub 页面界面翻译成中文。"
+  },
+  "cmdTogglePage": {
+    "message": "翻译本页 / 恢复原文"
+  },
+  "cmdTranslateSelection": {
+    "message": "翻译选中文字"
+  }
 }

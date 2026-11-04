@@ -82,7 +82,6 @@
   --gcn-switch-on-hover: light-dark(#0860ca, #388bfd);
   --gcn-knob: light-dark(#ffffff, #f0f6fc);
 }
-
 :root:lang(zh-TW) {
   --gcn-font: var(--gcn-font-latin), var(--gcn-font-tc), sans-serif;
 }
@@ -244,4 +243,15 @@ p {
   .ui-field {
     transition: none;
   }
+}
+
+/* 界面风格共享变量：classic 默认等同现有面板；cyber/glass 在 styles/*.css 中覆盖 */
+:root {
+  --gcn-surface: var(--gcn-bg);
+  --gcn-surface-border: var(--gcn-border);
+  --gcn-surface-shadow: none;
+  --gcn-surface-blur: 0;
+  --gcn-page-bg: var(--gcn-bg);
+  --gcn-radius-panel: var(--gcn-radius-lg);
+  --gcn-eyebrow: var(--gcn-fg-muted);
 }

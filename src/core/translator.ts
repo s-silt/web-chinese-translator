@@ -53,11 +53,12 @@ import {
   titleElement,
 } from './dom'
 import { createTextFit, SPACE_ONLY_RE } from './fit'
-import { besideKbd, createInlineFragments, isFullPunct, isHalfPunct, isKbd, kbdNeighbor } from './inline'
+import { besideKbd, createInlineFragments, isFullPunct, isHalfPunct, isKbd, kbdNeighbor, kbdSpans, sentenceOf } from './inline'
 import { normalizeText, type Matcher } from './matcher'
 import { detectPages } from './page'
 import { createPositionMemo } from './position-memo'
 import { CONTESTED, createRecordStore, type Contested } from './records'
+import { textOwnership } from '../shared/text-ownership'
 import {
   attributeMatches,
   compileIgnoreIndex,
@@ -299,6 +300,7 @@ export function createTranslator(options: TranslatorOptions): Translator {
   const clock = (): number => host.performance?.now() ?? Date.now()
   const resolvePages = (): readonly PageKey[] => (options.resolvePages ?? detectPages)(host.location)
   const records = createRecordStore(clock)
+  const ownership = textOwnership()
   const untranslated = createUntranslatedBuffer({ maxPending: options.maxUntranslated })
 
   let matcher = options.matcher
@@ -537,6 +539,7 @@ export function createTranslator(options: TranslatorOptions): Translator {
    * collect 为 false 时不记未翻译（由调用方记录整句）。
    */
   function applyRun(run: readonly Text[], sources: readonly (string | Contested)[], collect: boolean): void {
+    if (run.some(isWebOwned)) return
     if (run.length <= 1) {
       if (run[0]) applyText(run[0], sources[0]!, collect)
       return
@@ -627,6 +630,35 @@ export function createTranslator(options: TranslatorOptions): Translator {
     return texts
   }
 
+  function isWebOwned(node: Text): boolean {
+    return ownership.ownerOf(node) === 'web'
+  }
+
+  function hasWebOwnedText(root: Node): boolean {
+    if (isTextNode(root)) return isWebOwned(root)
+    const walker = doc.createTreeWalker(root, SHOW_TEXT)
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (isWebOwned(node as Text)) return true
+    }
+    return false
+  }
+
+  function kbdHasWebOwned(parent: Element | null): boolean {
+    if (!parent) return false
+    return kbdSpans(parent).some(
+      (span) => span.groups.some((group) => group.some(isWebOwned)) || span.kbds.some(hasWebOwnedText),
+    )
+  }
+
+  function sentenceHasWebOwned(parent: Element | null): boolean {
+    if (!parent || !inline.maybeSentence(parent)) return false
+    const sentence = sentenceOf(parent)
+    return (
+      sentence !== undefined &&
+      (sentence.groups.some((group) => group.some(isWebOwned)) || sentence.slots.some(hasWebOwnedText))
+    )
+  }
+
   /**
    * 合并区域：区域内（含后代）的全部文字连成一段匹配（见 applyJoined），命中时译文写入第一个文本节点、其余置空。
    * 每轮每个区域判断一次；返回 false 表示区域内有不能合并的元素或整段未命中，不写入，由遍历照常处理其中的文字。
@@ -636,6 +668,10 @@ export function createTranslator(options: TranslatorOptions): Translator {
     let merged = mergedRegions.get(region)
     if (merged !== undefined) return merged
     const texts = mergeTexts(region)
+    if (texts?.some(isWebOwned)) {
+      mergedRegions.set(region, true)
+      return true
+    }
     merged = texts !== undefined && applyJoined(texts, texts.map(sourceOf))
     mergedRegions.set(region, merged)
     if (merged) {
@@ -682,6 +718,8 @@ export function createTranslator(options: TranslatorOptions): Translator {
    * beside 为遍历时已知的「是否紧邻 kbd」。
    */
   function processRun(run: readonly Text[], beside = besideKbd(run)): void {
+    const parent = run[0]?.parentElement ?? null
+    if (run.some(isWebOwned) || (beside ? kbdHasWebOwned(parent) : sentenceHasWebOwned(parent))) return
     if (inline.claimRun(run, beside)) return
     const single = run.length === 1 ? run[0] : undefined
     if (single) {
@@ -1227,7 +1265,7 @@ export function createTranslator(options: TranslatorOptions): Translator {
         fitting.touch(region)
         continue
       }
-      if (!inline.rejudge(element)) continue
+      if (sentenceHasWebOwned(element) || !inline.rejudge(element)) continue
       fitting.touch(element)
       if (isMirrorElement(element)) syncMirror(element)
     }
@@ -1359,7 +1397,7 @@ export function createTranslator(options: TranslatorOptions): Translator {
    * 标签文字的节点（区域变成多段：追加了文字、表情）写回原文
    */
   function translateLabelRoot(root: Element): void {
-    if (safeMatches(root, EXIT_SELECTOR)) return
+    if (safeMatches(root, EXIT_SELECTOR) || hasWebOwnedText(root)) return
     const sole = labelTextOf(root)
     if (sole !== null) {
       translateLabelText(sole)
@@ -1412,6 +1450,7 @@ export function createTranslator(options: TranslatorOptions): Translator {
    * 不命中时写回原文（写过译文、原文后来变了，或解析器在译文后追加了文字）。不记未翻译
    */
   function translateLabelText(node: Text): void {
+    if (isWebOwned(node)) return
     // 没有记录时只看当前文字，名称、说明、列表名都不命中就不取原文（取原文有副作用，见 sourceOf），也不判断区域种类
     if (!records.hasText(node) && !isLabelText(node.data)) return
     const part = labelPartOf(node)

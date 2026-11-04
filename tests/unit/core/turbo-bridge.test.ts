@@ -1646,6 +1646,7 @@ describe('与控制器一起：排除路径', () => {
         language: 'auto',
         uiLanguage: 'auto',
         theme: 'auto',
+  uiStyle: 'classic',
       },
       customEntries: {},
       isPathExcluded: (pathname, patterns) => patterns.some((pattern) => pathname.startsWith(pattern)),

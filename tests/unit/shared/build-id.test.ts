@@ -98,10 +98,29 @@ describe('构建标识（wxt.config.ts）', () => {
 })
 
 describe('清单权限', () => {
-  it.each(['chrome', 'edge', 'firefox'])('%s：申请 storage、scripting；不声明快捷键命令', async (browser) => {
+  it.each(['chrome', 'edge', 'firefox'])('%s：权限按浏览器功能区分；不申请历史、tabs；快捷键只在 Chromium 声明', async (browser) => {
     const { default: config } = await loadConfig()
     const manifest = (await (config.manifest as UserManifestFn)({ ...ENV, browser })) as UserManifest
-    expect(manifest.permissions).toEqual(['storage', 'scripting'])
-    expect(manifest.commands).toBeUndefined()
+    expect(manifest.permissions).toEqual(
+      browser === 'firefox'
+        ? ['storage', 'scripting']
+        : ['storage', 'scripting', 'activeTab', 'contextMenus', 'alarms'],
+    )
+    expect(manifest.optional_host_permissions).toEqual(
+      browser === 'firefox' ? [] : ['https://*/*', 'http://*/*'],
+    )
+    // 网页翻译功能只在 Chromium 构建里：翻译/恢复本页与翻译选中文字两条命令，描述走 _locales
+    if (browser === 'firefox') expect(manifest.commands).toBeUndefined()
+    else {
+      expect(Object.keys(manifest.commands ?? {})).toEqual(['toggle-page-translation', 'translate-selection'])
+      expect(manifest.commands?.['toggle-page-translation']).toEqual({
+        suggested_key: { default: 'Alt+T' },
+        description: '__MSG_cmdTogglePage__',
+      })
+      expect(manifest.commands?.['translate-selection']).toEqual({
+        suggested_key: { default: 'Alt+S' },
+        description: '__MSG_cmdTranslateSelection__',
+      })
+    }
   })
 })

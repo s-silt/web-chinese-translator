@@ -1,0 +1,214 @@
+[
+  {
+    "id": "devin",
+    "label": "Devin",
+    "hosts": [
+      "devin.ai"
+    ],
+    "category": "ai-code"
+  },
+  {
+    "id": "cursor",
+    "label": "Cursor",
+    "hosts": [
+      "cursor.com"
+    ],
+    "category": "ai-code"
+  },
+  {
+    "id": "stackoverflow",
+    "label": "Stack Exchange",
+    "hosts": [
+      "stackexchange.com",
+      "superuser.com",
+      "serverfault.com",
+      "askubuntu.com"
+    ],
+    "category": "community"
+  },
+  {
+    "id": "npm",
+    "label": "npm",
+    "hosts": [
+      "npmjs.com"
+    ],
+    "category": "code"
+  },
+  {
+    "id": "dockerhub",
+    "label": "Docker Hub",
+    "hosts": [
+      "hub.docker.com"
+    ],
+    "category": "code"
+  },
+  {
+    "id": "huggingface",
+    "label": "Hugging Face",
+    "hosts": [
+      "huggingface.co"
+    ],
+    "category": "ai-model"
+  },
+  {
+    "id": "vercel",
+    "label": "Vercel",
+    "hosts": [
+      "vercel.com"
+    ],
+    "category": "cloud"
+  },
+  {
+    "id": "supabase",
+    "label": "Supabase",
+    "hosts": [
+      "supabase.com"
+    ],
+    "category": "cloud"
+  },
+  {
+    "id": "figma",
+    "label": "Figma",
+    "hosts": [
+      "figma.com"
+    ],
+    "category": "design"
+  },
+  {
+    "id": "linear",
+    "label": "Linear",
+    "hosts": [
+      "linear.app"
+    ],
+    "category": "design"
+  },
+  {
+    "id": "hackernews",
+    "label": "Hacker News",
+    "hosts": [
+      "news.ycombinator.com"
+    ],
+    "category": "community"
+  },
+  {
+    "id": "devto",
+    "label": "DEV Community",
+    "hosts": [
+      "dev.to"
+    ],
+    "category": "community"
+  },
+  {
+    "id": "medium",
+    "label": "Medium",
+    "hosts": [
+      "medium.com"
+    ],
+    "category": "community"
+  },
+  {
+    "id": "kaggle",
+    "label": "Kaggle",
+    "hosts": [
+      "kaggle.com"
+    ],
+    "category": "ai-model"
+  },
+  {
+    "id": "leetcode",
+    "label": "LeetCode",
+    "hosts": [
+      "leetcode.com"
+    ],
+    "category": "community"
+  },
+  {
+    "id": "replit",
+    "label": "Replit",
+    "hosts": [
+      "replit.com"
+    ],
+    "category": "ai-code"
+  },
+  {
+    "id": "claude",
+    "label": "Claude",
+    "hosts": [
+      "claude.ai",
+      "console.anthropic.com"
+    ],
+    "category": "ai-model"
+  },
+  {
+    "id": "gemini",
+    "label": "Google AI Studio",
+    "hosts": [
+      "aistudio.google.com"
+    ],
+    "category": "ai-model"
+  },
+  {
+    "id": "producthunt",
+    "label": "Product Hunt",
+    "hosts": [
+      "producthunt.com"
+    ],
+    "category": "community"
+  },
+  {
+    "id": "quora",
+    "label": "Quora",
+    "hosts": [
+      "quora.com"
+    ],
+    "category": "community"
+  },
+  {
+    "id": "openrouter",
+    "label": "OpenRouter",
+    "hosts": [
+      "openrouter.ai"
+    ],
+    "category": "ai-model"
+  },
+  {
+    "id": "bolt",
+    "label": "Bolt",
+    "hosts": [
+      "bolt.new"
+    ],
+    "category": "ai-code"
+  },
+  {
+    "id": "lovable",
+    "label": "Lovable",
+    "hosts": [
+      "lovable.dev"
+    ],
+    "category": "ai-code"
+  },
+  {
+    "id": "netlify",
+    "label": "Netlify",
+    "hosts": [
+      "app.netlify.com"
+    ],
+    "category": "cloud"
+  },
+  {
+    "id": "railway",
+    "label": "Railway",
+    "hosts": [
+      "railway.com"
+    ],
+    "category": "cloud"
+  },
+  {
+    "id": "render",
+    "label": "Render",
+    "hosts": [
+      "dashboard.render.com"
+    ],
+    "category": "cloud"
+  }
+]

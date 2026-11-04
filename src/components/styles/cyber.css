@@ -1,0 +1,229 @@
+/* 赛博游戏风格：固定深色，HUD 角标面板、网格底纹、横向标签导航 */
+:root[data-style='cyber'] {
+  color-scheme: dark;
+  --gcn-fg: #e7f4ff;
+  --gcn-fg-muted: #9cb4cf;
+  --gcn-fg-disabled: #647d99;
+  --gcn-bg: #101c2e;
+  --gcn-bg-muted: #081120;
+  --gcn-bg-disabled: #0d1829;
+  --gcn-border: #264561;
+  --gcn-border-muted: #26456199;
+  --gcn-border-emphasis: #3f73a1;
+  --gcn-accent: #55e5ff;
+  --gcn-focus: #55e5ff;
+  --gcn-selection: #55e5ff33;
+  --gcn-control-sm: 30px;
+  --gcn-control-md: 36px;
+  --gcn-radius: 8px;
+  --gcn-radius-lg: 10px;
+  --gcn-success-fg: #46e1b4;
+  --gcn-success-bg: #113629;
+  --gcn-attention-fg: #ffd166;
+  --gcn-attention-bg: #3a2f10;
+  --gcn-danger-fg: #ff7b8a;
+  --gcn-danger-bg: #3a1620;
+  --gcn-neutral-bg: #1a2b44;
+  --gcn-btn-fg: #e7f4ff;
+  --gcn-btn-bg: #101c2e;
+  --gcn-btn-hover-bg: #16263e;
+  --gcn-btn-active-bg: #1c304e;
+  --gcn-btn-border: #2b4f6e;
+  --gcn-primary-fg: #051c26;
+  --gcn-primary-bg: #55e5ff;
+  --gcn-primary-hover-bg: #7fecff;
+  --gcn-primary-active-bg: #3fd6f2;
+  --gcn-primary-disabled-bg: #182b3e;
+  --gcn-primary-disabled-fg: #6b85a0;
+  --gcn-primary-border: transparent;
+  --gcn-switch-off: #2d4a6b;
+  --gcn-switch-on: #55e5ff;
+  --gcn-switch-on-hover: #7fecff;
+  --gcn-knob: #e7f4ff;
+  --gcn-overlay-bg: #0b1526;
+  --gcn-overlay-border: #2b4f6e;
+  --gcn-page-bg: #060c18;
+  --gcn-surface: #0b1526;
+  --gcn-surface-border: #264561;
+  --gcn-surface-shadow: 0 8px 28px #02081480, 0 0 20px #1aa6d912;
+  --gcn-radius-panel: 10px;
+  --gcn-eyebrow: #55e5ff;
+}
+
+:root[data-style='cyber'] body {
+  background:
+    repeating-linear-gradient(0deg, transparent 0 39px, #ffffff06 39px 40px),
+    repeating-linear-gradient(90deg, transparent 0 39px, #ffffff06 39px 40px),
+    var(--gcn-page-bg);
+}
+
+:root[data-style='cyber'] .options {
+  max-width: 1160px;
+  padding: 28px 28px 64px;
+}
+
+:root[data-style='cyber'] .options-side {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+  margin-bottom: 24px;
+  padding: 16px 24px;
+  background: var(--gcn-surface);
+  border: 1px solid var(--gcn-surface-border);
+  border-radius: var(--gcn-radius-panel);
+  box-shadow: var(--gcn-surface-shadow);
+}
+
+:root[data-style='cyber'] .options-side .options-header {
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+:root[data-style='cyber'] .options-main {
+  gap: 24px;
+}
+
+:root[data-style='cyber'] .section {
+  position: relative;
+  gap: 16px;
+  background: var(--gcn-surface);
+  border: 1px solid var(--gcn-surface-border);
+  box-shadow: var(--gcn-surface-shadow);
+  border-radius: var(--gcn-radius-panel);
+  padding: 24px;
+}
+
+@media (max-width: 600px) {
+  :root[data-style='cyber'] .options {
+    padding: 16px 16px 40px;
+  }
+  :root[data-style='cyber'] .options-side {
+    padding: 14px 16px;
+  }
+  :root[data-style='cyber'] .section {
+    padding: 16px;
+  }
+}
+
+:root[data-style='cyber'] .section > .section-title,
+:root[data-style='cyber'] .section-head > .section-title {
+  margin: 0 0 4px;
+  font-size: 20px;
+  line-height: 30px;
+  font-weight: 500;
+  color: var(--gcn-fg);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+/* 嵌套面板（details 内分区）不加壳 */
+:root[data-style='cyber'] .section .section {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  backdrop-filter: none;
+}
+
+:root[data-style='cyber'] .options-main > .section::before,
+:root[data-style='cyber'] .options-main > .section::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+:root[data-style='cyber'] .options-main > .section::before {
+  top: -1px;
+  left: -1px;
+  border-top: 1.5px solid var(--gcn-accent);
+  border-left: 1.5px solid var(--gcn-accent);
+}
+
+:root[data-style='cyber'] .options-main > .section::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 1.5px solid var(--gcn-accent);
+  border-right: 1.5px solid var(--gcn-accent);
+}
+
+/* 模型面板使用 Figma 导出的 HUD 切角装饰，九宫格保持四角比例且不阻挡交互 */
+:root[data-style='cyber'] .options-main > .section[aria-labelledby='wt-title']::before {
+  inset: -1px;
+  width: auto;
+  height: auto;
+  border-width: 32px 42px;
+  border-style: solid;
+  border-color: transparent;
+  border-image: url('/cyber-hud.svg') 32 42 / 32px 42px / 0 stretch;
+  opacity: 0.95;
+}
+
+:root[data-style='cyber'] .options-main > .section[aria-labelledby='wt-title']::after {
+  display: none;
+}
+
+/* 赛博模型配置：接口地址与 API Key 并排，模型名称和获取按钮独占一行 */
+@media (min-width: 680px) {
+  :root[data-style='cyber'] .wt-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+  :root[data-style='cyber'] .wt-fields > .wt-field:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+/* 顶部横向标签导航，当前项用主色 */
+:root[data-style='cyber'] .options-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+}
+
+:root[data-style='cyber'] .options-nav a {
+  color: var(--gcn-fg);
+  background: var(--gcn-btn-bg);
+  border: 1px solid var(--gcn-btn-border);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color var(--gcn-duration-fast) var(--gcn-ease), border-color var(--gcn-duration-fast) var(--gcn-ease);
+}
+
+:root[data-style='cyber'] .options-nav a:hover {
+  background: var(--gcn-btn-hover-bg);
+  border-color: var(--gcn-border-emphasis);
+}
+
+:root[data-style='cyber'] .options-nav a[aria-current='page'] {
+  color: var(--gcn-primary-fg);
+  background: var(--gcn-primary-bg);
+  border-color: var(--gcn-primary-border);
+  font-weight: 600;
+}
+
+/* 弹出页：赛博深海蓝层次与弱化分隔 */
+:root[data-style='cyber'] .popup {
+  background: var(--gcn-surface);
+}
+
+:root[data-style='cyber'] .popup .popup-header,
+:root[data-style='cyber'] .popup .popup-footer {
+  background: var(--gcn-bg-muted);
+  border-color: var(--gcn-border-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-style='cyber'] .options-nav a {
+    transition: none;
+  }
+}

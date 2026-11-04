@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { TRANSLATABLE_ATTRIBUTES } from '../../../src/core/ignore'
 import { createTranslator, type Translator, type TranslatorOptions } from '../../../src/core/translator'
 import type { LocaleBundle } from '../../../src/core/types'
+import { textOwnership } from '../../../src/shared/text-ownership'
 import { $, settle, TEST_BUNDLE, testMatcher, texts } from './helpers'
 
 const HOME = '/vuejs/core/issues'
@@ -691,4 +692,79 @@ describe('已译节点被追加文字（解析器分块到达）', () => {
       expect($('p').textContent).toBe('Webhooks (2)')
     },
   )
+})
+
+describe('文本所有权与候选组避让', () => {
+  it('web 所有的单节点不被 GitHub 引擎覆盖，stop 不还原，页面改写后恢复翻译', async () => {
+    document.body.innerHTML = '<p id="web">Open</p><p id="gh">Issues</p>'
+    const webNode = $('#web').firstChild as Text
+    textOwnership().claim(webNode, 'web', 'Open')
+
+    const t = createTranslator({ matcher: testMatcher(), host: window })
+    translator = t
+    t.start()
+    expect($('#web').textContent).toBe('Open')
+    expect($('#gh').textContent).toBe('议题')
+    expect(textOwnership().ownerOf(webNode)).toBe('web')
+
+    webNode.data = 'Pull requests'
+    await settle()
+    expect($('#web').textContent).toBe('拉取请求')
+    expect(textOwnership().ownerOf(webNode)).toBe('github')
+
+    textOwnership().claim(webNode, 'web', '拉取请求')
+    t.stop()
+    expect($('#web').textContent).toBe('拉取请求')
+    expect($('#gh').textContent).toBe('Issues')
+  })
+
+  it('含 web 成员的相邻文本组、合并区域、kbd 片段整组跳过，页面改写后相邻文本组恢复翻译', async () => {
+    const bundle: LocaleBundle = [
+      ...TEST_BUNDLE,
+      [
+        'common',
+        {
+          static: { 'Edit / file': '按 / 编辑文件', 'Edit file': '编辑文件', Edit: '编辑', file: '文件' },
+          mergeText: ['.merge-box'],
+        },
+      ],
+    ]
+    document.body.innerHTML =
+      '<span id="run">Edit<!-- --> <!-- -->file</span>' +
+      '<div id="merge" class="merge-box"><b>Edit </b><i>file</i></div>' +
+      '<p id="kbd">Edit <kbd>/</kbd> file</p>'
+
+    const runTail = $('#run').lastChild as Text
+    const mergeTail = $('#merge i').firstChild as Text
+    const kbdTail = $('#kbd').lastChild as Text
+    textOwnership().claim(runTail, 'web', 'file')
+    textOwnership().claim(mergeTail, 'web', 'file')
+    textOwnership().claim(kbdTail, 'web', ' file')
+
+    translator = createTranslator({ matcher: testMatcher({}, bundle), host: window })
+    translator.start()
+
+    expect(texts($('#run'))).toEqual(['Edit', ' ', 'file'])
+    expect($('#merge').textContent).toBe('Edit file')
+    expect(texts($('#kbd'))).toEqual(['Edit ', ' file'])
+
+    // 页面改写释放 web 所有权后，整组恢复翻译
+    runTail.data = 'changed'
+    await settle()
+    expect(textOwnership().ownerOf(runTail)).not.toBe('web')
+    runTail.data = 'file'
+    await settle()
+    expect(texts($('#run'))).toEqual(['编辑文件', '', ''])
+  })
+
+  it('脱离 DOM 的节点在 stop 后其 github 所有权失效', () => {
+    const t = start('<p id="gone">Issues</p>')
+    const node = $('#gone').firstChild as Text
+    expect(textOwnership().ownerOf(node)).toBe('github')
+
+    $('#gone').remove()
+    t.stop()
+    expect(node.data).toBe('议题')
+    expect(textOwnership().ownerOf(node)).toBeUndefined()
+  })
 })

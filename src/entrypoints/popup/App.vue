@@ -7,6 +7,7 @@
         <span v-if="version" class="popup-version" data-test="version">v{{ version }}</span>
       </div>
       <UiButton
+        v-if="settings.uiStyle !== 'cyber'"
         class="popup-end"
         variant="invisible"
         size="sm"
@@ -44,6 +45,7 @@
     </header>
 
     <section class="popup-section popup-status">
+      <h2 class="section-title">{{ t(translationSupported ? 'wtExtensionSection' : 'wtGithubSection') }}</h2>
       <UiSwitch
         class="popup-enable"
         :label="t('enable')"
@@ -51,7 +53,7 @@
         :disabled="!settingsReady"
         @change="setEnabled"
       />
-      <div class="popup-row">
+      <div v-if="!translationSupported || tab || state === 'unauthorized'" class="popup-row">
         <span>{{ t('status') }}</span>
         <span class="popup-row-end">
           <span class="state" :class="`state-${state}`" role="status" data-test="state">
@@ -66,8 +68,16 @@
       </div>
     </section>
 
-    <GeneralSection class="popup-section" />
-    <LanguageSection class="popup-section" />
+    <TranslationControls v-if="translationSupported" class="popup-section" />
+    <template v-if="!translationSupported">
+      <GeneralSection />
+      <LanguageSection />
+    </template>
+    <details v-else class="popup-section popup-details">
+      <summary class="section-title">{{ t('wtGithubSettings') }}</summary>
+      <GeneralSection />
+      <LanguageSection />
+    </details>
 
     <footer class="popup-footer">
       <UiButton size="sm" @click="openOptions">{{ t('rules') }}</UiButton>
@@ -108,6 +118,10 @@ import { THEME_MESSAGE, useI18n, useUiPreferencesSync } from '../../components/u
 import { REPOSITORY_URL } from '../../shared/extension'
 import GeneralSection from './GeneralSection.vue'
 import LanguageSection from './LanguageSection.vue'
+import TranslationControls from './TranslationControls.vue'
+import { isFirefoxBuild } from '../../shared/extension'
+
+const translationSupported = !isFirefoxBuild()
 import { PAGE_STATE_MESSAGE, usePopup } from './usePopup'
 
 /** 扩展图标（public/ 下的文件）。用绑定而非静态属性：模板里静态的绝对路径会被编译成模块导入 */
@@ -164,23 +178,24 @@ const themeLabel = computed(() => t('appearanceCurrent', { mode: t(THEME_MESSAGE
 .popup-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-height: 48px;
-  padding: 8px 10px 8px 16px;
+  padding: 10px 12px 10px 16px;
   background: var(--gcn-bg-muted);
-  border-bottom: 1px solid var(--gcn-border);
+  border-bottom: 1px solid var(--gcn-border-muted);
 }
 
 /* 图标自带深色底：描一圈细边，深色背景上也能看出轮廓 */
 .popup-logo {
   flex: none;
-  border-radius: 5px;
+  border-radius: 6px;
   box-shadow: 0 0 0 1px var(--gcn-border-muted);
 }
 
 /* 名称与版本号按文字基线对齐 */
 .popup-brand {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
   min-width: 0;
@@ -210,18 +225,34 @@ const themeLabel = computed(() => t('appearanceCurrent', { mode: t(THEME_MESSAGE
 /* 也用于常规、语言两个分区组件的根元素（模板中以 class 传入） */
 .popup-section {
   display: grid;
-  gap: 4px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--gcn-border);
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--gcn-border-muted);
 }
 
 /* 总开关与当前页状态：同属当前页，放在一个分区 */
 .popup-status {
-  gap: 6px;
+  gap: 8px;
 }
 
 .popup-enable {
   font-weight: 600;
+}
+
+.popup-details > summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.popup-details[open] {
+  gap: 12px;
+}
+
+.popup-details :deep(section) {
+  display: grid;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--gcn-border-muted);
 }
 
 /* 状态：标签在左，状态与操作在右，与上方开关右缘对齐 */
@@ -280,7 +311,7 @@ const themeLabel = computed(() => t('appearanceCurrent', { mode: t(THEME_MESSAGE
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 10px 12px 16px;
+  padding: 12px 12px 12px 16px;
   background: var(--gcn-bg-muted);
 }
 </style>

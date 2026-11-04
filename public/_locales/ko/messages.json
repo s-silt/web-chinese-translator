@@ -1,0 +1,17 @@
+{
+  "extName": {
+    "message": "웹 번역 도우미"
+  },
+  "extDescription": {
+    "message": "로컬 사전으로 GitHub와 지원 사이트의 UI를 번역합니다. 사용자 지정 OpenAI 호환 API로 선택 텍스트와 웹페이지도 번역할 수 있습니다."
+  },
+  "extDescriptionFirefox": {
+    "message": "로컬 사전과 사용자 지정 규칙으로 GitHub UI를 중국어로 번역합니다."
+  },
+  "cmdTogglePage": {
+    "message": "페이지 번역 / 원문 보기"
+  },
+  "cmdTranslateSelection": {
+    "message": "선택한 텍스트 번역"
+  }
+}

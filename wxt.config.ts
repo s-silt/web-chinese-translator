@@ -1,11 +1,12 @@
+import { builtinHostPatterns } from './src/translation/dictionaries/index'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { defineConfig } from 'wxt'
 import { packTablesPlugin } from './scripts/pack-tables'
 import { stripVueStaticContentPlugin, VUE_COMPILER_OPTIONS } from './scripts/strip-vue-static-content'
 
-/** Firefox 扩展 ID：上架 AMO 后不可更改 */
-const GECKO_ID = '{3e156188-2ae6-4a69-8821-16410eba6e18}'
+/** 本项目 Firefox 扩展 ID；上架 AMO 后不可更改 */
+const GECKO_ID = '{4f5a7e2d-8b39-4c64-b87b-64cf6ba2987f}'
 
 /** 扩展生效的站点（含 GitHub 状态页），与 src/shared/github.ts 保持一致 */
 export const GITHUB_ORIGINS = ['https://github.com/*', 'https://gist.github.com/*', 'https://www.githubstatus.com/*']
@@ -92,21 +93,39 @@ export default defineConfig({
   manifest: ({ browser }) => ({
     // 名称、描述随浏览器界面语言（public/_locales），没有对应语言时用英文
     name: '__MSG_extName__',
-    description: '__MSG_extDescription__',
+    description: browser === 'firefox' ? '__MSG_extDescriptionFirefox__' : '__MSG_extDescription__',
     default_locale: 'en',
+    incognito: 'not_allowed',
     // scripting：按当前语言注册词典内容脚本（页面开始解析前就绪），动态导入失败（Firefox 不动态导入）时注入词典脚本；
     // Chromium 安装、更新后向已打开的 GitHub 标签页注入脚本（Firefox 自动注入）。Firefox 的 scripting 无安装、更新提示
-    permissions: ['storage', 'scripting'],
-    host_permissions: GITHUB_ORIGINS,
+    permissions:
+      browser === 'firefox'
+          ? ['storage', 'scripting']
+        : ['storage', 'scripting', 'activeTab', 'contextMenus', 'alarms'],
+    host_permissions:
+      browser === 'firefox' ? [...GITHUB_ORIGINS] : [...GITHUB_ORIGINS, ...builtinHostPatterns()],
+    optional_host_permissions: browser === 'firefox' ? [] : ['https://*/*', 'http://*/*'],
     action: {
       default_title: '__MSG_extName__',
     },
     // 词典脚本由内容脚本动态导入（见 src/shared/locale-loader.ts），只对 GitHub 页面开放，用会话随机地址，
     // 页面无法据固定地址探测扩展。Firefox 不动态导入（改请后台注入），不开放
     ...(browser === 'firefox'
-      ? {}
+      ? {
+          web_accessible_resources: [
+            { resources: ['icon/48.png'], matches: ['http://*/*', 'https://*/*'], use_dynamic_url: true },
+          ],
+        }
       : {
-          web_accessible_resources: [{ resources: ['locale-*.js'], matches: GITHUB_ORIGINS, use_dynamic_url: true }],
+          minimum_chrome_version: '116',
+          commands: {
+            'toggle-page-translation': { suggested_key: { default: 'Alt+T' }, description: '__MSG_cmdTogglePage__' },
+            'translate-selection': { suggested_key: { default: 'Alt+S' }, description: '__MSG_cmdTranslateSelection__' },
+          },
+          web_accessible_resources: [
+            { resources: ['locale-*.js'], matches: GITHUB_ORIGINS, use_dynamic_url: true },
+            { resources: ['icon/48.png'], matches: ['http://*/*', 'https://*/*'], use_dynamic_url: true },
+          ],
         }),
     ...(browser === 'firefox'
       ? {

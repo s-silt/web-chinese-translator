@@ -1,0 +1,944 @@
+import { browser } from 'wxt/browser'
+import { storage } from 'wxt/utils/storage'
+import { createId } from './id'
+import { translateMessage, type MessageKey, type MessageParams } from '../i18n'
+import { languageEnvironment } from '../shared/language-env'
+import { resolveUiLanguage, type UiLanguage } from '../shared/locale'
+import { getSettings, watchSettings } from '../shared/settings'
+import {
+  DEFAULT_TRANSLATION_CONFIG,
+  getTranslationConfig,
+  normalizeOrigin,
+  watchTranslationConfig,
+  type TranslationConfig,
+} from './config'
+import { translationOutputChanged } from './config-impact'
+import { createAssistance } from './assistance'
+import { createDomEngine, type AutoBatchOutcome, type DomEngine } from './dom'
+import { closePageSession, sendTranslationMessage } from './client'
+import {
+  isContentTranslationMessage,
+  NO_SELECTION_ERROR,
+  NOTHING_TO_TOGGLE_ERROR,
+  SENSITIVE_FRAME_ERROR,
+  type ContentTranslationReply,
+  type PageAction,
+  type PageModes,
+  type PageTranslationStatus,
+} from './messages'
+import { pageIdentity, watchPageLifecycle } from './page-lifecycle'
+import { createPageContextTracker } from './page-context-tracker'
+import { copySelectionText } from './clipboard'
+import type { FloatingAction, FloatingCallbacks, FloatingLabels, FloatingPosition, FloatingView } from './floating'
+import { createTranslationPanel, type TranslationPanel } from './panel'
+import { collectPageContext } from './reading-context'
+import { watchReadingSignals, type ReadingCandidate } from './reading-signals'
+import {
+  isAssistanceCandidateText,
+  readSelectionText,
+  watchSelection,
+  type SelectionAnchor,
+  type SelectionWatcher,
+} from './selection'
+import { parseGitHubUrl } from '../shared/github'
+import { fixedTranslationWith } from './dictionaries/index'
+import { isExcludedSite, isSensitivePage } from './page-policy'
+import { isSiteScopeAllowed, SITE_SCOPE_BLOCKED_ERROR } from './site-scope'
+
+const SINGLETON_KEY = Symbol.for('webTranslate.instance')
+const MODES_RETRY_MS = 1000
+const MAX_MODES_RETRIES = 5
+const floatingPositionItem = storage.defineItem<FloatingPosition>('local:translationFloatingPosition', {
+  fallback: { side: 'right', ratio: 0.5, collapsed: false },
+})
+
+export interface Instance {
+  dispose(): void
+  refresh(): void
+  healthy(): boolean
+}
+
+function createInstance(): Instance {
+  let config: TranslationConfig | undefined
+  let modes: PageModes = { enabled: false, fixed: false, auto: false, selection: false, smart: false }
+  let engine: DomEngine | undefined
+  type ToolbarSelection = {
+    readonly text: string
+    readonly anchor: SelectionAnchor
+    readonly method: 'mouse' | 'keyboard'
+    readonly stillValid: () => boolean
+  }
+  let watcher: SelectionWatcher | undefined
+  let toolbarSelection: ToolbarSelection | undefined
+  let reading: { dispose(): void; reset(): void } | undefined
+  let disposed = false
+  let suspended = false
+  let pageRestored = false
+  let lastError = ''
+  let chipAction: PageAction = 'resume'
+  let fixedActive = false
+  let autoActive = false
+  let proactiveSuppressed = false
+  let domEpoch = 0
+  let reloadEpoch = 0
+  let pageId = createId()
+  let modesRetries = 0
+  let modesRetryTimer: ReturnType<typeof setTimeout> | undefined
+  let uiLanguage: UiLanguage = resolveUiLanguage('auto', languageEnvironment())
+  let floatingSuppressed = false
+  let floatingEpoch = 0
+  let copyResultEpoch = 0
+  let floatingBusy = false
+  let floatingChecking = false
+  let floatingError = ''
+  let legacy: { active: boolean; paused: boolean } | undefined
+  const autoRequests = new Set<string>()
+  let resolveReady!: () => void
+  const ready = new Promise<void>((resolve) => {
+    resolveReady = resolve
+  })
+
+  const panel: TranslationPanel = createTranslationPanel()
+
+  function modelConfigured(): boolean {
+    return config !== undefined && config.baseUrl !== '' && config.model !== ''
+  }
+
+  function autoOn(): boolean {
+    return modes.enabled && modes.auto && !suspended && !pageRestored
+  }
+
+  function sameFixedEntries(
+    a: Readonly<Record<string, string>> | undefined,
+    b: Readonly<Record<string, string>> | undefined,
+  ): boolean {
+    if (a === undefined || b === undefined) return a === b
+    const keys = Object.keys(a)
+    return keys.length === Object.keys(b).length && keys.every((key) => b[key] === a[key])
+  }
+
+  function fixedOn(): boolean {
+    return modes.enabled && modes.fixed && !suspended && !pageRestored
+  }
+
+  function selectionOn(): boolean {
+    return modes.enabled && modes.selection && !suspended
+  }
+
+  function smartOn(): boolean {
+    return selectionOn() && modes.smart
+  }
+
+  function proactiveOn(): boolean {
+    return smartOn() && !proactiveSuppressed
+  }
+
+  function status(): PageTranslationStatus {
+    return {
+      supported: modes.enabled && (modes.fixed || modes.auto || modes.selection),
+      fixed: fixedActive && !pageRestored,
+      auto: autoActive && engine !== undefined && !engine.isAutoPaused() && !engine.isCapped() && !pageRestored,
+      paused: pageRestored || (modes.auto && (engine?.isAutoPaused() ?? false)),
+      capped: engine?.isCapped() ?? false,
+      failed: engine?.failedCount() ?? 0,
+      error: lastError,
+    }
+  }
+
+  function t(key: MessageKey, params?: MessageParams): string {
+    return translateMessage(uiLanguage, key, params)
+  }
+
+  function floatingEligible(): boolean {
+    if (disposed || suspended || floatingSuppressed || config === undefined) return false
+    if (!config.floatingButtonEnabled || !modes.enabled || modes.floating !== true) return false
+    const url = location.href
+    if (!isSiteScopeAllowed(url, config)) return false
+    if (isExcludedSite(url, config.excludedHosts) || isSensitivePage(url)) return false
+    return true
+  }
+
+  function floatingView(): FloatingView {
+    const github = parseGitHubUrl(location.href) !== undefined
+    const restored = pageRestored && (!github || legacy?.paused === true)
+    const fixedOn = (fixedActive && !pageRestored) || legacy?.active === true
+    let hostname = ''
+    try {
+      hostname = new URL(location.href).hostname
+    } catch {
+      /* 地址无效时主机名留空。 */
+    }
+    const origin = normalizeOrigin(location.href)
+    return {
+      visible: floatingEligible(),
+      hostname,
+      fixedOn,
+      autoEnabled: origin !== '' && (config?.autoOrigins.includes(origin) ?? false),
+      pageOn: status().auto && !(config?.autoOrigins.includes(origin) ?? false),
+      configured: Boolean(config?.baseUrl && config?.model),
+      restored,
+      canRestore: restored || fixedOn || autoOn(),
+      paused: !restored && modes.auto && status().paused,
+      busy: floatingBusy,
+      checking: floatingChecking,
+      error: floatingError,
+    }
+  }
+
+  function floatingLabels(): FloatingLabels {
+    return {
+      title: t('appName'),
+      open: t('wtFloatingOpen'),
+      expand: t('wtFloatingExpand'),
+      close: t('wtPanelClose'),
+      move: t('wtFloatingMove'),
+      translatePage: t('wtTranslatePage'),
+      enable: t('wtFloatingEnable'),
+      disable: t('wtFloatingDisable'),
+      fold: t('wtFloatingFold'),
+      disclosure: t('wtFloatingDisclosure'),
+      consent: t('wtConsent'),
+      confirm: t('wtConsentAction'),
+      cancel: t('cancel'),
+      restore: t('wtRestore'),
+      resume: t('wtResume'),
+      settings: t('wtOpenSettings'),
+      configure: t('wtAssistConfigure'),
+      fixedOn: t('wtFloatingFixedOn'),
+      modelOn: t('wtFloatingModelOn'),
+      modelOff: t('wtFloatingModelOff'),
+      pageOn: t('wtPageOn'),
+      restored: t('wtFloatingRestored'),
+      paused: t('wtFloatingPaused'),
+      loading: t('wtPanelLoading'),
+      positionFailed: t('wtFloatingPositionFailed'),
+    }
+  }
+
+  function floatingLive(token: number, page: string, identity: string): boolean {
+    return (
+      !disposed &&
+      !suspended &&
+      token === floatingEpoch &&
+      page === pageId &&
+      identity === pageIdentity(location.href) &&
+      floatingEligible()
+    )
+  }
+
+  function onFloatingOpen(): void {
+    floatingError = ''
+    floatingBusy = false
+    floatingChecking = false
+    const token = ++floatingEpoch
+    const page = pageId
+    const identity = pageIdentity(location.href)
+    if (parseGitHubUrl(location.href) === undefined) {
+      legacy = { active: false, paused: false }
+      syncFloating()
+      return
+    }
+    floatingChecking = true
+    syncFloating()
+    void sendTranslationMessage({ type: 'wt:current-page-controls', action: 'status' })
+      .then((reply) => {
+        if (!floatingLive(token, page, identity)) return
+        if (reply.ok) legacy = reply.legacy
+        else floatingError = reply.error || t('wtFloatingActionFailed')
+      })
+      .catch(() => {
+        if (!floatingLive(token, page, identity)) return
+        floatingError = t('wtFloatingActionFailed')
+      })
+      .finally(() => {
+        if (token !== floatingEpoch || disposed) return
+        floatingChecking = false
+        syncFloating()
+      })
+  }
+
+  function onFloatingAction(action: FloatingAction): void {
+    if (floatingBusy || !floatingEligible()) return
+    const view = floatingView()
+    if (action === 'toggle-auto' && !view.configured) return
+    if ((action === 'restore' || action === 'resume') && (!view.canRestore || view.checking)) return
+    const token = ++floatingEpoch
+    const page = pageId
+    const identity = pageIdentity(location.href)
+    floatingBusy = true
+    floatingChecking = false
+    floatingError = ''
+    syncFloating()
+    const origin = normalizeOrigin(location.href)
+    const finish = (): void => {
+      if (token !== floatingEpoch || disposed) return
+      floatingBusy = false
+      syncFloating()
+    }
+    if (action === 'translate-page') {
+      void sendTranslationMessage(view.configured
+        ? { type: 'wt:translate-page' }
+        : { type: 'wt:open-options', section: 'model' })
+        .then((reply) => {
+          if (!floatingLive(token, page, identity)) return
+          if (!reply.ok) floatingError = reply.error || t('wtFloatingActionFailed')
+        })
+        .catch(() => {
+          if (!floatingLive(token, page, identity)) return
+          floatingError = t('wtFloatingActionFailed')
+        })
+        .finally(finish)
+      return
+    }
+    if (action === 'settings') {
+      void sendTranslationMessage({ type: 'wt:open-options' })
+        .then((reply) => {
+          if (!floatingLive(token, page, identity)) return
+          if (!reply.ok) floatingError = reply.error || t('wtFloatingActionFailed')
+        })
+        .catch(() => {
+          if (!floatingLive(token, page, identity)) return
+          floatingError = t('wtFloatingActionFailed')
+        })
+        .finally(finish)
+      return
+    }
+    if (action === 'toggle-auto') {
+      void sendTranslationMessage({
+        type: 'wt:current-site-auto',
+        enabled: !(config?.autoOrigins.includes(origin) ?? false),
+      })
+        .then((reply) => {
+          if (!floatingLive(token, page, identity)) return
+          if (!reply.ok) {
+            floatingError = reply.error || t('wtFloatingActionFailed')
+            return
+          }
+          void reloadAndStart()
+        })
+        .catch(() => {
+          if (!floatingLive(token, page, identity)) return
+          floatingError = t('wtFloatingActionFailed')
+        })
+        .finally(finish)
+      return
+    }
+    void sendTranslationMessage({
+      type: 'wt:current-page-controls',
+      action,
+    })
+      .then((reply) => {
+        if (!floatingLive(token, page, identity)) return
+        if (reply.ok) legacy = reply.legacy
+        else floatingError = reply.error || t('wtFloatingActionFailed')
+      })
+      .catch(() => {
+        if (!floatingLive(token, page, identity)) return
+        floatingError = t('wtFloatingActionFailed')
+      })
+      .finally(finish)
+  }
+
+  function floatingCallbacks(): FloatingCallbacks {
+    return {
+      imageUrl: browser.runtime.getURL('/icon/48.png' as Parameters<typeof browser.runtime.getURL>[0]),
+      readPosition: () => floatingPositionItem.getValue(),
+      writePosition: (position) => floatingPositionItem.setValue(position),
+      onOpen: onFloatingOpen,
+      onAction: onFloatingAction,
+    }
+  }
+
+  function syncFloating(): void {
+    if (disposed) return
+    panel.setFloating(floatingView(), floatingLabels(), floatingCallbacks())
+  }
+
+  function resetFloating(): void {
+    floatingEpoch += 1
+    floatingSuppressed = true
+    floatingBusy = false
+    floatingChecking = false
+    floatingError = ''
+    legacy = undefined
+    syncFloating()
+  }
+
+  function syncPauseStatus(): void {
+    chipAction = 'resume'
+    if (!autoOn() || engine === undefined) panel.hidePauseStatus()
+    else if (engine.isCapped()) panel.showPauseStatus(t('wtCapNotice'), engine.isBudgetCapped(), t('wtResume'))
+    else if (engine.isAutoPaused()) panel.showPauseStatus(lastError === '' ? '自动翻译已暂停' : lastError, true)
+    else if (engine.failedCount() > 0) {
+      chipAction = 'retry-failed'
+      panel.showPauseStatus(t('wtFailedCount', { count: engine.failedCount() }), true, t('wtRetryFailed'))
+    } else panel.hidePauseStatus()
+    syncFloating()
+  }
+
+  function cancelAutomatic(): void {
+    domEpoch += 1
+    for (const id of autoRequests) {
+      void sendTranslationMessage({ type: 'wt:cancel-assist', requestId: id })
+    }
+    autoRequests.clear()
+    engine?.invalidate()
+  }
+
+  const assist = createAssistance({
+    panel,
+    enabled: () => modes.enabled && !suspended && !disposed,
+    configured: modelConfigured,
+    smart: proactiveOn,
+    pageId: () => pageId,
+    message: t,
+  })
+
+  function cancelAssist(): void {
+    assist.cancel()
+  }
+
+  function cancelAll(keepFloatingMenu = false): void {
+    toolbarSelection = undefined
+    cancelAutomatic()
+    assist.cancel()
+    panel.close(keepFloatingMenu ? { keepFloatingMenu: true } : undefined)
+    reading?.reset()
+  }
+
+  function literalTranslate(source: string, manualSelectionId?: string): void {
+    assist.literal(source, undefined, undefined, manualSelectionId)
+  }
+
+  function ensureWatcher(): void {
+    if (watcher !== undefined) return
+    watcher = watchSelection({
+      enabled: () => selectionOn() && !disposed,
+      isInsidePanel: (event) => panel.containsEvent(event),
+      onDismiss: () => {
+        cancelAssist()
+        panel.close()
+      },
+      onSelect: (text, anchor, method, stillValid) => {
+        cancelAssist()
+        if (config?.selectionToolbarEnabled === true) {
+          const selected: ToolbarSelection = { text, anchor, method, stillValid }
+          toolbarSelection = selected
+          panel.showToolbar(anchor, modelConfigured(), (action) => {
+            if (toolbarSelection !== selected) return
+            if (!selectionOn() || disposed || !stillValid()) {
+              panel.close()
+              return
+            }
+            if (action === 'copy') {
+              void copySelectionText(text).then((copied) => {
+                if (toolbarSelection === selected && selectionOn() && !disposed && stillValid()) {
+                  panel.setToolbarCopyResult(copied)
+                }
+              })
+              return
+            }
+            toolbarSelection = undefined
+            if (action === 'translate') assist.literal(text, anchor, stillValid)
+            else assist.select(text, anchor, method, stillValid, action)
+          })
+          return
+        }
+        assist.select(text, anchor, method, stillValid)
+      },
+      acceptText: (text) =>
+        config?.selectionToolbarEnabled === true
+          ? /\p{L}/u.test(text)
+          : isAssistanceCandidateText(text, config?.sourceLanguage ?? 'auto'),
+      focusToolbar: () => panel.focusToolbar(),
+    })
+  }
+
+  function ensureReading(): void {
+    if (reading !== undefined) return
+    reading = watchReadingSignals({
+      enabled: proactiveOn,
+      hasActiveSelection: () => {
+        if (panel.isOpen()) return true
+        const selection = window.getSelection()
+        return selection !== null && !selection.isCollapsed
+      },
+      isInsidePanel: (event) => panel.containsEvent(event),
+      onCandidate: (candidate: ReadingCandidate) => assist.revisit(candidate),
+      onInvalidate: () => {
+        cancelAssist()
+      },
+      acceptText: (text) => isAssistanceCandidateText(text, config?.sourceLanguage ?? 'auto'),
+    })
+  }
+
+  function disposeWatchers(): void {
+    watcher?.dispose()
+    watcher = undefined
+    reading?.dispose()
+    reading = undefined
+  }
+
+  function syncWatchers(): void {
+    if (disposed || suspended) return
+    if (selectionOn()) ensureWatcher()
+    else if (watcher !== undefined) {
+      watcher.dispose()
+      watcher = undefined
+    }
+    if (proactiveOn()) ensureReading()
+    else if (reading !== undefined) {
+      reading.dispose()
+      reading = undefined
+    }
+    if (!selectionOn() && !proactiveOn()) cancelAssist()
+    tracker.refresh()
+  }
+
+  function ensureEngine(): DomEngine {
+    if (engine !== undefined) return engine
+    const created = createDomEngine({
+      fixedEnabled: fixedOn,
+      autoEnabled: autoOn,
+      targetLanguage: () => config?.targetLanguage ?? 'zh-CN',
+      sourceLanguage: () => config?.sourceLanguage ?? 'auto',
+      translateFixed: (text) =>
+        modes.fixedEntries === undefined ? undefined : fixedTranslationWith(modes.fixedEntries, text),
+      onCapped() {
+        if (autoOn()) syncPauseStatus()
+        else if (!panel.isOpen()) panel.showNotice(t('wtCapNotice'))
+      },
+      onCapReleased: syncPauseStatus,
+      onFailedChanged: syncPauseStatus,
+      onAutoBatch(texts, apply) {
+        const id = createId()
+        const epoch = domEpoch
+        const doc = pageId
+        const href = pageIdentity(location.href)
+        autoRequests.add(id)
+        void sendTranslationMessage({
+          type: 'wt:translate',
+          mode: 'auto',
+          texts,
+          requestId: id,
+          page: collectPageContext(),
+          pageId: doc,
+        }).then((reply) => {
+          autoRequests.delete(id)
+          if (disposed || suspended || epoch !== domEpoch || doc !== pageId || href !== pageIdentity(location.href) || !autoOn()) {
+            return
+          }
+          let outcome: AutoBatchOutcome
+          if (reply.ok && reply.texts !== undefined && reply.texts.length === texts.length) {
+            outcome = apply(reply.texts, undefined, reply.cachedChars)
+          } else {
+            void sendTranslationMessage({ type: 'wt:cancel-assist', requestId: id })
+            outcome = reply.ok
+              ? apply(undefined, { code: 'bad_output' })
+              : apply(undefined, {
+                  code: reply.code ?? 'unknown',
+                  ...(reply.retryAfterMs === undefined ? {} : { retryAfterMs: reply.retryAfterMs }),
+                })
+          }
+          if (outcome !== 'paused') return
+          lastError = reply.ok ? '翻译服务返回格式不正确' : reply.error
+          syncPauseStatus()
+        })
+      },
+    })
+    engine = created
+    return created
+  }
+
+  function applyModes(force = false): void {
+    if (disposed) return
+    syncWatchers()
+    const nextFixed = fixedOn()
+    const nextAuto = autoOn()
+    if (!force && nextFixed === fixedActive && nextAuto === autoActive) {
+      // 导航会取消待扫任务；最新的刷新即使模式未变也要接续扫描。
+      if (nextFixed || nextAuto) engine?.start()
+      return
+    }
+    const startingAuto = nextAuto && !autoActive
+    cancelAutomatic()
+    engine?.restore()
+    if (force) engine?.resetBudget()
+    fixedActive = nextFixed
+    autoActive = nextAuto
+    if (nextFixed || nextAuto) {
+      const active = ensureEngine()
+      if (startingAuto || force) active.resumeAuto()
+      active.start()
+    }
+  }
+
+  const tracker = createPageContextTracker({
+    enabled: () => smartOn() && !disposed && !suspended,
+    pageId: () => pageId,
+    send: async () => {
+      const reply = await sendTranslationMessage({ type: 'wt:page-context', page: collectPageContext(), pageId })
+      return reply.ok
+    },
+  })
+
+  function onShowSelection(text: string, error: string | undefined, manualSelectionId?: string): void {
+    if (error !== undefined) {
+      cancelAssist()
+      if (error === SENSITIVE_FRAME_ERROR) {
+        panel.showNotice(t('wtSensitiveFrameUnsupported'))
+        return
+      }
+      if (error === NO_SELECTION_ERROR || error === NOTHING_TO_TOGGLE_ERROR) {
+        panel.showNotice(t(error === NO_SELECTION_ERROR ? 'wtNoSelection' : 'wtNothingToToggle'))
+        return
+      }
+      panel.showNotice(error === SITE_SCOPE_BLOCKED_ERROR ? t('wtScopeBlocked') : error)
+      return
+    }
+    literalTranslate(text, manualSelectionId)
+  }
+
+  function onPageAction(action: PageAction, pageUrl?: string): ContentTranslationReply<'wt:page-action'> {
+    if (pageUrl !== undefined && pageIdentity(pageUrl) !== pageIdentity(location.href)) {
+      return { ok: false, error: '页面已变化' }
+    }
+    if (action === 'retry-failed') {
+      if (engine?.retryFailed() !== true) {
+        return { ok: false, error: t(engine?.isCapped() === true ? 'wtAutoCapped' : 'wtAutoPaused') }
+      }
+      syncPauseStatus()
+      return { ok: true }
+    }
+    if (action === 'restore') {
+      // 由悬浮菜单触发时保留菜单：恢复后的状态与可能的错误要在菜单里看到，焦点也不丢
+      cancelAll(true)
+      pageRestored = true
+      engine?.restore()
+      lastError = ''
+      applyModes()
+      syncPauseStatus()
+      return { ok: true }
+    }
+    lastError = ''
+    proactiveSuppressed = false
+    pageRestored = false
+    // 用户明确要求继续：字符上限追加一份额度；记录数上限无法追加。
+    if (engine?.isCapped() === true && !engine.extendBudget()) {
+      lastError = t('wtAutoCapped')
+      applyModes()
+      syncPauseStatus()
+      return { ok: false, error: lastError }
+    }
+    engine?.resumeAuto()
+    applyModes()
+    syncPauseStatus()
+    return { ok: true }
+  }
+
+  function onNavigate(): void {
+    if (disposed) return
+    resetFloating()
+    pageId = createId()
+    proactiveSuppressed = false
+    pageRestored = false
+    lastError = ''
+    panel.hidePauseStatus()
+    cancelAll()
+    tracker.reset()
+    disposeWatchers()
+    reloadAndStart()
+  }
+
+  function reloadAndStart(): void {
+    void reload().then((applied) => {
+      if (applied && !disposed && !suspended && (fixedOn() || autoOn())) engine?.start()
+      syncPauseStatus()
+    })
+  }
+
+  async function reload(): Promise<boolean> {
+    const epoch = ++reloadEpoch
+    const floatEpoch = floatingEpoch
+    clearTimeout(modesRetryTimer)
+    const hadEnabled = modes.enabled
+    const hadFixed = modes.fixed
+    const hadAuto = modes.auto
+    const hadSelection = modes.selection
+    const hadSmart = modes.smart
+    const hadFixedEntries = modes.fixedEntries
+    const previousConfig = config ?? DEFAULT_TRANSLATION_CONFIG
+    const hadToolbar = config?.selectionToolbarEnabled === true
+    try {
+      const [nextConfig, nextSettings, modesReply] = await Promise.all([
+        getTranslationConfig(),
+        getSettings(),
+        sendTranslationMessage({ type: 'wt:page-modes' }),
+      ])
+      if (disposed || suspended || epoch !== reloadEpoch) return false
+      uiLanguage = resolveUiLanguage(nextSettings.uiLanguage, languageEnvironment())
+      panel.setLabels({
+        translate: t('wtPanelTranslate'),
+        define: t('wtPanelDefine'),
+        explain: t('wtPanelExplain'),
+        none: t('wtPanelNone'),
+        result: t('wtPanelResult'),
+        close: t('wtPanelClose'),
+        literal: t('wtPanelLiteral'),
+        dismiss: t('wtPanelDismiss'),
+        hint: t('wtPanelHint'),
+        source: t('wtPanelSource'),
+        loading: t('wtPanelLoading'),
+        resume: t('wtPanelResume'),
+        toolbar: t('wtModeToolbar'),
+        toolbarTranslate: t('wtToolbarTranslate'),
+        toolbarDefine: t('wtToolbarDefine'),
+        toolbarExplain: t('wtToolbarExplain'),
+        copy: t('wtToolbarCopy'),
+        copied: t('wtToolbarCopied'),
+        copyFailed: t('wtToolbarCopyFailed'),
+        configureHint: t('wtToolbarConfigureHint'),
+      })
+      if (!modesReply.ok && modesReply.code === 'disconnected' && modesRetries < MAX_MODES_RETRIES) {
+        // 后台正在重启：保持当前模式，不还原页面，稍后重读。
+        modesRetries += 1
+        modesRetryTimer = setTimeout(reloadAndStart, MODES_RETRY_MS)
+        return false
+      }
+      modesRetries = 0
+      const nextModes =
+        modesReply.ok && modesReply.modes !== undefined
+          ? modesReply.modes
+          : { enabled: false, fixed: false, auto: false, selection: false, smart: false }
+      if (
+        pageRestored &&
+        (nextModes.enabled !== hadEnabled || nextModes.fixed !== hadFixed || nextModes.auto !== hadAuto)
+      ) {
+        pageRestored = false
+      }
+      const connectionChanged = translationOutputChanged(previousConfig, nextConfig)
+      const interactiveChanged =
+        nextModes.enabled !== hadEnabled ||
+        nextModes.selection !== hadSelection ||
+        nextModes.smart !== hadSmart ||
+        nextConfig.selectionToolbarEnabled !== hadToolbar
+      const manualNotice = nextSettings.enabled && nextModes.enabled
+        ? assist.manualCancellationNotice(connectionChanged)
+        : undefined
+      config = nextConfig
+      modes = nextModes
+      panel.setStyle(nextSettings.uiStyle)
+      // 词条表内容变化（词典开关/自定义词典编辑）后强制重扫：恢复旧替换再用新表写。
+      if (nextModes.fixed && hadFixedEntries !== undefined && !sameFixedEntries(nextModes.fixedEntries, hadFixedEntries)) {
+        fixedActive = false
+      }
+      if (connectionChanged || interactiveChanged) {
+        assist.cancel()
+        if (manualNotice === undefined) panel.close()
+        reading?.reset()
+      }
+      if (floatEpoch === floatingEpoch) floatingSuppressed = false
+      applyModes(connectionChanged)
+      if (manualNotice !== undefined) panel.showNotice(t(manualNotice))
+      syncPauseStatus()
+      return true
+    } catch {
+      if (disposed || suspended || epoch !== reloadEpoch) return false
+      cancelAll()
+      modes = { enabled: false, fixed: false, auto: false, selection: false, smart: false }
+      fixedActive = false
+      autoActive = false
+      engine?.restore()
+      disposeWatchers()
+      tracker.refresh()
+      panel.hidePauseStatus()
+      lastError = t('wtSettingsReadFailed')
+      resetFloating()
+      return false
+    } finally {
+      resolveReady()
+      if (!disposed && epoch === reloadEpoch) syncFloating()
+    }
+  }
+
+  const messageListener = (
+    message: unknown,
+    sender: { id?: string; tab?: unknown },
+    sendResponse: (reply?: unknown) => void,
+  ): true | undefined => {
+    if (!isContentTranslationMessage(message)) return undefined
+    if (sender.id !== browser.runtime.id || sender.tab !== undefined) return undefined
+    if (message.type === 'wt:stop') {
+      reloadEpoch += 1
+      resetFloating()
+      cancelAll()
+      modes = { enabled: false, fixed: false, auto: false, selection: false, smart: false }
+      fixedActive = false
+      autoActive = false
+      disposeWatchers()
+      engine?.restore()
+      tracker.refresh()
+      panel.hidePauseStatus()
+      sendResponse({ ok: true } satisfies ContentTranslationReply<'wt:stop'>)
+      return true
+    }
+    void ready.then(() => {
+      switch (message.type) {
+        case 'wt:show-selection':
+          onShowSelection(message.text, message.error, message.manualSelectionId)
+          sendResponse({ ok: true } satisfies ContentTranslationReply<'wt:show-selection'>)
+          return
+        case 'wt:page-action':
+          sendResponse(onPageAction(message.action, message.url) satisfies ContentTranslationReply<'wt:page-action'>)
+          return
+        case 'wt:refresh':
+          void reload().then(() => {
+            sendResponse({ ok: true } satisfies ContentTranslationReply<'wt:refresh'>)
+          })
+          return
+        case 'wt:status':
+          sendResponse({ ok: true, status: status() } satisfies ContentTranslationReply<'wt:status'>)
+          return
+        case 'wt:read-selection':
+          sendResponse({ ok: true, text: readSelectionText() } satisfies ContentTranslationReply<'wt:read-selection'>)
+      }
+    })
+    return true
+  }
+
+  panel.setOnClose(() => {
+    toolbarSelection = undefined
+    cancelAssist()
+    watcher?.dismiss()
+  })
+  panel.setOnResume(() => {
+    onPageAction(chipAction)
+  })
+  panel.setOnLiteral(() => {
+    assist.repeatLiteral()
+  })
+  panel.setOnDismissProactive(() => {
+    proactiveSuppressed = true
+    reading?.dispose()
+    reading = undefined
+    cancelAssist()
+  })
+  panel.setOnCopyResult((text) => {
+    const token = ++copyResultEpoch
+    void copySelectionText(text).then((copied) => {
+      if (!disposed && token === copyResultEpoch) panel.setCopyResultFeedback(copied)
+    })
+  })
+
+  const lifecycleDispose = watchPageLifecycle({
+    onNavigate,
+    onSuspend() {
+      reloadEpoch += 1
+      suspended = true
+      resetFloating()
+      cancelAll()
+      // 打开的端口会让部分浏览器放弃往返缓存，恢复后由下一个请求重新连接。
+      closePageSession()
+      disposeWatchers()
+      tracker.refresh()
+    },
+    onResume() {
+      if (disposed) return
+      suspended = false
+      pageId = createId()
+      tracker.reset()
+      reloadAndStart()
+    },
+    onUnload() {
+      dispose()
+    },
+  })
+
+  const unwatchConfig = watchTranslationConfig((next) => {
+    const url = location.href
+    if (
+      next.floatingButtonEnabled === false ||
+      !isSiteScopeAllowed(url, next) ||
+      isExcludedSite(url, next.excludedHosts) ||
+      isSensitivePage(url)
+    ) {
+      floatingSuppressed = true
+      floatingEpoch += 1
+      floatingBusy = false
+      floatingChecking = false
+      syncFloating()
+    }
+    void reload()
+  })
+  const unwatchSettings = watchSettings((next) => {
+    panel.setStyle(next.uiStyle)
+    if (!next.enabled) {
+      pageRestored = false
+      floatingSuppressed = true
+      floatingEpoch += 1
+      floatingBusy = false
+      floatingChecking = false
+      floatingError = ''
+      legacy = undefined
+      syncFloating()
+    }
+    void reload()
+  })
+
+  function dispose(): void {
+    if (disposed) return
+    resetFloating()
+    cancelAll()
+    closePageSession()
+    disposed = true
+    clearTimeout(modesRetryTimer)
+    reloadEpoch += 1
+    domEpoch += 1
+    unwatchConfig()
+    unwatchSettings()
+    disposeWatchers()
+    tracker.dispose()
+    lifecycleDispose()
+    try {
+      browser.runtime.onMessage.removeListener(messageListener)
+    } catch {
+      void 0
+    }
+    engine?.dispose()
+    panel.dispose()
+    const scope = globalThis as Record<symbol, unknown>
+    delete scope[SINGLETON_KEY]
+  }
+
+  browser.runtime.onMessage.addListener(messageListener)
+
+  void reload()
+
+  return {
+    dispose,
+    refresh() {
+      if (disposed) return
+      void reload()
+    },
+    healthy() {
+      if (disposed) return false
+      try {
+        browser.runtime.getManifest()
+        return true
+      } catch {
+        return false
+      }
+    },
+  }
+}
+
+export async function startPageTranslation(): Promise<void> {
+  if (window.top !== window) return
+  const scope = globalThis as Record<symbol, Instance | undefined>
+  const existing = scope[SINGLETON_KEY]
+  if (existing !== undefined) {
+    if (existing.healthy()) return
+    existing.dispose()
+  }
+  scope[SINGLETON_KEY] = createInstance()
+}

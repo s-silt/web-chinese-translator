@@ -53,6 +53,7 @@
         v-bind="listName()"
         @mousedown.prevent
       >
+        <!-- 控件常放在 <label> 里：选项点击阻止默认行为，否则标签会把点击转发给按钮，刚关上的列表又被打开 -->
         <li
           v-for="(option, index) in options"
           :id="optionId(index)"
@@ -63,7 +64,7 @@
           :lang="option.lang"
           :aria-selected="option.value === modelValue"
           @pointermove="activate(index, false)"
-          @click="choose(index)"
+          @click.prevent="choose(index)"
         >
           <svg class="ui-select-check" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
             <path

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CONTESTED, createRecordStore, type RecordStore } from '../../../src/core/records'
+import { textOwnership } from '../../../src/shared/text-ownership'
 
 /** 临时改 document.readyState；afterEach 删除覆盖，恢复原有的值 */
 function setReadyState(state: DocumentReadyState): void {
@@ -168,5 +169,82 @@ describe('textSource：解析结束后', () => {
     last.data = 'octo'
     expect(records.textSource(last)).toBe('octo')
     expect(records.hasText(last)).toBe(true)
+  })
+})
+
+describe('文本所有权登记', () => {
+  it('writeText 译文后 ownerOf 为 github；写回原文、restoreText、外部改写后均为 undefined', () => {
+    setReadyState('complete')
+    const ownership = textOwnership()
+    const [node] = textsIn('Issues') as [Text]
+
+    records.writeText(node, 'Issues', '议题')
+    expect(ownership.ownerOf(node)).toBe('github')
+
+    records.writeText(node, 'Issues', 'Issues')
+    expect(ownership.ownerOf(node)).toBeUndefined()
+
+    records.writeText(node, 'Issues', '议题')
+    expect(ownership.ownerOf(node)).toBe('github')
+    records.restoreText(node)
+    expect(node.data).toBe('Issues')
+    expect(ownership.ownerOf(node)).toBeUndefined()
+
+    records.writeText(node, 'Issues', '议题')
+    expect(ownership.ownerOf(node)).toBe('github')
+    node.data = 'Pull requests'
+    expect(records.textSource(node)).toBe('Pull requests')
+    expect(ownership.ownerOf(node)).toBeUndefined()
+  })
+
+  it('web 所有权阻止 textSource、writeText、restoreText；页面外部改写后恢复处理', () => {
+    setReadyState('complete')
+    const ownership = textOwnership()
+    const [node] = textsIn('Issues') as [Text]
+
+    records.writeText(node, 'Issues', '议题')
+    ownership.claim(node, 'web', '问题')
+    node.data = '问题'
+
+    expect(records.textSource(node)).toBe(CONTESTED)
+    expect(records.ownText(node)).toBe(false)
+
+    records.writeText(node, '问题', '被覆盖')
+    expect(node.data).toBe('问题')
+    expect(ownership.ownerOf(node)).toBe('web')
+    expect(records.hasText(node)).toBe(false)
+
+    records.restoreText(node)
+    expect(node.data).toBe('问题')
+    expect(ownership.ownerOf(node)).toBe('web')
+
+    node.data = 'Pull requests'
+    expect(ownership.ownerOf(node)).toBeUndefined()
+    expect(records.textSource(node)).toBe('Pull requests')
+    records.writeText(node, 'Pull requests', '拉取请求')
+    expect(node.data).toBe('拉取请求')
+    expect(ownership.ownerOf(node)).toBe('github')
+  })
+
+  it('clear 仅使当前 store 的脱离节点登记失效，不影响第二个 store 与 web 登记', () => {
+    setReadyState('complete')
+    const ownership = textOwnership()
+    const otherStore = createRecordStore(() => 0)
+    const [detached, otherNode, webNode] = textsIn('Issues', 'Pull requests', 'Settings') as [Text, Text, Text]
+
+    records.writeText(detached, 'Issues', '议题')
+    detached.remove()
+    otherStore.writeText(otherNode, 'Pull requests', '拉取请求')
+    ownership.claim(webNode, 'web', '设置')
+    webNode.data = '设置'
+
+    records.clear()
+    expect(ownership.ownerOf(detached)).toBeUndefined()
+    expect(ownership.ownerOf(otherNode)).toBe('github')
+    expect(ownership.ownerOf(webNode)).toBe('web')
+
+    const [fresh] = textsIn('Search') as [Text]
+    records.writeText(fresh, 'Search', '搜索')
+    expect(ownership.ownerOf(fresh)).toBe('github')
   })
 })

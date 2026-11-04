@@ -8,7 +8,7 @@ export const PAGE_LOCALES = ['zh-CN', 'zh-TW'] as const
 export type PageLocale = (typeof PAGE_LOCALES)[number]
 
 /** 扩展界面语言 */
-export const UI_LANGUAGES = ['zh-CN', 'zh-TW', 'en'] as const
+export const UI_LANGUAGES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const
 export type UiLanguage = (typeof UI_LANGUAGES)[number]
 
 /** 语言设置：auto 按浏览器识别 */
@@ -20,6 +20,8 @@ export const UI_LANGUAGE_PREFERENCES: readonly UiLanguagePreference[] = ['auto',
 
 /** 语言名称：各用本语言书写 */
 export const LANGUAGE_NAMES: Readonly<Record<UiLanguage, string>> = {
+  ja: '日本語',
+  ko: '한국어',
   'zh-CN': '简体中文',
   'zh-TW': '繁體中文',
   en: 'English',
@@ -57,7 +59,10 @@ export function detectPageLocale(languages: readonly string[], timeZone?: string
 
 /** 界面语言：中文按简繁，其他语言用英文 */
 export function detectUiLanguage(language: string | undefined): UiLanguage {
-  return (language === undefined ? undefined : chineseScript(language)) ?? 'en'
+  const chinese = language === undefined ? undefined : chineseScript(language)
+  if (chinese !== undefined) return chinese
+  const base = language?.trim().toLowerCase().replaceAll('_', '-').split('-')[0]
+  return base === 'ja' || base === 'ko' ? base : 'en'
 }
 
 /** 运行环境中的浏览器语言信息 */

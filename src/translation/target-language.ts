@@ -1,0 +1,61 @@
+export type TargetLanguage = 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko'
+
+export type SourceLanguage = 'auto' | TargetLanguage
+
+export const TARGET_LANGUAGES: readonly TargetLanguage[] = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']
+
+export function isTargetLanguage(value: unknown): value is TargetLanguage {
+  return typeof value === 'string' && (TARGET_LANGUAGES as readonly string[]).includes(value)
+}
+
+export function isSourceLanguage(value: unknown): value is SourceLanguage {
+  return value === 'auto' || isTargetLanguage(value)
+}
+
+export const TARGET_LANGUAGE_NATIVE_LABEL: Readonly<Record<TargetLanguage, string>> = {
+  'zh-CN': '简体中文',
+  'zh-TW': '繁體中文',
+  en: 'English',
+  ja: '日本語',
+  ko: '한국어',
+}
+
+export const TARGET_LANGUAGE_PROMPT_NAME: Readonly<Record<TargetLanguage, string>> = {
+  'zh-CN': 'Simplified Chinese',
+  'zh-TW': 'Traditional Chinese (Taiwan)',
+  en: 'English',
+  ja: 'Japanese',
+  ko: 'Korean',
+}
+
+export function sourceLanguageInstruction(source: SourceLanguage = 'auto'): string {
+  if (source === 'auto') return ''
+  return `The source language is ${TARGET_LANGUAGE_PROMPT_NAME[source]}. Interpret the source text in that language; do not infer a different source language from isolated borrowed words or technical identifiers.`
+}
+
+const HAN = /[㐀-鿿]/
+const KANA = /[぀-ヿㇰ-ㇿ]/
+const HANGUL = /[가-힯ᄀ-ᇿꥠ-꥿]/
+const NON_ASCII_LETTER = /(?=\p{L})[^ -~]/u
+
+/** 文本是否已经像目标语言：zh-* → 含汉字；ja → 含假名；ko → 含谚文；en → 全部字符都是 ASCII 且不含 CJK/谚文/假名。 */
+export function looksLikeTargetLanguage(text: string, language: TargetLanguage): boolean {
+  const trimmed = text.trim()
+  if (trimmed === '') return false
+  switch (language) {
+    case 'zh-CN':
+    case 'zh-TW':
+      return HAN.test(trimmed)
+    case 'ja':
+      return KANA.test(trimmed)
+    case 'ko':
+      return HANGUL.test(trimmed)
+    case 'en':
+      return !NON_ASCII_LETTER.test(trimmed) && !HAN.test(trimmed) && !KANA.test(trimmed) && !HANGUL.test(trimmed)
+  }
+}
+
+/** 分段拼接时相邻处是否不留空格。 */
+export function joinsWithoutSpaces(language: TargetLanguage): boolean {
+  return language === 'zh-CN' || language === 'zh-TW' || language === 'ja'
+}

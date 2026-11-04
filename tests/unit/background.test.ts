@@ -5,6 +5,10 @@ import { DEFAULT_SETTINGS, settingsItem, updateSettings } from '../../src/shared
 import { LOCALE_SCRIPT_ID } from '../../src/shared/locale-script'
 import { removeApi } from './shared/fake-api'
 import { fakeContentScripts, type FakeContentScripts } from './shared/fake-scripting'
+import { installTranslationBackground } from '../../src/translation/background'
+
+// 本套件验证上游 GitHub 后台；模型后台有独立单测及联合浏览器验收。
+vi.mock('../../src/translation/background', () => ({ installTranslationBackground: vi.fn() }))
 
 /** 界面语言为简体中文时停用的徽标文字 */
 const BADGE_OFF = '关'
@@ -34,6 +38,12 @@ afterEach(() => {
 })
 
 describe('background', () => {
+  it('同步安装模型后台，保留独立的 GitHub 后台启动流程', () => {
+    vi.mocked(installTranslationBackground).mockClear()
+    background.main()
+    expect(installTranslationBackground).toHaveBeenCalledTimes(1)
+  })
+
   it('启动时按设置同步徽标', async () => {
     await settingsItem.setValue({ ...DEFAULT_SETTINGS, enabled: false, uiLanguage: 'zh-CN' })
     background.main()

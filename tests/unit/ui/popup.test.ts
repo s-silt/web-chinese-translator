@@ -61,7 +61,7 @@ function toastTexts(wrapper: VueWrapper): string[] {
 }
 
 function headings(wrapper: VueWrapper): string[] {
-  return wrapper.findAll('h2').map((item) => item.text())
+  return wrapper.get('.popup-details').findAll('h2').map((item) => item.text())
 }
 
 function switchOf(scope: VueWrapper | DOMWrapper<Element>, label: string): DOMWrapper<HTMLButtonElement> {
@@ -130,7 +130,7 @@ describe.skipIf(!App)('弹出页组件', () => {
     const wrapper = await render()
     const title = wrapper.get('h1')
     const version = wrapper.get('[data-test="version"]')
-    expect(title.text()).toBe('GitHub 中文化')
+    expect(title.text()).toBe('网页汉化助手')
     expect(version.text()).toBe('v1.2.3')
     expect(title.element.nextElementSibling).toBe(version.element)
   })
@@ -172,11 +172,11 @@ describe.skipIf(!App)('弹出页组件', () => {
     expect(toggle.attributes('aria-checked')).toBe('false')
   })
 
-  it('非 GitHub 页面 → 不可用，无页面操作', async () => {
+  it('非 GitHub 页面不展示 GitHub 状态及排除操作', async () => {
     await openTab('https://example.com/')
     mockContent(contentWith())
     const wrapper = await render()
-    expect(stateText(wrapper)).toBe('不可用')
+    expect(wrapper.find('[data-test="state"]').exists()).toBe(false)
     expect(hasButton(wrapper, '排除此页')).toBe(false)
     expect(hasButton(wrapper, '刷新')).toBe(false)
     expect(hasButton(wrapper, '规则')).toBe(true)
@@ -287,7 +287,7 @@ describe.skipIf(!App)('弹出页组件', () => {
   })
 
   describe('布局', () => {
-    it('依次为标题栏、当前页（总开关、状态）、常规、语言、页脚（规则、排除此页、GitHub），最后是顶部提示的区域', async () => {
+    it('依次为标题、总开关、模型区、GitHub 折叠设置、页脚和提示区域', async () => {
       await openTab(`${REPO_URL}/issues`)
       mockContent(contentWith())
       const wrapper = await render()
@@ -295,7 +295,7 @@ describe.skipIf(!App)('弹出页组件', () => {
       const general = section(wrapper, '常规').element
       const language = section(wrapper, '语言').element
       const footer = wrapper.get('footer')
-      expect(children.map((item) => item.tagName)).toEqual(['HEADER', 'SECTION', 'SECTION', 'SECTION', 'FOOTER', 'DIV'])
+      expect(children.map((item) => item.tagName)).toEqual(['HEADER', 'SECTION', 'SECTION', 'DETAILS', 'FOOTER', 'DIV'])
       expect(children[5]?.getAttribute('aria-live')).toBe('polite')
       expect(toastTexts(wrapper)).toEqual([])
       // 总开关在状态行之前，同在第一个分区
@@ -305,12 +305,12 @@ describe.skipIf(!App)('弹出页组件', () => {
       expect(toggle?.id).toBe(wrapper.get('[role="switch"]').attributes('id'))
       expect(state).not.toBeNull()
       expect(toggle!.compareDocumentPosition(state!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-      expect(children.indexOf(general)).toBe(2)
-      expect(children.indexOf(language)).toBe(3)
+      expect(general.parentElement).toBe(children[3])
+      expect(language.parentElement).toBe(children[3])
       expect(footer.findAll('button, a').map((item) => item.attributes('aria-label') ?? item.text())).toEqual([
         '规则',
         '排除此页',
-        'GitHub',
+        'GitHub 汉化上游',
       ])
     })
 
@@ -321,8 +321,8 @@ describe.skipIf(!App)('弹出页组件', () => {
       expect(link.attributes('href')).toBe(REPOSITORY_URL)
       expect(link.attributes('target')).toBe('_blank')
       expect(link.attributes('rel')).toBe('noreferrer')
-      expect(link.attributes('aria-label')).toBe('GitHub')
-      expect(link.attributes('title')).toBe('GitHub')
+      expect(link.attributes('aria-label')).toBe('GitHub 汉化上游')
+      expect(link.attributes('title')).toBe('GitHub 汉化上游')
       expect(link.get('svg').attributes('aria-hidden')).toBe('true')
     })
 
@@ -334,10 +334,10 @@ describe.skipIf(!App)('弹出页组件', () => {
       expect(style.minWidth).toBe('100%')
     })
 
-    it('常规、语言不折叠，标题为 h2，分区以标题为名', async () => {
+    it('GitHub 常规与语言收在默认折叠的设置中，子分区保留标题和可访问名称', async () => {
       mockContent(contentWith())
       const wrapper = await render()
-      expect(wrapper.find('details').exists()).toBe(false)
+      expect(wrapper.get('.popup-details').attributes('open')).toBeUndefined()
       expect(headings(wrapper)).toEqual(['常规', '语言'])
       for (const title of ['常规', '语言']) {
         const found = section(wrapper, title)
@@ -349,7 +349,8 @@ describe.skipIf(!App)('弹出页组件', () => {
       mockContent(contentWith())
       const wrapper = await render()
       expect(wrapper.findAll('label').filter((item) => item.text() === '启用')).toHaveLength(1)
-      expect(wrapper.findAll('[role="switch"]')).toHaveLength(3)
+      expect(wrapper.findAll('[role="switch"]')).toHaveLength(4)
+      expect(wrapper.get('[data-test="wt-popup-floating"] [role="switch"]').attributes('disabled')).toBeDefined()
       expect(wrapper.findAll('[role="combobox"]').map((item) => item.attributes('data-test'))).toEqual([
         'ui-language',
         'page-language',
@@ -367,10 +368,13 @@ describe.skipIf(!App)('弹出页组件', () => {
       const disabled = (): boolean[] =>
         wrapper
           .findAll('[role="switch"], [data-test="theme-toggle"], [role="combobox"]')
+          .filter((item) => item.element.closest('[data-test="wt-popup-floating"]') === null)
           .map((item) => (item.element as HTMLButtonElement).disabled)
       expect(disabled()).toEqual([true, true, true, true, true, true])
+      expect((wrapper.get('[data-test="wt-popup-floating"] [role="switch"]').element as HTMLButtonElement).disabled).toBe(true)
       await settle()
       expect(disabled()).toEqual([false, false, false, false, false, false])
+      expect((wrapper.get('[data-test="wt-popup-floating"] [role="switch"]').element as HTMLButtonElement).disabled).toBe(true)
     })
 
     it.each([
@@ -385,7 +389,7 @@ describe.skipIf(!App)('弹出页组件', () => {
       await button(wrapper, action).trigger('click')
       await settle()
       const children = [...wrapper.element.children]
-      expect(children.map((item) => item.tagName)).toEqual(['HEADER', 'SECTION', 'SECTION', 'SECTION', 'FOOTER', 'DIV'])
+      expect(children.map((item) => item.tagName)).toEqual(['HEADER', 'SECTION', 'SECTION', 'DETAILS', 'FOOTER', 'DIV'])
       expect(toastTexts(wrapper)).toEqual([message])
       expect(wrapper.find('[role="alert"]').exists()).toBe(false)
     })
@@ -442,7 +446,7 @@ describe.skipIf(!App)('弹出页组件', () => {
       mockContent(contentWith())
       const get = vi.spyOn(fakeBrowser.storage.sync, 'get')
       const wrapper = await render()
-      expect(get).toHaveBeenCalledTimes(1)
+        expect(get).toHaveBeenCalledTimes(2)
       await wrapper.get('[role="switch"]').trigger('click')
       await switchOf(section(wrapper, '常规'), '翻译标题').trigger('click')
       await settle()
@@ -457,9 +461,9 @@ describe.skipIf(!App)('弹出页组件', () => {
       mockContent(contentWith())
       const wrapper = await render()
       // 「自动」括注识别结果，用界面语言书写；其余语言名用各自语言书写并标注 lang
-      expect(optionLabels(wrapper, 'ui-language')).toEqual(['自动（繁体中文）', '简体中文', '繁體中文', 'English'])
+      expect(optionLabels(wrapper, 'ui-language')).toEqual(['自动（繁体中文）', '简体中文', '繁體中文', 'English', '日本語', '한국어'])
       expect(optionLabels(wrapper, 'page-language')).toEqual(['自动（繁体中文）', '简体中文', '繁體中文'])
-      expect(optionLangs(wrapper, 'ui-language')).toEqual([undefined, 'zh-CN', 'zh-TW', 'en'])
+      expect(optionLangs(wrapper, 'ui-language')).toEqual([undefined, 'zh-CN', 'zh-TW', 'en', 'ja', 'ko'])
       expect(optionLangs(wrapper, 'page-language')).toEqual([undefined, 'zh-CN', 'zh-TW'])
       for (const name of ['ui-language', 'page-language']) {
         expect(selectedLabel(wrapper, name)).toBe('简体中文')
@@ -473,7 +477,7 @@ describe.skipIf(!App)('弹出页组件', () => {
       const language = section(wrapper, '语言')
       for (const [name, label] of [
         ['ui-language', '界面语言'],
-        ['page-language', '翻译语言'],
+        ['page-language', 'GitHub 词典语言'],
       ] as const) {
         const button = select(wrapper, name)
         expect(language.get(`label[for="${button.attributes('id')}"]`).text()).toBe(label)
@@ -493,7 +497,7 @@ describe.skipIf(!App)('弹出页组件', () => {
       expect((await getSettings()).uiLanguage).toBe('en')
       expect(shownLabel(wrapper, 'ui-language')).toBe('English')
       expect(headings(wrapper)).toEqual(['General', 'Language'])
-      expect(wrapper.get('h1').text()).toBe('GitHub Chinese')
+        expect(wrapper.get('h1').text()).toBe('Web Chinese Translator')
       expect(document.documentElement.lang).toBe('en')
     })
 
@@ -538,8 +542,20 @@ describe.skipIf(!App)('弹出页组件', () => {
         '简体中文',
         '繁體中文',
         'English',
+        '日本語',
+        '한국어',
       ])
       expect(optionLabels(wrapper, 'page-language')).toEqual(['Auto (Traditional Chinese)', '简体中文', '繁體中文'])
+    })
+
+    it('非 Firefox 构建下 GitHub 词典语言带提示说明', async () => {
+      mockContent(contentWith())
+      const wrapper = await render()
+      const describedBy = select(wrapper, 'page-language').attributes('aria-describedby')
+      expect(describedBy).toBe('page-language-hint')
+      expect(wrapper.get(`#${CSS.escape(describedBy ?? '')}`).text()).toBe(
+        '仅决定 GitHub 内置词典用简体还是繁体；其他网站和模型翻译跟随「翻译目标语言」。',
+      )
     })
   })
 
@@ -603,8 +619,8 @@ describe.skipIf(!App)('弹出页组件', () => {
 
   describe('界面语言', () => {
     it.each([
-      ['en', 'GitHub Chinese', 'Enable', 'Status', 'Translated', ['General', 'Language'], 'Rules', 'GitHub repository'],
-      ['zh-TW', 'GitHub 中文化', '啟用', '狀態', '已翻譯', ['一般', '語言'], '規則', 'GitHub'],
+      ['en', 'Web Chinese Translator', 'Enable', 'Status', 'Translated', ['General', 'Language'], 'Rules', 'Upstream (github-chinese)'],
+      ['zh-TW', '網頁漢化助手', '啟用', '狀態', '已翻譯', ['一般', '語言'], '規則', 'GitHub 漢化上游'],
     ] as const)('%s', async (uiLanguage, title, enable, status, state, sections, rules, repository) => {
       await settingsItem.setValue({ ...ZH_SETTINGS, uiLanguage })
       await openTab(REPO_URL)

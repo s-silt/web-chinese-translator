@@ -6,6 +6,7 @@ import { createMatcher } from '../../../src/core/matcher'
 import { createTranslator, type Translator, type TranslatorOptions } from '../../../src/core/translator'
 import type { LocaleBundle, PageKey } from '../../../src/core/types'
 import type { Settings } from '../../../src/shared/settings'
+import { textOwnership } from '../../../src/shared/text-ownership'
 import { $, settle } from './helpers'
 
 /**
@@ -554,6 +555,7 @@ describe('停用、换词典、切换语言、排除页面', () => {
       language: 'auto',
       uiLanguage: 'auto',
       theme: 'auto',
+  uiStyle: 'classic',
     }
     document.body.innerHTML = `${LIST('bug', 'list')}${SIDEBAR}<main></main>`
     const c = createController({
@@ -622,5 +624,32 @@ describe('文档解析中', () => {
     $('#split').insertAdjacentHTML('beforeend', '<g-emoji alias="beetle">🐞</g-emoji>')
     await settle()
     expect(text('#split')).toBe('bug 🐞')
+  })
+
+  it('标签区域内含 web 所有权节点时整块跳过且 stop 不还原，页面改写后恢复翻译', async () => {
+    document.body.innerHTML = `${LIST('bug', 'web-label')}${CONTRIB}`
+    const webNode = textNode('#web-label')
+    const contribName = textNode('#label-c1')
+    textOwnership().claim(webNode, 'web', 'bug')
+    textOwnership().claim(contribName, 'web', '\n    help wanted\n')
+
+    translator = createTranslator({
+      matcher: createMatcher(BUNDLE),
+      host: window,
+      resolvePages: () => ISSUES,
+    })
+    translator.start()
+
+    expect(text('#web-label')).toBe('bug')
+    expect(text('#label-c1')).toBe('\n    help wanted\n')
+    expect(text('#tooltip-c1')).toBe('Extra attention is needed')
+
+    webNode.data = 'question'
+    await settle()
+    expect(text('#web-label')).toBe('疑问')
+
+    translator.stop()
+    expect(text('#label-c1')).toBe('\n    help wanted\n')
+    expect(textOwnership().ownerOf(contribName)).toBe('web')
   })
 })

@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: ['**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: 检查、单测与构建
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+
+      - name: 安装锁定依赖
+        run: bun install --frozen-lockfile
+
+      - name: 静态检查与词库检查
+        run: |
+          bun run lint
+          bun run compile
+          bun run check:parity
+          bun run check:locale
+          bun run check:locale --locale=zh-TW
+
+      - name: 单元测试与现有覆盖率门禁
+        run: bun run coverage
+
+      - name: 构建三个浏览器版本
+        run: |
+          bun run build:all
+          bun run lint:firefox
+
+      - name: 保存覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  browser:
+    name: Chromium 离线流程
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      E2E_LIVE: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+
+      - name: 安装锁定依赖与 Chromium
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps chromium
+
+      - name: 构建实际扩展并运行离线浏览器测试
+        run: |
+          bun run build
+          xvfb-run -a bunx playwright test --project=offline --workers=1
+
+      - name: 保存浏览器失败证据
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: chromium-failure
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore

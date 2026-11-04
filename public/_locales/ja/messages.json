@@ -1,0 +1,17 @@
+{
+  "extName": {
+    "message": "ウェブ翻訳アシスタント"
+  },
+  "extDescription": {
+    "message": "GitHub と対応サイトの UI をローカル辞書で翻訳。独自の OpenAI 互換 API による選択テキスト・ページ翻訳にも対応"
+  },
+  "extDescriptionFirefox": {
+    "message": "ローカル辞書とカスタムルールで GitHub の UI を中国語に翻訳します。"
+  },
+  "cmdTogglePage": {
+    "message": "ページを翻訳 / 原文を表示"
+  },
+  "cmdTranslateSelection": {
+    "message": "選択したテキストを翻訳"
+  }
+}

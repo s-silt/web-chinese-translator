@@ -1,4 +1,11 @@
-import { isAcknowledged, isBackgroundMessage, isContentMessage, isContentStatus } from '../../../src/shared/messages'
+import {
+  isAcknowledged,
+  isBackgroundMessage,
+  isContentMessage,
+  isContentStatus,
+  isGitHubPageReply,
+  isGitHubPageState,
+} from '../../../src/shared/messages'
 
 const STATUS = {
   active: true,
@@ -69,6 +76,38 @@ describe('isBackgroundMessage', () => {
     ['旧版未翻译清空', { type: 'gcn:clear-untranslated' }],
   ])('%s → 非法', (_name, value) => {
     expect(isBackgroundMessage(value)).toBe(false)
+  })
+})
+
+describe('gcn:page-translation', () => {
+  const url = 'https://github.com/vuejs/core/issues'
+
+  it('合法动作与 GitHub 地址通过', () => {
+    for (const action of ['status', 'restore', 'resume']) {
+      expect(isContentMessage({ type: 'gcn:page-translation', action, url })).toBe(true)
+    }
+  })
+
+  it('非法 action 或 url 拒绝', () => {
+    expect(isContentMessage({ type: 'gcn:page-translation', action: 'pause', url })).toBe(false)
+    expect(isContentMessage({ type: 'gcn:page-translation', action: 'retry-failed', url })).toBe(false)
+    expect(isContentMessage({ type: 'gcn:page-translation', url })).toBe(false)
+    expect(isContentMessage({ type: 'gcn:page-translation', action: 'restore' })).toBe(false)
+    expect(isContentMessage({ type: 'gcn:page-translation', action: 'restore', url: 'https://example.com/a' })).toBe(false)
+    expect(isContentMessage({ type: 'gcn:page-translation', action: 'restore', url: 'http://github.com/vuejs/core' })).toBe(false)
+    expect(isContentMessage({ type: 'gcn:page-translation', action: 'restore', url: 1 })).toBe(false)
+  })
+
+  it('回复缺 active/paused 或伪布尔拒绝', () => {
+    expect(isGitHubPageState({ active: true, paused: false })).toBe(true)
+    expect(isGitHubPageReply({ ok: true, active: false, paused: true })).toBe(true)
+    expect(isGitHubPageReply({ ok: true, active: true })).toBe(false)
+    expect(isGitHubPageReply({ ok: true, paused: false })).toBe(false)
+    expect(isGitHubPageReply({ active: true, paused: false })).toBe(false)
+    expect(isGitHubPageReply({ ok: true, active: 'true', paused: false })).toBe(false)
+    expect(isGitHubPageReply({ ok: true, active: 1, paused: 0 })).toBe(false)
+    expect(isGitHubPageReply({ ok: 'true', active: true, paused: false })).toBe(false)
+    expect(isGitHubPageState({ active: 'yes', paused: false })).toBe(false)
   })
 })
 

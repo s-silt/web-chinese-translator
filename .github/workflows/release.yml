@@ -21,14 +21,16 @@ jobs:
       # 推送标签时发布；在标签上手动运行也只打包
       RELEASE: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: package.json
 
       # vitest、tsx、web-ext 在 Node 上运行
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
 
@@ -62,7 +64,7 @@ jobs:
           bun run lint:firefox
           mkdir -p "$OUT"
           for target in chrome edge firefox sources; do
-            cp ".output/github-chinese-$VERSION-$target.zip" "$OUT/"
+            cp ".output/web-chinese-translator-$VERSION-$target.zip" "$OUT/"
           done
 
       - name: 打包 crx
@@ -71,11 +73,10 @@ jobs:
           CRX_PRIVATE_KEY: ${{ secrets.CRX_PRIVATE_KEY }}
         run: |
           if [ -z "$CRX_PRIVATE_KEY" ]; then
-            echo "::warning title=crx::未配置 CRX_PRIVATE_KEY，已用临时私钥，扩展 ID 每次不同"
-            CRX_PRIVATE_KEY="$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048)"
-            export CRX_PRIVATE_KEY
+            echo "::error title=crx::请先配置固定的 CRX_PRIVATE_KEY；禁止使用临时私钥发布不同扩展 ID 的安装包"
+            exit 1
           fi
-          bun run pack:crx "$OUT/github-chinese-$VERSION-chrome.zip" "$OUT/github-chinese-$VERSION-edge.zip"
+          bun run pack:crx "$OUT/web-chinese-translator-$VERSION-chrome.zip" "$OUT/web-chinese-translator-$VERSION-edge.zip"
 
       # 先建 Release 草稿：签名后的 xpi 立即存进去，重跑时沿用（AMO 同一版本号只能提交一次）
       - name: 创建 Release 草稿
@@ -99,11 +100,11 @@ jobs:
           WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
           WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
         run: |
-          name="github-chinese-$VERSION-firefox.xpi"
+          name="web-chinese-translator-$VERSION-firefox.xpi"
           xpi="$OUT/$name"
           unsigned() {
             echo "::$1 title=xpi::$2，xpi 未签名"
-            cp "$OUT/github-chinese-$VERSION-firefox.zip" "$xpi"
+            cp "$OUT/web-chinese-translator-$VERSION-firefox.zip" "$xpi"
           }
           if [ "$RELEASE" = true ] && gh release download "$GITHUB_REF_NAME" --pattern "$name" --dir "$OUT" 2> /dev/null &&
             unzip -l "$xpi" | grep -q -E 'META-INF/(cose\.sig|mozilla\.rsa)'; then
@@ -118,7 +119,7 @@ jobs:
           else
             # 自行分发（unlisted）：提交 AMO 签名，下载签名包后立即存进 Release 草稿
             bunx web-ext sign --channel unlisted --source-dir .output/firefox-mv3 --artifacts-dir .output/signed \
-              --upload-source-code "$OUT/github-chinese-$VERSION-sources.zip"
+              --upload-source-code "$OUT/web-chinese-translator-$VERSION-sources.zip"
             mv .output/signed/*.xpi "$xpi"
             gh release upload "$GITHUB_REF_NAME" "$xpi" --clobber
           fi
@@ -130,9 +131,9 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: 上传产物
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: github-chinese-${{ steps.version.outputs.version }}
+          name: web-chinese-translator-${{ steps.version.outputs.version }}
           path: ${{ env.OUT }}/
           if-no-files-found: error
 

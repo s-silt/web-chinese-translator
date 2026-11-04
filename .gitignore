@@ -11,4 +11,5 @@ web-ext-artifacts
 .DS_Store
 .env
 .env.*
+tests/e2e/live.env
 *.pem

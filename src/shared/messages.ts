@@ -1,11 +1,17 @@
 import type { PageKey } from '../core/types'
+import { parseGitHubUrl } from './github'
 import { isPageLocale, type PageLocale } from './locale'
+
+export type GitHubPageAction = 'status' | 'restore' | 'resume'
+export interface GitHubPageState { readonly active: boolean; readonly paused: boolean }
+export interface GitHubPageReply extends GitHubPageState { readonly ok: true }
 
 /** popup、后台 → content script 的消息 */
 export type ContentMessage =
   | { readonly type: 'gcn:get-status' }
   /** 自定义词条已变化，重新读取（后台转发设置页的保存通知） */
   | { readonly type: 'gcn:custom-entries-changed' }
+  | { readonly type: 'gcn:page-translation'; readonly action: GitHubPageAction; readonly url: string }
 
 /** popup 向内容脚本发的请求 */
 export type TabRequest = Extract<ContentMessage, { readonly type: 'gcn:get-status' }>
@@ -46,8 +52,24 @@ function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
+function isGitHubPageAction(value: unknown): value is GitHubPageAction {
+  return value === 'status' || value === 'restore' || value === 'resume'
+}
+
+export function isGitHubPageState(value: unknown): value is GitHubPageState {
+  return isRecord(value) && typeof value.active === 'boolean' && typeof value.paused === 'boolean'
+}
+
+export function isGitHubPageReply(value: unknown): value is GitHubPageReply {
+  return isRecord(value) && value.ok === true && typeof value.active === 'boolean' && typeof value.paused === 'boolean'
+}
+
 export function isContentMessage(value: unknown): value is ContentMessage {
-  return isRecord(value) && typeof value.type === 'string' && CONTENT_MESSAGE_TYPES.has(value.type)
+  if (!isRecord(value) || typeof value.type !== 'string') return false
+  if (value.type === 'gcn:page-translation') {
+    return isGitHubPageAction(value.action) && typeof value.url === 'string' && parseGitHubUrl(value.url) !== undefined
+  }
+  return CONTENT_MESSAGE_TYPES.has(value.type)
 }
 
 /** 校验内容脚本返回的状态 */

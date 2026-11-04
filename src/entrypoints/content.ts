@@ -8,6 +8,7 @@ import { pageLanguageEnvironment } from '../shared/language-env'
 import { resolvePageLocale, type PageLocale } from '../shared/locale'
 import { createLocaleLoader, TIME_LANGS, waitForRegistration } from '../shared/locale-loader'
 import { isAcknowledged, isContentMessage, type BackgroundMessage, type ContentMessage } from '../shared/messages'
+import { pageIdentity } from '../translation/page-lifecycle'
 import {
   DEFAULT_SETTINGS,
   getCustomEntries,
@@ -16,6 +17,8 @@ import {
   watchSettings,
   type Settings,
 } from '../shared/settings'
+import { getTranslationConfig, watchTranslationConfig, type TranslationConfig } from '../translation/config'
+import { isSiteScopeAllowed } from '../translation/site-scope'
 
 type SendResponse = (response?: unknown) => void
 
@@ -31,7 +34,13 @@ interface MessageGate {
 
 /** 要应答的消息（popup、后台的查询）：启动完成前收到时保持消息通道 */
 function expectsResponse(message: ContentMessage): boolean {
-  return message.type === 'gcn:get-status'
+  return message.type === 'gcn:get-status' || message.type === 'gcn:page-translation'
+}
+
+function isDirectExtensionSender(sender: unknown): boolean {
+  if (typeof sender !== 'object' || sender === null) return false
+  const record = sender as { id?: unknown; tab?: unknown }
+  return record.id === browser.runtime.id && record.tab === undefined
 }
 
 /** 当前语言的语言包：词典脚本按需加载，动态导入失败（Firefox 不动态导入）时请后台注入 */
@@ -66,8 +75,9 @@ function createMessageGate(): MessageGate {
   let handle: MessageHandler | undefined
   const queued: { readonly message: ContentMessage; readonly sendResponse: SendResponse }[] = []
   return {
-    listener(message, _sender, sendResponse) {
+    listener(message, sender, sendResponse) {
       if (!isContentMessage(message)) return undefined
+      if (message.type === 'gcn:page-translation' && !isDirectExtensionSender(sender)) return undefined
       if (handle) return handle(message, sendResponse)
       queued.push({ message, sendResponse })
       return expectsResponse(message) ? true : undefined
@@ -98,26 +108,32 @@ export default defineContentScript({
       }
     }
 
-    const [settings, customEntries, initialLanguages] = await Promise.all([
+    const [settings, customEntries, initialLanguages, initialPolicy] = await Promise.all([
       getSettings().catch(() => DEFAULT_SETTINGS),
       getCustomEntries().catch(() => ({})),
       // 与后台注册词典脚本同一来源（见 shared/language-env）
       pageLanguageEnvironment(),
+      getTranslationConfig().catch(() => undefined),
     ])
     let languages = initialLanguages
     const locale: PageLocale = resolvePageLocale(settings.language, languages)
-    // 总开关关闭时不加载语言包，开启时再加载（见 syncLocale）
+    let siteAllowed = initialPolicy !== undefined && isSiteScopeAllowed(location.href, initialPolicy)
+    // 总开关关闭或不在运行范围时不加载语言包，开启且允许时再加载（见 syncLocale）
     const bundle: LocaleBundle | undefined =
-      ctx.isInvalid || !settings.enabled ? undefined : await locales.load(locale).catch(() => undefined)
-    // 不再启动（已失效，或开启时语言包加载失败）。排队的查询不应答：页面上有新实例时由它应答
-    if (ctx.isInvalid || (settings.enabled && !bundle)) {
+      ctx.isInvalid || !settings.enabled || !siteAllowed ? undefined : await locales.load(locale).catch(() => undefined)
+    // 不再启动（已失效，或开启且在运行范围内时语言包加载失败）。排队的查询不应答：页面上有新实例时由它应答
+    if (ctx.isInvalid || (settings.enabled && siteAllowed && !bundle)) {
       removeMessageListener()
       return
     }
     /** 已换上的语言包的语言：关闭时启动的为 undefined，开启后加载完成才换上 */
     let loadedLocale: PageLocale | undefined = bundle ? locale : undefined
-    /** 交给控制器的设置：语言包换上之前一律停止（空语言包没有译文，不算在翻译） */
-    const effective = (next: Settings): Settings => (loadedLocale === undefined ? { ...next, enabled: false } : next)
+    let pageRestored = false
+    let locationIdentity = pageIdentity(location.href)
+    let pageActionEpoch = 0
+    /** 交给控制器的设置：语言包换上之前，或页面不在运行范围内，一律停止 */
+    const effective = (next: Settings): Settings =>
+      loadedLocale === undefined || !siteAllowed || pageRestored ? { ...next, enabled: false } : next
 
     // 翻译中在 <html> 上留标记（见 core/instance-mark）：重置时发现别的实例的标记，说明它已失效、旧译文没有还原
     const mark = createInstanceMark(document)
@@ -143,7 +159,7 @@ export default defineContentScript({
     /** 开启时加载当前语言的语言包并换上；关闭期间不加载 */
     const syncLocale = async (): Promise<void> => {
       const request = ++localeRequest
-      if (!current.enabled) return
+      if (!current.enabled || !siteAllowed || pageRestored) return
       const target = resolvePageLocale(current.language, languages)
       if (target === loadedLocale) return
       let next: LocaleBundle
@@ -158,7 +174,7 @@ export default defineContentScript({
       loadedLocale = target
       controller.updateLocale(next, TIME_LANGS[target])
       // 第一次换上语言包：按加载完成时的最新设置开启
-      if (first) controller.updateSettings(current)
+      if (first) controller.updateSettings(effective(current))
     }
 
     /** 在途的 syncLocale（最近一次），落定后为 undefined：开启后语言包换上之前的状态查询等它 */
@@ -192,6 +208,7 @@ export default defineContentScript({
       })
 
     const applySettings = (next: Settings): void => {
+      if (next.enabled !== current.enabled) pageRestored = false
       current = next
       controller.updateSettings(effective(next))
       requestLocale()
@@ -234,8 +251,74 @@ export default defineContentScript({
       }
     }
 
+    let policyRequest = 0
+    const applyPolicy = (next: TranslationConfig | undefined): void => {
+      if (ctx.isInvalid) return
+      const allowed = next !== undefined && isSiteScopeAllowed(location.href, next)
+      if (allowed === siteAllowed) return
+      pageRestored = false
+      siteAllowed = allowed
+      applySettings(current)
+    }
+    const refreshPolicy = async (): Promise<void> => {
+      const request = ++policyRequest
+      const next = await getTranslationConfig().catch(() => undefined)
+      if (request !== policyRequest || ctx.isInvalid) return
+      applyPolicy(next)
+    }
+    const unwatchTranslation = watchTranslationConfig((next) => {
+      policyRequest += 1
+      applyPolicy(next)
+    })
+
+    const pageState = (): { ok: true; active: boolean; paused: boolean } => ({
+      ok: true,
+      active: controller.getStatus().active,
+      paused: pageRestored,
+    })
+
+    const handlePageTranslation = (
+      message: Extract<ContentMessage, { type: 'gcn:page-translation' }>,
+      sendResponse: SendResponse,
+    ): true | undefined => {
+      if (pageIdentity(message.url) !== pageIdentity(location.href)) {
+        sendResponse({ ok: false })
+        return undefined
+      }
+      const requestedIdentity = pageIdentity(location.href)
+      if (message.action === 'restore' || message.action === 'resume') {
+        pageActionEpoch += 1
+        pageRestored = message.action === 'restore'
+        applySettings(current)
+      }
+      const epoch = message.action === 'status' ? undefined : pageActionEpoch
+      const task = localeTask
+      const wait =
+        message.action !== 'restore' &&
+        current.enabled &&
+        !pageRestored &&
+        siteAllowed &&
+        loadedLocale === undefined &&
+        task !== undefined
+      const finish = (): void => {
+        if (!ctx.isValid || requestedIdentity !== pageIdentity(location.href) || (epoch !== undefined && epoch !== pageActionEpoch)) {
+          sendResponse({ ok: false })
+          return
+        }
+        sendResponse(pageState())
+      }
+      if (!wait || task === undefined) {
+        finish()
+        return undefined
+      }
+      void waitForLocale(task).then(finish)
+      return true
+    }
+
     const handleMessage: MessageHandler = (message, sendResponse) => {
       switch (message.type) {
+        case 'gcn:page-translation':
+          return handlePageTranslation(message, sendResponse)
         case 'gcn:get-status':
           // 开启后语言包还在加载：保持消息通道，等加载落定再应答（popup 开启后立即查询，得到换上之后的状态）。
           // 期间失效时不应答
@@ -258,11 +341,18 @@ export default defineContentScript({
       if (!event.persisted) return
       void refreshCustomEntries()
       void refreshSettings()
+      void refreshPolicy()
     })
 
     // 软导航时顺带检查扩展是否失效（失效会触发 onInvalidated）
     ctx.addEventListener(window, 'wxt:locationchange', () => {
-      if (ctx.isValid) controller.checkLocation()
+      if (!ctx.isValid) return
+      controller.checkLocation()
+      const nextIdentity = pageIdentity(location.href)
+      if (nextIdentity === locationIdentity) return
+      pageRestored = false
+      locationIdentity = nextIdentity
+      applySettings(current)
     })
     // 不导航时定时检查（见 INVALIDATION_CHECK_MS）：检查由 ctx.setInterval 完成，回调不做事
     ctx.setInterval(() => undefined, INVALIDATION_CHECK_MS)
@@ -274,6 +364,7 @@ export default defineContentScript({
       removeMessageListener()
       try {
         unwatchSettings()
+        unwatchTranslation()
       } catch {
         // 上下文已失效，监听随之作废
       }
@@ -282,6 +373,7 @@ export default defineContentScript({
     // 设置、浏览器语言的监听在读完存储（开启时还有加载语言包）后才注册，期间的变化收不到：补读一次
     void refreshLanguages()
     void refreshSettings()
+    void refreshPolicy()
 
     // 启动完成：处理读存储期间排队的消息
     gate.open(handleMessage)

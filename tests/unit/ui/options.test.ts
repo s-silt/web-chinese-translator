@@ -2,6 +2,7 @@ import { enableAutoUnmount, mount, type DOMWrapper, type VueWrapper } from '@vue
 import { nextTick } from 'vue'
 import { fakeBrowser } from 'wxt/testing/fake-browser'
 import { clearToasts } from '../../../src/components/toast'
+import zhCN from '../../../src/i18n/zh-CN'
 import { EXPORT_FILE_NAME } from '../../../src/shared/custom-entries'
 import { REPOSITORY_URL } from '../../../src/shared/extension'
 import {
@@ -25,7 +26,7 @@ async function render(): Promise<VueWrapper> {
 }
 
 function section(wrapper: VueWrapper, title: string): DOMWrapper<Element> {
-  const found = wrapper.findAll('section').find((item) => item.find('h2').text() === title)
+  const found = wrapper.findAll('section').find((item) => item.find('h2').text().replace(/（GitHub）$/, '') === title)
   if (!found) throw new Error(`未找到分区：${title}`)
   return found
 }
@@ -72,24 +73,33 @@ async function pressButton(scope: DOMWrapper<Element>, selector: string): Promis
 
 describe.skipIf(!App)('设置页组件', () => {
   beforeEach(async () => {
+    window.history.replaceState(null, '', window.location.pathname)
     fakeBrowser.reset()
     await seedChineseUi()
     mockVersion('1.2.3')
   })
 
   afterEach(() => {
+    window.history.replaceState(null, '', window.location.pathname)
     delete document.documentElement.dataset.theme
     clearToasts()
     vi.restoreAllMocks()
   })
 
   describe('布局', () => {
-    it('依次为排除路径、自定义词条、关于；常规开关、语言下拉、快捷键都不在这里', async () => {
+    it('默认常用设置；分区保留单实例及原有控件', async () => {
       const wrapper = await render()
-      expect(wrapper.get('h1').text()).toBe('GitHub 中文化')
-      expect(headings(wrapper)).toEqual(['排除路径', '自定义词条', '关于'])
-      expect(wrapper.find('[role="switch"]').exists()).toBe(false)
-      expect(wrapper.find('[role="combobox"]').exists()).toBe(false)
+      expect(wrapper.get('h1').text()).toBe('网页汉化助手')
+      expect(headings(wrapper)).toEqual(['基础界面词库', '常用设置', '排除路径（GitHub）', '自定义词条（GitHub）', '外观', '关于'])
+      expect(wrapper.get('[data-test="wt-general-view"]').isVisible()).toBe(true)
+      expect(wrapper.get('[data-test="wt-model-view"]').isVisible()).toBe(false)
+      expect(wrapper.get('[data-test="wt-sites-view"]').isVisible()).toBe(false)
+      expect(wrapper.findAll('[role="switch"]')).toHaveLength(27)
+      expect(wrapper.get('[data-test="wt-dict-devin"]').find('[role="switch"]').exists()).toBe(true)
+      expect(wrapper.get('[data-test="wt-dict-cursor"]').find('[role="switch"]').exists()).toBe(true)
+      // 接口协议、模型、源语言、目标语言、辅助模式、网站运行范围，外观里的界面风格与主题
+      expect(wrapper.findAll('[role="combobox"]')).toHaveLength(8)
+      expect(wrapper.find('[data-test="wt-assist-mode"]').exists()).toBe(true)
       expect(wrapper.text()).not.toContain('快捷键')
     })
 
@@ -97,15 +107,16 @@ describe.skipIf(!App)('设置页组件', () => {
       const wrapper = await render()
       const title = wrapper.get('h1')
       const version = wrapper.get('[data-test="version"]')
-      expect(title.text()).toBe('GitHub 中文化')
+      expect(title.text()).toBe('网页汉化助手')
       expect(version.text()).toBe('v1.2.3')
-      expect(title.element.nextElementSibling).toBe(version.element)
+      expect(title.element.nextElementSibling).toBe(wrapper.get('.options-subtitle').element)
+      expect(wrapper.get('.options-subtitle').element.nextElementSibling).toBe(version.element)
     })
 
     it('关于：GitHub 存储库地址，在新标签页打开', async () => {
       const wrapper = await render()
       const about = section(wrapper, '关于')
-      expect(about.findAll('dt').map((item) => item.text())).toEqual(['GitHub'])
+      expect(about.findAll('dt').map((item) => item.text())).toEqual(['GitHub 汉化上游'])
       const link = about.get('dd a')
       expect(link.attributes('href')).toBe(REPOSITORY_URL)
       expect(link.attributes('target')).toBe('_blank')
@@ -114,8 +125,8 @@ describe.skipIf(!App)('设置页组件', () => {
     })
 
     it.each([
-      ['en', 'GitHub Chinese', ['Excluded paths', 'Custom entries', 'About'], 'GitHub repository'],
-      ['zh-TW', 'GitHub 中文化', ['排除路徑', '自訂詞條', '關於'], 'GitHub'],
+      ['en', 'Web Chinese Translator', ['Built-in UI glossary', 'General settings', 'Excluded paths (GitHub)', 'Custom entries (GitHub)', 'Appearance', 'About'], 'Upstream (github-chinese)'],
+      ['zh-TW', '網頁漢化助手', ['基礎介面詞庫', '常用設定', '排除路徑（GitHub）', '自訂詞條（GitHub）', '外觀', '關於'], 'GitHub 漢化上游'],
     ] as const)('界面语言随设置（如在弹出页修改）切换：%s', async (uiLanguage, title, sections, repository) => {
       const wrapper = await render()
       await updateSettings({ uiLanguage })
@@ -134,9 +145,67 @@ describe.skipIf(!App)('设置页组件', () => {
       await settle()
       expect(document.documentElement.dataset.theme).toBe('light')
     })
+
+    it('导航与hash只切换显示，保持唯一TranslationSection实例', async () => {
+      const wrapper = await render()
+      const element = wrapper.getComponent({ name: 'TranslationSection' }).element
+      expect(wrapper.get('[data-test="nav-wt-general-title"]').attributes('aria-current')).toBe('page')
+      expect(wrapper.get('[data-test="wt-general-view"]').isVisible()).toBe(true)
+      await wrapper.get('[data-test="nav-wt-title"]').trigger('click')
+      await settle()
+      expect(window.location.hash).toBe('#wt-title')
+      expect(wrapper.get('[data-test="wt-model-view"]').isVisible()).toBe(true)
+      expect(wrapper.get('[data-test="wt-general-view"]').isVisible()).toBe(false)
+      await wrapper.get('[data-test="nav-wt-dictionary-title"]').trigger('click')
+      await settle()
+      expect(wrapper.get('[data-test="wt-sites-view"]').isVisible()).toBe(true)
+      expect(wrapper.get('section[aria-labelledby="wt-dictionary-title"]').isVisible()).toBe(true)
+      window.location.hash = '#appearance-title'
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await settle()
+      expect(wrapper.get('[data-test="nav-appearance-title"]').attributes('aria-current')).toBe('page')
+      expect(wrapper.get('.wt-settings-sections').isVisible()).toBe(false)
+      expect(wrapper.get('section[aria-labelledby="appearance-title"]').isVisible()).toBe(true)
+      expect(wrapper.findAllComponents({ name: 'TranslationSection' })).toHaveLength(1)
+      expect(wrapper.getComponent({ name: 'TranslationSection' }).element).toBe(element)
+    })
+
+    it('模型深链接直接显示连接设置，未知hash退回常用', async () => {
+      window.history.replaceState(null, '', window.location.pathname + '#wt-title')
+      const wrapper = await render()
+      expect(wrapper.get('[data-test="wt-model-view"]').isVisible()).toBe(true)
+      expect(wrapper.get('[data-test="nav-wt-title"]').attributes('aria-current')).toBe('page')
+      window.location.hash = '#unknown'
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await settle()
+      expect(wrapper.get('[data-test="wt-general-view"]').isVisible()).toBe(true)
+      expect(wrapper.get('[data-test="nav-wt-general-title"]').attributes('aria-current')).toBe('page')
+    })
+
+    it.each([
+      ['page-unavailable', 'wtPageUnavailable'],
+      ['disabled', 'wtPageDisabled'],
+      ['untrusted-notice', undefined],
+    ] as const)('只显示白名单入口提示：%s', async (notice, key) => {
+      window.history.replaceState(null, '', window.location.pathname + '?notice=' + encodeURIComponent(notice))
+      const wrapper = await render()
+      if (key === undefined) {
+        expect(wrapper.find('[data-test="wt-page-notice"]').exists()).toBe(false)
+        expect(wrapper.text()).not.toContain(notice)
+      } else {
+        expect(wrapper.get('[data-test="wt-page-notice"]').text()).toContain(zhCN[key])
+        await wrapper.get('[data-test="wt-notice-dismiss"]').trigger('click')
+        await settle()
+        expect(wrapper.find('[data-test="wt-page-notice"]').exists()).toBe(false)
+      }
+    })
   })
 
   describe('排除路径', () => {
+    beforeEach(() => {
+      window.history.replaceState(null, '', window.location.pathname + '#github-title')
+    })
+
     it('每行一条，保存后提示已保存', async () => {
       const wrapper = await render()
       const textarea = section(wrapper, '排除路径').get('textarea')
@@ -194,6 +263,10 @@ describe.skipIf(!App)('设置页组件', () => {
   })
 
   describe('自定义词条', () => {
+    beforeEach(() => {
+      window.history.replaceState(null, '', window.location.pathname + '#github-title')
+    })
+
     it('读取失败时列表处显示加载失败，不弹提示', async () => {
       vi.spyOn(fakeBrowser.storage.local, 'get').mockRejectedValue(new Error('存储不可用'))
       const wrapper = await render()
@@ -357,10 +430,12 @@ describe.skipIf(!App)('设置页组件', () => {
     it('点击删除、按钮没有获得焦点（如 Firefox）时不移动焦点', async () => {
       await customEntriesItem.setValue({ Code: '代码', Issues: '议题' })
       const wrapper = await render()
+      const focusedBefore = document.activeElement
+      expect(focusedBefore).toBe(wrapper.get('#github-title').element)
       await section(wrapper, '自定义词条').get('button[aria-label="删除 Issues"]').trigger('click')
       await settle()
       expect(await getCustomEntries()).toEqual({ Code: '代码' })
-      expect(document.activeElement).toBe(document.body)
+      expect(document.activeElement).toBe(focusedBefore)
     })
 
     it('搜索', async () => {

@@ -1,0 +1,10 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="1376" height="398" viewBox="0 0 1376 398" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Decor/HUD" clip-path="url(#clip0_0_45)">
+<path id="Vector" d="M1.30303 24V8L10.4242 1H39.0909M1336.91 1H1362.97L1374.7 10V30M1.30303 374V390L10.4242 397H39.0909M1336.91 397H1362.97L1374.7 388V368" stroke-width="1.2" stroke="#55E5FF" stroke-opacity="0.55"/>
+</g>
+<defs>
+<clipPath id="clip0_0_45">
+<rect width="1376" height="398" fill="white"/>
+</clipPath>
+</defs>
+</svg>

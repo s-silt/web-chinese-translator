@@ -1,13 +1,11 @@
 <div align="center">
 
-<img src="public/icon/128.png" width="96" height="96" alt="GitHub 中文化" />
+<img src="public/icon/128.png" width="96" height="96" alt="网页汉化助手" />
 
-# GitHub 中文化
+# 网页汉化助手
 
-把 GitHub 界面翻译成简体中文、繁体中文的浏览器扩展
+把 GitHub 界面翻译成简体中文、繁体中文，并支持划词翻译与站点自动翻译的浏览器扩展。基于上游 [github-chinese](https://github.com/setube/github-chinese)（MIT）开发。
 
-[![发布](https://github.com/setube/github-chinese/actions/workflows/release.yml/badge.svg)](https://github.com/setube/github-chinese/actions/workflows/release.yml)
-[![版本](https://img.shields.io/github/v/release/setube/github-chinese?include_prereleases&label=%E7%89%88%E6%9C%AC)](https://github.com/setube/github-chinese/releases)
 [![许可证](https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF%E8%AF%81-MIT-blue)](LICENSE)
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-informational)
 <br />
@@ -15,7 +13,7 @@
 ![Edge](https://img.shields.io/badge/Edge-MV3-0078D7?logo=microsoftedge&logoColor=white)
 ![Firefox](https://img.shields.io/badge/Firefox-140%2B-FF7139?logo=firefoxbrowser&logoColor=white)
 
-[安装](#安装) · [功能](#功能) · [使用](#使用) · [工作原理](#工作原理) · [隐私与权限](#隐私与权限) · [参与贡献](#参与贡献) · [反馈问题](https://github.com/setube/github-chinese/issues/new/choose)
+[安装](#安装) · [功能](#功能) · [使用](#使用) · [工作原理](#工作原理) · [隐私与权限](#隐私与权限) · [参与贡献](#参与贡献)
 
 </div>
 
@@ -47,33 +45,51 @@
 ### 控制
 
 - 弹出页：总开关、当前页状态、排除此页、时间本地化、翻译标题、界面语言、翻译语言、外观
+- 内置本地词表：26 个站点（涵盖 AI 开发、AI 与模型、云与部署、代码与包管理、设计与协作、社区与学习六分类，如 Devin、Cursor、Claude、Vercel、Linear 等）默认自动替换界面词条；词表按站点与目标语言（简体中文、繁體中文、日本語、한국어）按需加载；英文目标保留原文，自定义词典与模型翻译不受影响
+- GitHub 页仍为原有简/繁独立引擎；新增站点译表与机械蚂蚁图标由本项目制作，第三方许可声明见 public/THIRD_PARTY_NOTICES.txt
 - 选项页（弹出页「规则」）：排除路径、自定义词条（导入、导出）
 - 翻译语言默认按浏览器语言识别（语言列表中第一个中文：台湾、香港、澳门及 Hant 为繁体；没有中文时按时区），可手动指定；切换后已打开的页面随即重译
-- 扩展界面：简体中文、繁體中文、English，默认跟随浏览器界面语言
+- 扩展界面：简体中文、繁體中文、English、日本語、한국어，默认跟随浏览器界面语言
 - 外观：自动（跟随系统）、浅色、深色
+
+### 网页翻译
+
+- **阅读辅助**：启用划词辅助后，在 HTTP/HTTPS 网页选中文字即可弹出小窗，由模型判断是否需要翻译、释义或解释。智能陪读还会参考近期阅读主题，并以可忽略的小提示提供帮助。右键「翻译选中文字」保留为手动入口。
+- **界面词库**：26 个预置站点（涵盖 AI 开发、AI 与模型、云与部署、代码与包管理、设计与协作、社区与学习六分类，完整域名见 src/translation/dictionaries/metadata.json，如 devin.ai、cursor.com、claude.ai、vercel.com、linear.app 等）的菜单、按钮等常见界面文字用内置词典本地化（离线、不联网；可在设置页关闭单个词典）；站点子域访问权限由元数据逐一列出并在安装时声明。还可以在设置页新建、编辑、导入自定义词典，为其他站点添加本地词条。自定义词典只存本机，启用前需要对应网站的访问权限，词条只用于本地替换、不发送内容。
+- **翻译目标语言**：模型翻译与固定词典支持简体中文、繁体中文、English、日本語、한국어（设置页选择，切换后已翻译页面自动重译）；GitHub 汉化引擎不受此影响，仍只支持简体、繁体。
+- **站点自动翻译**：把页面上的可见英文文本翻译为中文。默认关闭；在设置页或弹出页逐站点开启时需明确同意并授予站点权限，文本才会发送给你自己配置的 OpenAI 兼容接口（可选自定义 Chat Completions 或自定义 Responses 两种协议，填到 `/v1` 或完整 `/chat/completions`、`/responses` 地址均可按所选协议派生请求地址；`http` 仅允许 localhost/127.0.0.1/[::1]；不支持原生 Gemini 等协议，请使用兼容中继）。
+  1. 选择接口类型，填写接口地址和 API Key，点击"获取模型"选择模型或手动填写模型名；按需展开"高级设置"配置可选温度（0–2）、附加请求参数（JSON 对象）与自定义请求头（JSON 对象），保存并连接。
+  2. 辅助模式选择关闭、划词辅助或智能陪读；智能陪读需确认额外的数据使用说明。
+  3. 在扩展弹窗逐站开启自动翻译；「恢复本页原文」暂停本页替换，「继续翻译」恢复处理。
+  密钥与自定义请求头均与接口来源（协议、主机、端口）绑定。同一来源下，密钥或请求头输入留空会保留已保存的值；自定义请求头填写 `{}` 并保存可清空；更换来源需重新填写对应密钥/请求头或显式删除/清空。
+- API Key 与自定义请求头只保存在本机扩展的 IndexedDB 中，不随浏览器账号同步；单页自动翻译量有上限，可在弹出页恢复原文、继续或暂停。
 
 ## 安装
 
-### 从发行版安装
+### 加载本项目构建包
 
-在[发行版](https://github.com/setube/github-chinese/releases)页面下载：
+从 [GitHub Releases](https://github.com/s-silt/web-chinese-translator/releases/latest) 下载最新版本。普通 Chrome 用户优先选择 `web-chinese-translator-<版本>-chrome.zip`，解压后按下表加载。
+
+在本项目目录运行 `bun run build` 后，可直接加载 `.output/chrome-mv3`；运行 `bun run zip` 可生成 Chrome 安装包。模型翻译与阅读辅助属于本项目新增功能，参考项目的发行版仍对应原 GitHub 汉化扩展。
 
 | 浏览器  | 文件                                | 安装                                                                                                                   |
 | ------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Chrome  | `github-chinese-<版本>-chrome.zip`  | 解压 → `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选择解压出的文件夹                         |
-| Edge    | `github-chinese-<版本>-edge.zip`    | 解压 → `edge://extensions` → 开启「开发人员模式」→「加载解压缩的扩展」→ 选择解压出的文件夹                             |
-| Firefox | `github-chinese-<版本>-firefox.xpi` | 已签名：用 Firefox 打开即安装。未签名：`about:debugging#/runtime/this-firefox` →「临时载入附加组件」，重启浏览器后失效 |
+| Chrome  | `web-chinese-translator-<版本>-chrome.zip`  | 解压 → `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选择解压出的文件夹                         |
+| Edge    | `web-chinese-translator-<版本>-edge.zip`    | 解压 → `edge://extensions` → 开启「开发人员模式」→「加载解压缩的扩展」→ 选择解压出的文件夹                             |
+| Firefox | `web-chinese-translator-<版本>-firefox.zip` | 解压 → `about:debugging#/runtime/this-firefox` →「临时载入附加组件」→ 选择 `manifest.json`，重启后失效；仅 GitHub 汉化 |
+
+更新已解压的扩展时，保持原目录路径，替换文件后在扩展管理页点击"重新加载"，再刷新网页。更换目录或改用 CRX 会改变扩展身份，原有配置不会自动迁移。
 
 - `.crx` 用于企业策略部署；Chrome、Edge 一般不允许直接安装商店之外的 crx。
-- 校验：`sha256sum -c --ignore-missing SHA256SUMS.txt`
+- 发布工作流另可生成已签名的 Firefox `.xpi`；带校验文件的发布包可运行 `sha256sum -c --ignore-missing SHA256SUMS.txt`。
 
 ### 从源码构建
 
 环境：Bun 1.3+、Node.js 22.13+（LTS 版本）。
 
+在本项目目录执行：
+
 ```bash
-git clone https://github.com/setube/github-chinese.git
-cd github-chinese
 bun install
 bun run build           # Chrome → .output/chrome-mv3
 bun run build:edge      # Edge → .output/edge-mv3
@@ -138,21 +154,26 @@ flowchart LR
 
 ## 隐私与权限
 
-翻译在本地完成，不向开发者或任何第三方发送数据。详见[隐私说明](docs/PRIVACY.md)。
+Chrome、Edge 提供固定词库、模型翻译和阅读辅助；Firefox 版本仅启用 GitHub 本地汉化，不运行模型与阅读辅助。固定词库匹配与替换在本地完成，不调用模型。划词辅助会发送选中文字、附近可见上下文，以及当前页的标题、主标题和站点名；自动翻译仅处理你明确开启的站点；智能陪读还会发送候选段落，并可能附带其他标签页和网站的近期阅读线索（`storage.session`，最多 12 条、30 分钟过期、每次最多 4 条）。停留、回读次数与操作方式不发送给模型。已保存的 API Key 随每次模型请求（含连接测试）以 `Authorization: Bearer` 发往你配置的 OpenAI 兼容接口，本机 IndexedDB 明文保存、与接口来源绑定、不随账号同步。常见账户、密钥、付款、邮件等敏感页面（含哈希路由与私有网络地址）不发送文字或记录线索，仅显式右键菜单可发送所选文字；在「不调用模型的网站」中列出的域名及其子域名完全禁止模型发送与线索记录，本地词库仍可用。扩展在无痕窗口中不运行。修改排除列表会清除既有线索；清理失败会提示，发送前仍会过滤排除网站和可识别高敏主机的旧线索。识别为启发式，不保证覆盖全部隐私页面。详见[隐私说明](docs/PRIVACY.md)。
 
 | 权限                                                                                  | 用途                                                                                                                                                                              |
 | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `storage`                                                                             | 保存设置（`storage.sync`）、自定义词条（`storage.local`）                                                                                                                         |
+| `storage`                                                                             | 保存设置（`storage.sync`）、自定义词条与翻译配置（`storage.local`）                                                                                                               |
 | `https://github.com/*`、`https://gist.github.com/*`、`https://www.githubstatus.com/*` | 在这三个站点运行内容脚本，翻译页面界面                                                                                                                                            |
-| `scripting`                                                                           | 按当前语言注册词典脚本，页面开始解析前就绪；词典脚本动态加载失败（Firefox 不动态加载）时由后台注入；Chrome、Edge 安装、更新后向已打开的 GitHub 标签页注入脚本（Firefox 自动注入） |
+| 26 个站点的 HTTPS 域名（完整列表见 [站点元数据](src/translation/dictionaries/metadata.json)） | 在预置站点及其子域运行界面词库脚本，可在设置页逐个关闭；GitHub 系列域名权限单独保留 |
+| `scripting`                                                                           | 按当前语言注册词典脚本，页面开始解析前就绪；词典脚本动态加载失败（Firefox 不动态加载）时由后台注入；Chrome、Edge 安装、更新后向已打开的标签页注入脚本（Firefox 自动注入）          |
+| `activeTab`                                                                           | 点右键菜单「翻译本页」、「翻译选中文字」或点弹出页操作时，临时向当前页注入翻译面板脚本                                                                                            |
+| `contextMenus`                                                                        | 注册「翻译本页」与「翻译选中文字」右键菜单                                                                                                                                        |
+| `optional_host_permissions`（`https://*/*`、`http://*/*`）                            | 模型接口与自动翻译站点分别按来源授权。开启划词辅助需授权 HTTP/HTTPS 网站访问，并注册相应页面脚本；撤销权限后停止相应处理                                                            |
 
-- 不申请其他权限。Firefox 中可在附加组件管理器撤销站点权限，撤销后弹出页显示「未授权」，点「授权」恢复。
-- 停用、排除、改自定义词条、改时间本地化开关、扩展更新或卸载时，以及 GitHub 从自身缓存写回译文时（前进后退、帧导航到带锚点的地址），可能重新请求当前 GitHub 页面（条件见隐私说明）；点弹出页「刷新」时重新加载当前页。不发起其他网络请求。
-- 设置存 `storage.sync`，可能随浏览器账号同步；自定义词条存 `storage.local`。
+- `alarms`（仅 Chrome、Edge）：用于清理过期的短期阅读线索。
+- 不申请 `tabs`、`history` 权限。划词辅助关闭时，不注册全站点划词脚本。Firefox 中可在附加组件管理器撤销站点权限。
+- 停用、排除、改自定义词条、改时间本地化开关、扩展更新或卸载时，以及 GitHub 从自身缓存写回译文时（前进后退、帧导航到带锚点的地址），可能重新请求当前 GitHub 页面（条件见隐私说明）；点弹出页「刷新」时重新加载当前页。
+- 设置存 `storage.sync`，可能随浏览器账号同步；自定义词条与翻译配置存 `storage.local`；API Key 存本机 IndexedDB（`web-translator-secrets`），不同步、未加密。
 
 ## 参与贡献
 
-- 反馈：[新建议题](https://github.com/setube/github-chinese/issues/new/choose)，选「翻译问题」「缺陷报告」或「功能建议」模板。
+- 网页翻译与阅读辅助问题请在[本项目反馈](https://github.com/s-silt/web-chinese-translator/issues/new/choose)；上游 GitHub 词库问题也可在[上游仓库](https://github.com/setube/github-chinese/issues/new/choose)反馈。
 - 改进译文：先读[术语表](docs/GLOSSARY.md)；改动简体词典后同步繁体。
 - 提交前运行以下检查（同[发布工作流](.github/workflows/release.yml)）：
 
@@ -207,7 +228,7 @@ bun run test:e2e:live   # 线上冒烟：访问 github.com/vuejs/core，截图�
 端到端测试首次运行前安装浏览器：`bunx playwright install chromium`。
 
 - 离线测试：`github.com` 请求由 `tests/e2e/fixtures/` 中仿 GitHub 结构的页面应答，覆盖界面翻译、用户内容保持原文、属性、动态插入与 React 改写、忽略区域内的界面块（评论中的建议块、应用权限选择器）、`<relative-time>`、标题、设置联动（总开关、排除路径、自定义词条，含后台休眠后）、弹出页。
-- 线上冒烟仅在环境变量 `E2E_LIVE=1` 时执行，`bun run test:e2e:live` 已自动设置。
+- 线上冒烟仅在环境变量 `E2E_LIVE=1` 时执行。`bun run test:e2e:live` 从 `tests/e2e/live.env` 读取环境变量，该文件不入库：首次运行前把 `tests/e2e/live.env.example` 复制为 `tests/e2e/live.env`，并将 `E2E_LIVE` 改为 `1`。
 - 报告：`playwright-report/`；失败时的 trace 与截图：`test-results/`。
 
 </details>
@@ -259,11 +280,11 @@ wxt.config.ts            WXT 配置与 manifest
 
 | 机密                               | 用途                                                                                                     | 未配置时                     |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| `CRX_PRIVATE_KEY`                  | crx 签名私钥（RSA PEM），决定扩展 ID                                                                     | 用临时私钥，扩展 ID 每次不同 |
+| `CRX_PRIVATE_KEY`                  | crx 签名私钥（RSA PEM），决定扩展 ID                                                                     | 停止发布，需配置固定私钥     |
 | `AMO_JWT_ISSUER`、`AMO_JWT_SECRET` | [AMO API 密钥](https://addons.mozilla.org/developers/addon/api/key/)，以自行分发（unlisted）方式签名 xpi | xpi 未签名                   |
 
 - 生成私钥：`openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out crx-key.pem`，文件内容填入 `CRX_PRIVATE_KEY`。私钥不提交到存储库（`.gitignore` 已忽略 `*.pem`）；更换私钥后扩展 ID 随之改变。
-- 本地打包 crx：`bun run pack:crx --key crx-key.pem .output/github-chinese-<版本>-chrome.zip`，在 zip 旁生成同名 `.crx`；不带 `--key` 时读环境变量 `CRX_PRIVATE_KEY`。
+- 本地打包 crx：`bun run pack:crx --key crx-key.pem .output/web-chinese-translator-<版本>-chrome.zip`，在 zip 旁生成同名 `.crx`；不带 `--key` 时读环境变量 `CRX_PRIVATE_KEY`。
 - xpi 只在推送正式版标记时签名；手动运行、预发行版（Firefox 的版本号去掉 `-` 之后的部分，签名会占用正式版的版本号）产出未签名 xpi。
 - AMO 上同一版本号只能提交一次：签名包下载后立即存进发行版草稿，重跑时沿用；以 unlisted 签名过的版本，不能再以同一版本号上架（listed）。
 
@@ -274,6 +295,8 @@ wxt.config.ts            WXT 配置与 manifest
 ### 有些文字没有翻译？
 
 用户内容不翻译。界面文字未翻译时，用「翻译问题」模板反馈。
+
+网页自动翻译不进入跨域 iframe 与关闭的 Shadow DOM。
 
 ### 繁体是简繁转换吗？
 
@@ -292,6 +315,8 @@ wxt.config.ts            WXT 配置与 manifest
 ## 许可证
 
 [MIT](LICENSE) © 2026 github-chinese contributors
+
+打包产物中包含的第三方运行时包及其许可证文本见 [public/THIRD_PARTY_NOTICES.txt](public/THIRD_PARTY_NOTICES.txt)。
 
 ## LINUX DO社区
 

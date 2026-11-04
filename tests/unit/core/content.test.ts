@@ -11,6 +11,8 @@ import {
   TURBO_TRANSLATING_EVENT,
   type BridgeWindow,
 } from '../../../src/core/turbo-bridge'
+import type { TranslationConfig } from '../../../src/translation/config'
+import type { SiteScopeMode } from '../../../src/translation/site-scope'
 import { $, settle, TEST_BUNDLE } from './helpers'
 
 type Listener = (message: unknown, sender: unknown, sendResponse: (response?: unknown) => void) => true | undefined
@@ -53,6 +55,44 @@ const i18n = vi.hoisted(() => ({
 }))
 
 vi.mock('wxt/browser', () => ({ browser: { runtime, i18n } }))
+
+const policy = vi.hoisted(() => ({
+  mode: 'all' as SiteScopeMode,
+  hosts: [] as string[],
+  getConfig: vi.fn(async (): Promise<TranslationConfig | undefined> => undefined),
+  watch: undefined as ((config: TranslationConfig) => void) | undefined,
+  unwatch: vi.fn(),
+}))
+
+vi.mock('../../../src/translation/config', () => ({
+  getTranslationConfig: policy.getConfig,
+  watchTranslationConfig: (callback: (config: TranslationConfig) => void) => {
+    policy.watch = callback
+    return policy.unwatch
+  },
+}))
+
+function scopeConfig(mode: SiteScopeMode, hosts: readonly string[]): TranslationConfig {
+  return {
+    baseUrl: '',
+    model: '',
+    apiType: 'chat-completions',
+    temperature: null,
+    requestParams: {},
+    customHeadersRevision: '',
+    autoOrigins: [],
+    disabledDictionaries: [],
+    targetLanguage: 'zh-CN',
+    sourceLanguage: 'auto',
+    selectionPopupEnabled: false,
+    selectionToolbarEnabled: false,
+    proactiveAssistEnabled: false,
+    floatingButtonEnabled: false,
+    excludedHosts: [],
+    siteScopeMode: mode,
+    siteScopeHosts: hosts,
+  }
+}
 
 /** 语言包加载：按语言返回测试词典；deps 为内容脚本创建加载器时传入的依赖 */
 const locales = vi.hoisted(() => ({
@@ -226,6 +266,12 @@ function pageshow(persisted: boolean): void {
 
 beforeEach(() => {
   vi.resetModules()
+  policy.mode = 'all'
+  policy.hosts = []
+  policy.watch = undefined
+  policy.unwatch.mockReset()
+  policy.getConfig.mockReset()
+  policy.getConfig.mockImplementation(async () => scopeConfig(policy.mode, policy.hosts))
   runtime.id = 'test-extension'
   runtime.sendMessage.mockReset()
   runtime.sendMessage.mockImplementation(async () => ({ ok: true }))
@@ -1334,6 +1380,104 @@ describe('重置事件与实例标记', () => {
   })
 })
 
+describe('网站运行范围', () => {
+  async function start(): Promise<void> {
+    const definition = await load()
+    context = createContext()
+    await definition.main(context as never)
+    await flushTasks()
+  }
+
+  it('include 空表不加载语言包；放宽后翻译，再收窄立即还原', async () => {
+    policy.mode = 'include'
+    policy.hosts = []
+    await start()
+    expect($('p').textContent).toBe('Issues')
+    expect(send({ type: 'gcn:get-status' })).toMatchObject({ active: false })
+    expect(locales.load).not.toHaveBeenCalled()
+    policy.watch?.(scopeConfig('all', []))
+    await flushTasks()
+    await settle()
+    expect($('p').textContent).toBe('议题')
+    expect(send({ type: 'gcn:get-status' })).toMatchObject({ active: true })
+    policy.watch?.(scopeConfig('include', []))
+    expect($('p').textContent).toBe('Issues')
+    expect(send({ type: 'gcn:get-status' })).toMatchObject({ active: false })
+  })
+
+  it('读配置失败时不加载语言包也不翻译', async () => {
+    policy.getConfig.mockRejectedValue(new Error('storage down'))
+    await start()
+    expect(locales.load).not.toHaveBeenCalled()
+    expect($('p').textContent).toBe('Issues')
+    expect(send({ type: 'gcn:get-status' })).toMatchObject({ active: false })
+  })
+
+  it('pageshow 挂起的旧读取不能覆盖之后的收窄', async () => {
+    await start()
+    expect($('p').textContent).toBe('议题')
+    let release!: (config: TranslationConfig) => void
+    policy.getConfig.mockImplementation(() => new Promise<TranslationConfig>((resolve) => {
+      release = resolve
+    }))
+    pageshow(true)
+    policy.watch?.(scopeConfig('include', []))
+    expect($('p').textContent).toBe('Issues')
+    release(scopeConfig('all', []))
+    await flushTasks()
+    await settle()
+    expect($('p').textContent).toBe('Issues')
+    expect(send({ type: 'gcn:get-status' })).toMatchObject({ active: false })
+    expect(locales.load).toHaveBeenCalledTimes(1)
+  })
+
+  it('撤销时丢掉迟到语言包，再次允许后可以翻译', async () => {
+    policy.mode = 'include'
+    policy.hosts = []
+    await start()
+    expect(locales.load).not.toHaveBeenCalled()
+    expect($('p').textContent).toBe('Issues')
+    let release!: (bundle: LocaleBundle) => void
+    locales.load.mockImplementationOnce(() => new Promise((resolve) => {
+      release = resolve
+    }))
+    policy.watch?.(scopeConfig('all', []))
+    await flushTasks()
+    expect(locales.load).toHaveBeenCalledTimes(1)
+    expect($('p').textContent).toBe('Issues')
+    policy.watch?.(scopeConfig('include', []))
+    expect($('p').textContent).toBe('Issues')
+    release(TEST_BUNDLE)
+    await flushTasks()
+    await settle()
+    expect($('p').textContent).toBe('Issues')
+    expect(send({ type: 'gcn:get-status' })).toMatchObject({ active: false })
+    policy.watch?.(scopeConfig('all', []))
+    await flushTasks()
+    await settle()
+    expect($('p').textContent).toBe('议题')
+    expect(send({ type: 'gcn:get-status' })).toMatchObject({ active: true })
+  })
+
+  it('失效时取消配置监听，迟到的读取不再改页面', async () => {
+    await start()
+    expect($('p').textContent).toBe('议题')
+    const loads = locales.load.mock.calls.length
+    let release!: (config: TranslationConfig) => void
+    policy.getConfig.mockImplementation(() => new Promise<TranslationConfig>((resolve) => {
+      release = resolve
+    }))
+    pageshow(true)
+    context?.invalidate()
+    expect(policy.unwatch).toHaveBeenCalled()
+    release(scopeConfig('all', []))
+    await flushTasks()
+    await settle()
+    expect(locales.load.mock.calls.length).toBe(loads)
+    expect($('p').textContent).toBe('Issues')
+  })
+})
+
 describe('turbo-bridge 入口', () => {
   async function loadBridge(): Promise<ContentScriptDefinition> {
     return (await import('../../../src/entrypoints/turbo-bridge.content')).default
@@ -1359,5 +1503,160 @@ describe('turbo-bridge 入口', () => {
       registry[Symbol.for('github-chinese.turbo-bridge')]?.uninstall()
       Reflect.deleteProperty(window, 'Turbo')
     }
+  })
+})
+
+describe('本页暂停', () => {
+  const sender = { id: 'test-extension' }
+
+  function command(action: 'status' | 'restore' | 'resume', url = location.href) {
+    return { type: 'gcn:page-translation', action, url }
+  }
+
+  function sendFrom(message: unknown, from: unknown = sender): { handled: boolean; response: unknown } {
+    let response: unknown
+    let handled = false
+    for (const listener of state.listeners) {
+      if (listener(message, from, (value) => {
+        response = value
+      }) === true) handled = true
+    }
+    return { handled, response }
+  }
+
+  function sendAsyncFrom(message: unknown, from: unknown = sender): { handled: boolean; response: Promise<unknown> } {
+    let resolve: (value: unknown) => void = () => undefined
+    const response = new Promise((done) => {
+      resolve = done
+    })
+    const handled = state.listeners.some((listener) => listener(message, from, resolve) === true)
+    return { handled, response }
+  }
+
+  async function boot(enabled: boolean): Promise<void> {
+    state.settings = { ...state.settings, enabled }
+    const definition = await load()
+    context = createContext()
+    await definition.main(context as never)
+    await flushTasks()
+  }
+
+  function holdLoads(): { release(): void } {
+    const pending: Array<(bundle: LocaleBundle) => void> = []
+    locales.load.mockImplementation(() => new Promise((resolve) => {
+      pending.push(resolve)
+    }))
+    return {
+      release() {
+        for (const resolve of pending.splice(0)) resolve(TEST_BUNDLE)
+      },
+    }
+  }
+
+  it('restore 保持原文且不改设置，resume 重新翻译', async () => {
+    await boot(true)
+    expect($('p').textContent).toBe('议题')
+    const saved = { ...state.settings }
+    expect(sendFrom(command('restore')).response).toMatchObject({ ok: true, paused: true, active: false })
+    expect($('p').textContent).toBe('Issues')
+    expect(state.settings).toEqual(saved)
+    expect(sendFrom(command('resume')).response).toMatchObject({ ok: true, paused: false })
+    await flushTasks()
+    expect($('p').textContent).toBe('议题')
+  })
+
+  it('暂停期间不加载语言包，迟到的语言包不重新翻译', async () => {
+    await boot(false)
+    const loads = holdLoads()
+    state.settingsListener!({ ...state.settings, enabled: true })
+    await flushTasks()
+    expect(locales.load).toHaveBeenCalledTimes(1)
+    expect($('p').textContent).toBe('Issues')
+    expect(sendFrom(command('restore')).response).toMatchObject({ ok: true, paused: true })
+    expect(locales.load).toHaveBeenCalledTimes(1)
+    loads.release()
+    await flushTasks()
+    expect($('p').textContent).toBe('Issues')
+    expect(locales.load).toHaveBeenCalledTimes(1)
+  })
+
+  it('真正换页恢复翻译，普通 hash 不恢复', async () => {
+    await boot(true)
+    sendFrom(command('restore'))
+    expect($('p').textContent).toBe('Issues')
+    history.pushState(null, '', '/vuejs/core/issues#anchor')
+    window.dispatchEvent(new Event('test:locationchange'))
+    await flushTasks()
+    expect($('p').textContent).toBe('Issues')
+    history.pushState(null, '', '/vuejs/core/pull/1')
+    window.dispatchEvent(new Event('test:locationchange'))
+    await flushTasks()
+    expect($('p').textContent).toBe('议题')
+  })
+
+  it('往返缓存恢复后仍保持暂停', async () => {
+    await boot(true)
+    sendFrom(command('restore'))
+    expect($('p').textContent).toBe('Issues')
+    pageshow(true)
+    await flushTasks()
+    expect($('p').textContent).toBe('Issues')
+    expect(sendFrom(command('status')).response).toMatchObject({ ok: true, paused: true, active: false })
+  })
+
+  it('错误 sender 与旧 URL 不改变页面', async () => {
+    await boot(true)
+    const bad = [null, 'sender', {}, { id: 'other' }, { id: 'test-extension', tab: { id: 1 } }]
+    for (const from of bad) {
+      const result = sendFrom(command('restore'), from)
+      expect(result.handled).toBe(false)
+      expect(result.response).toBeUndefined()
+    }
+    expect($('p').textContent).toBe('议题')
+    expect(sendFrom(command('restore', 'https://github.com/vuejs/core/pull/9')).response).toEqual({ ok: false })
+    expect($('p').textContent).toBe('议题')
+  })
+
+  it('总开关 off→on 重置本页恢复态，引擎恢复运行', async () => {
+    await boot(true)
+    expect(sendFrom(command('restore')).response).toMatchObject({ ok: true, paused: true, active: false })
+    expect($('p').textContent).toBe('Issues')
+    state.settingsListener!({ ...state.settings, enabled: false })
+    state.settingsListener!({ ...state.settings, enabled: true })
+    await flushTasks()
+    expect($('p').textContent).toBe('议题')
+    expect(sendFrom(command('status')).response).toMatchObject({ ok: true, paused: false, active: true })
+  })
+
+  it('运行范围撤销再恢复时重置本页恢复态，引擎恢复运行', async () => {
+    await boot(true)
+    expect(sendFrom(command('restore')).response).toMatchObject({ ok: true, paused: true, active: false })
+    expect($('p').textContent).toBe('Issues')
+    policy.watch?.(scopeConfig('include', []))
+    expect($('p').textContent).toBe('Issues')
+    policy.watch?.(scopeConfig('all', []))
+    await flushTasks()
+    expect($('p').textContent).toBe('议题')
+    expect(sendFrom(command('status')).response).toMatchObject({ ok: true, paused: false, active: true })
+  })
+
+  it('resume 等待中 restore 使旧 resume 失败，页面仍是原文', async () => {
+    await boot(false)
+    const loads = holdLoads()
+    state.settingsListener!({ ...state.settings, enabled: true })
+    await flushTasks()
+    const resume = sendAsyncFrom(command('resume'))
+    expect(resume.handled).toBe(true)
+    let answered = false
+    void resume.response.then(() => {
+      answered = true
+    })
+    await flushTasks()
+    expect(answered).toBe(false)
+    expect(sendFrom(command('restore')).response).toMatchObject({ ok: true, paused: true })
+    loads.release()
+    await flushTasks()
+    expect(await resume.response).toEqual({ ok: false })
+    expect($('p').textContent).toBe('Issues')
   })
 })

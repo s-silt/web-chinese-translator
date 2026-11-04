@@ -22,13 +22,17 @@ async function withTimeout<T>(task: Promise<T>, timeoutMs: number, reason: strin
  * 响应来自页面上下文，调用方须自行校验（isContentStatus 等）。
  * 内容脚本未注入或超时未回复时 Promise 拒绝。
  */
-export function sendToTab(tabId: number, type: TabRequest['type']): Promise<unknown> {
-  const message: TabRequest = { type }
+export function sendToTabMessage(tabId: number, message: unknown, documentId?: string): Promise<unknown> {
   return withTimeout<unknown>(
-    browser.tabs.sendMessage(tabId, message, { frameId: 0 }),
+    browser.tabs.sendMessage(tabId, message, { frameId: 0, ...(documentId === undefined ? {} : { documentId }) }),
     MESSAGE_TIMEOUT_MS,
     '内容脚本无响应',
   )
+}
+
+export function sendToTab(tabId: number, type: TabRequest['type']): Promise<unknown> {
+  const message: TabRequest = { type }
+  return sendToTabMessage(tabId, message)
 }
 
 /** 向后台发消息；超时未回复时 Promise 拒绝。调用方须校验响应（isAcknowledged） */

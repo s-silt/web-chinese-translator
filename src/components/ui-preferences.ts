@@ -6,7 +6,7 @@ import { computed, readonly, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { MESSAGES, translateMessage, type MessageKey, type MessageParams } from '../i18n'
 import { languageEnvironment } from '../shared/language-env'
 import { isUiLanguagePreference, resolveUiLanguage, type UiLanguage, type UiLanguagePreference } from '../shared/locale'
-import { isThemePreference, type Settings, type ThemePreference } from '../shared/settings'
+import { isThemePreference, isUiStyle, type Settings, type ThemePreference, type UiStyle } from '../shared/settings'
 import { useSettings } from './useSettings'
 
 /** 各外观的文案 */
@@ -22,9 +22,10 @@ export const PREFERENCES_CACHE_KEY = 'gcn:ui-preferences'
 interface CachedPreferences {
   readonly uiLanguage: UiLanguagePreference
   readonly theme: ThemePreference
+  readonly uiStyle: UiStyle
 }
 
-const DEFAULT_PREFERENCES: CachedPreferences = { uiLanguage: 'auto', theme: 'auto' }
+const DEFAULT_PREFERENCES: CachedPreferences = { uiLanguage: 'auto', theme: 'auto', uiStyle: 'classic' }
 
 const preferences = ref<CachedPreferences>(DEFAULT_PREFERENCES)
 /** 当前界面语言 */
@@ -38,6 +39,7 @@ function readCache(): CachedPreferences {
     return {
       uiLanguage: isUiLanguagePreference(value.uiLanguage) ? value.uiLanguage : 'auto',
       theme: isThemePreference(value.theme) ? value.theme : 'auto',
+      uiStyle: isUiStyle(value.uiStyle) ? value.uiStyle : 'classic',
     }
   } catch {
     // 无法读取（存储被禁用、内容损坏）按默认
@@ -59,6 +61,12 @@ export function applyTheme(theme: ThemePreference, root: HTMLElement = document.
   else root.dataset.theme = theme
 }
 
+/** 界面风格写在 <html data-style> 上；classic 为默认不写属性；cyber 固定深色忽略 data-theme */
+export function applyUiStyle(style: UiStyle, root: HTMLElement = document.documentElement): void {
+  if (style === 'classic') delete root.dataset.style
+  else root.dataset.style = style
+}
+
 /** 文档语言与标题随界面语言 */
 function applyDocument(lang: UiLanguage): void {
   document.documentElement.lang = lang
@@ -68,6 +76,7 @@ function applyDocument(lang: UiLanguage): void {
 function apply(next: CachedPreferences): void {
   preferences.value = next
   applyTheme(next.theme)
+  applyUiStyle(next.uiStyle)
   applyDocument(language.value)
 }
 
@@ -77,9 +86,15 @@ export function initUiPreferences(): void {
 }
 
 /** 设置读取或变化后调用：更新语言与外观，并写入缓存 */
-export function applyUiPreferences(settings: Pick<Settings, 'uiLanguage' | 'theme'>): void {
-  const next = { uiLanguage: settings.uiLanguage, theme: settings.theme }
-  if (next.uiLanguage !== preferences.value.uiLanguage || next.theme !== preferences.value.theme) apply(next)
+export function applyUiPreferences(settings: Pick<Settings, 'uiLanguage' | 'theme' | 'uiStyle'>): void {
+  const next = { uiLanguage: settings.uiLanguage, theme: settings.theme, uiStyle: settings.uiStyle }
+  if (
+    next.uiLanguage !== preferences.value.uiLanguage ||
+    next.theme !== preferences.value.theme ||
+    next.uiStyle !== preferences.value.uiStyle
+  ) {
+    apply(next)
+  }
   writeCache(next)
 }
 

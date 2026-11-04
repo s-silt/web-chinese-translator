@@ -1,0 +1,218 @@
+/* 苹果毛玻璃风格：跟随明暗，通透面板 + 渐变底色，宽屏左侧栏导航 */
+:root[data-style='glass'] {
+  --gcn-fg: light-dark(#1d2b43, #e6edf7);
+  --gcn-fg-muted: light-dark(#4e6078, #a3b4cc);
+  --gcn-fg-disabled: light-dark(#7b8ca3, #64748b);
+  --gcn-bg: light-dark(#ffffffeb, #141e2feb);
+  --gcn-bg-muted: light-dark(#f2f6fcbf, #0e1624bf);
+  --gcn-bg-disabled: light-dark(#e9eef6, #1b2536);
+  --gcn-border: light-dark(#c5d2e3, #2f3e56);
+  --gcn-border-muted: light-dark(#c5d2e399, #2f3e5699);
+  --gcn-border-emphasis: light-dark(#8ea3bf, #4d6487);
+  --gcn-accent: light-dark(#1268e8, #6ea8ff);
+  --gcn-focus: var(--gcn-accent);
+  --gcn-selection: light-dark(#e5eeff, #1f3a66);
+  --gcn-control-sm: 30px;
+  --gcn-control-md: 36px;
+  --gcn-radius: 10px;
+  --gcn-radius-lg: 12px;
+  --gcn-success-fg: light-dark(#137a4b, #5ad39b);
+  --gcn-success-bg: light-dark(#dff4e9, #11331f);
+  --gcn-primary-fg: #ffffff;
+  --gcn-primary-bg: light-dark(#1268e8, #2f7bff);
+  --gcn-primary-hover-bg: light-dark(#0f5ccf, #4a8cff);
+  --gcn-primary-active-bg: light-dark(#0d51b6, #1f6ae6);
+  --gcn-primary-disabled-bg: light-dark(#d8e2f0, #1e2b3e);
+  --gcn-primary-disabled-fg: light-dark(#6c7e96, #697c96);
+  --gcn-primary-border: transparent;
+  --gcn-btn-fg: light-dark(#1d2b43, #e6edf7);
+  --gcn-btn-bg: light-dark(#ffffffcc, #1a2437cc);
+  --gcn-btn-hover-bg: light-dark(#f5f8ff, #223049);
+  --gcn-btn-active-bg: light-dark(#eaf0fb, #2a3a57);
+  --gcn-btn-border: light-dark(#c5d2e3, #2f3e56);
+  --gcn-overlay-bg: light-dark(#fffffffa, #182234fa);
+  --gcn-overlay-border: light-dark(#c5d2e3, #2f3e56);
+  --gcn-switch-on: var(--gcn-primary-bg);
+  --gcn-page-bg: light-dark(
+    linear-gradient(135deg, #e9f1ff 0%, #f4f0fb 55%, #e6f3ff 100%),
+    linear-gradient(135deg, #0d1420 0%, #141c2c 55%, #0f1826 100%)
+  );
+  --gcn-surface: light-dark(#ffffffb8, #1a2437b8);
+  --gcn-surface-border: light-dark(#ffffffcc, #ffffff1f);
+  --gcn-surface-shadow: 0 10px 32px light-dark(#24385c1a, #00000066);
+  --gcn-surface-blur: 24px;
+  --gcn-radius-panel: 18px;
+}
+
+:root[data-style='glass'] body {
+  background: var(--gcn-page-bg);
+}
+
+:root[data-style='glass'] .options {
+  max-width: 1180px;
+  padding: 32px 28px 64px;
+}
+
+:root[data-style='glass'] .options-main {
+  gap: 24px;
+}
+
+:root[data-style='glass'] .section {
+  backdrop-filter: blur(var(--gcn-surface-blur));
+  -webkit-backdrop-filter: blur(var(--gcn-surface-blur));
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-style='glass'] {
+    --gcn-surface: light-dark(#ffffff, #1a2437);
+    --gcn-surface-blur: 0;
+  }
+  :root[data-style='glass'] .section,
+  :root[data-style='glass'] .options-side {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+:root[data-style='glass'] .section {
+  padding: 24px;
+  gap: 16px;
+  background: var(--gcn-surface);
+  border: 1px solid var(--gcn-surface-border);
+  box-shadow: var(--gcn-surface-shadow);
+  border-radius: var(--gcn-radius-panel);
+}
+
+@media (max-width: 600px) {
+  :root[data-style='glass'] .options {
+    padding: 16px 16px 40px;
+  }
+  :root[data-style='glass'] .section {
+    padding: 16px;
+  }
+}
+
+:root[data-style='glass'] .section > .section-title,
+:root[data-style='glass'] .section-head > .section-title {
+  margin: 0 0 4px;
+  font-size: 20px;
+  line-height: 30px;
+  font-weight: 600;
+}
+
+/* 嵌套面板（details 内分区）不加壳 */
+:root[data-style='glass'] .section .section {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  backdrop-filter: none;
+}
+
+/* 毛玻璃字段间隔 16px，列数沿用共享响应式布局 */
+:root[data-style='glass'] .wt-fields {
+  gap: 16px;
+}
+
+/* ≥900px 左侧栏：header+nav 包进 .options-side，侧栏面板样式 */
+@media (min-width: 900px) {
+  :root[data-style='glass'] .options {
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 28px;
+    align-items: start;
+  }
+  :root[data-style='glass'] .options-side {
+    position: sticky;
+    top: 24px;
+    padding: 20px 16px;
+    border-radius: var(--gcn-radius-panel);
+    background: var(--gcn-surface);
+    border: 1px solid var(--gcn-surface-border);
+    box-shadow: var(--gcn-surface-shadow);
+    backdrop-filter: blur(var(--gcn-surface-blur));
+    -webkit-backdrop-filter: blur(var(--gcn-surface-blur));
+  }
+  :root[data-style='glass'] .options-side .options-header {
+    padding-bottom: 16px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--gcn-border-muted);
+  }
+  :root[data-style='glass'] .options-side .options-logo {
+    width: 40px;
+    height: 40px;
+  }
+  :root[data-style='glass'] .options-side .options-title {
+    font-size: 15px;
+    font-weight: 600;
+  }
+  :root[data-style='glass'] .options-side .options-subtitle,
+  :root[data-style='glass'] .options-side .options-version {
+    font-size: 12px;
+    color: var(--gcn-fg-muted);
+  }
+  :root[data-style='glass'] .options-side .options-nav {
+    flex-direction: column;
+    margin: 0;
+  }
+  :root[data-style='glass'] .options-side .options-nav a {
+    display: block;
+    padding: 10px 12px;
+    border-radius: 10px;
+  }
+}
+
+:root[data-style='glass'] .options-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+:root[data-style='glass'] .options-nav a {
+  color: var(--gcn-fg);
+  background: var(--gcn-btn-bg);
+  border: 1px solid var(--gcn-btn-border);
+  border-radius: 12px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color var(--gcn-duration-fast) var(--gcn-ease), border-color var(--gcn-duration-fast) var(--gcn-ease);
+}
+
+:root[data-style='glass'] .options-nav a:hover {
+  background: var(--gcn-btn-hover-bg);
+}
+
+:root[data-style='glass'] .options-nav a[aria-current='page'] {
+  color: var(--gcn-primary-fg);
+  background: var(--gcn-primary-bg);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+/* 弹出页：主操作占满整行，面板通透 */
+:root[data-style='glass'] .popup {
+  background: transparent;
+}
+
+:root[data-style='glass'] .popup .ui-button-primary,
+:root[data-style='glass'] .popup button[data-test$='-primary'] {
+  width: 100%;
+}
+
+/* 弹出页：面板化 header/footer + 页面渐变底 */
+:root[data-style='glass'] .popup .popup-header,
+:root[data-style='glass'] .popup .popup-footer {
+  background: var(--gcn-surface);
+  border-color: var(--gcn-surface-border);
+  backdrop-filter: blur(var(--gcn-surface-blur));
+  -webkit-backdrop-filter: blur(var(--gcn-surface-blur));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-style='glass'] .options-nav a {
+    transition: none;
+  }
+}

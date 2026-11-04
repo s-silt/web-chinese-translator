@@ -70,7 +70,7 @@ describe('detectUiLanguage', () => {
     ['zh-TW', 'zh-TW'],
     ['zh-HK', 'zh-TW'],
     ['en-US', 'en'],
-    ['ja', 'en'],
+    ['ja', 'ja'],
     [undefined, 'en'],
   ] as const)('%s → %s', (language, ui) => {
     expect(detectUiLanguage(language)).toBe(ui)
@@ -111,7 +111,7 @@ describe('设置取值校验', () => {
   })
 
   it('界面语言', () => {
-    for (const value of ['auto', 'zh-CN', 'zh-TW', 'en']) expect(isUiLanguagePreference(value)).toBe(true)
-    for (const value of ['ja', 'EN', '', undefined]) expect(isUiLanguagePreference(value)).toBe(false)
+    for (const value of ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko']) expect(isUiLanguagePreference(value)).toBe(true)
+    for (const value of ['ja-JP', 'ko_KR', 'EN', '', undefined]) expect(isUiLanguagePreference(value)).toBe(false)
   })
 })

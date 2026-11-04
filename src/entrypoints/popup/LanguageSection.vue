@@ -22,9 +22,11 @@
           :model-value="settings.language"
           :options="pageLanguageOptions"
           :disabled="!ready"
+          :aria-describedby="translationSupported ? 'page-language-hint' : undefined"
           data-test="page-language"
           @update:model-value="setOption('language', $event)"
         />
+        <p v-if="translationSupported" id="page-language-hint" class="select-hint">{{ t('pageLanguageHint') }}</p>
       </li>
     </ul>
   </section>
@@ -38,6 +40,7 @@ import type { UiSelectOption } from '../../components/ui/types'
 import UiSelect from '../../components/ui/UiSelect.vue'
 import { useI18n } from '../../components/ui-preferences'
 import { useSettings } from '../../components/useSettings'
+import { isFirefoxBuild } from '../../shared/extension'
 import { languageEnvironment } from '../../shared/language-env'
 import {
   isPageLocalePreference,
@@ -59,9 +62,12 @@ const LANGUAGE_MESSAGE: Readonly<Record<UiLanguage, MessageKey>> = {
   'zh-CN': 'languageZhCN',
   'zh-TW': 'languageZhTW',
   en: 'languageEn',
+  ja: 'languageJa',
+  ko: 'languageKo',
 }
 
 const { t } = useI18n()
+const translationSupported = !isFirefoxBuild()
 // 读取前显示的是默认值：与顶部总开关一样先不可用
 const { settings, ready, update } = useSettings()
 // 保存失败时在页面顶部提示；再次保存成功时收起
@@ -123,5 +129,10 @@ async function setOption(key: SelectKey, value: string): Promise<void> {
   width: auto;
   min-width: 180px;
   max-width: 100%;
+}
+
+.select-hint {
+  font-size: 12px;
+  color: var(--gcn-fg-muted);
 }
 </style>

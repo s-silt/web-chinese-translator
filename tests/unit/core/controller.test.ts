@@ -16,6 +16,7 @@ const SETTINGS: Settings = {
   language: 'auto',
   uiLanguage: 'auto',
   theme: 'auto',
+  uiStyle: 'classic',
 }
 
 /** 简化的排除规则：前缀匹配（正式实现见 shared/settings） */

@@ -5,10 +5,12 @@ import type { UiLanguage } from '../shared/locale'
 import en from './en'
 import zhCN, { type MessageKey, type Messages } from './zh-CN'
 import zhTW from './zh-TW'
+import ja from './ja'
+import ko from './ko'
 
 export type { MessageKey, Messages }
 
-export const MESSAGES: Readonly<Record<UiLanguage, Messages>> = { 'zh-CN': zhCN, 'zh-TW': zhTW, en }
+export const MESSAGES: Readonly<Record<UiLanguage, Messages>> = { 'zh-CN': zhCN, 'zh-TW': zhTW, en, ja, ko }
 
 /** 文案参数：{名称} → 值 */
 export type MessageParams = Readonly<Record<string, string | number>>

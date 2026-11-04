@@ -26,27 +26,27 @@ afterEach(() => {
 
 describe('initUiPreferences', () => {
   it('按缓存设置界面语言、外观与文档标题', async () => {
-    localStorage.setItem(KEY, JSON.stringify({ uiLanguage: 'zh-TW', theme: 'dark' }))
+    localStorage.setItem(KEY, JSON.stringify({ uiLanguage: 'zh-TW', theme: 'dark', uiStyle: 'classic' }))
     const { initUiPreferences, useI18n } = await load()
     initUiPreferences()
     expect(root.dataset.theme).toBe('dark')
     expect(root.lang).toBe('zh-TW')
-    expect(document.title).toBe('GitHub 中文化')
+    expect(document.title).toBe('網頁漢化助手')
     expect(useI18n().t('enable')).toBe('啟用')
   })
 
   it.each([
     ['无缓存', null],
     ['内容损坏', 'not json'],
-    ['取值非法', JSON.stringify({ uiLanguage: 'ja', theme: 'neon' })],
+    ['取值非法', JSON.stringify({ uiLanguage: 'zz', theme: 'neon' })],
   ])('%s：自动（跟随浏览器）', async (_name, cached) => {
     if (cached !== null) localStorage.setItem(KEY, cached)
     const { initUiPreferences, useI18n, useUiPreferences } = await load()
     initUiPreferences()
     expect(root.dataset.theme).toBeUndefined()
-    expect(useUiPreferences().value).toEqual({ uiLanguage: 'auto', theme: 'auto' })
+    expect(useUiPreferences().value).toEqual({ uiLanguage: 'auto', theme: 'auto', uiStyle: 'classic' })
     expect(useI18n().language.value).toBe('en')
-    expect(document.title).toBe('GitHub Chinese')
+    expect(document.title).toBe('Web Chinese Translator')
   })
 
   it('自动：浏览器语言为中文时用中文', async () => {
@@ -63,7 +63,7 @@ describe('initUiPreferences', () => {
     })
     const { initUiPreferences, useUiPreferences } = await load()
     expect(() => initUiPreferences()).not.toThrow()
-    expect(useUiPreferences().value).toEqual({ uiLanguage: 'auto', theme: 'auto' })
+    expect(useUiPreferences().value).toEqual({ uiLanguage: 'auto', theme: 'auto', uiStyle: 'classic' })
   })
 })
 
@@ -74,15 +74,15 @@ describe('applyUiPreferences', () => {
     const label = computed(() => t('enable'))
     expect(label.value).toBe('Enable')
 
-    applyUiPreferences({ uiLanguage: 'zh-CN', theme: 'light' })
+    applyUiPreferences({ uiLanguage: 'zh-CN', theme: 'light', uiStyle: 'classic' })
     expect(label.value).toBe('启用')
     expect(root.dataset.theme).toBe('light')
     expect(root.lang).toBe('zh-CN')
-    expect(JSON.parse(localStorage.getItem(KEY) ?? 'null')).toEqual({ uiLanguage: 'zh-CN', theme: 'light' })
+    expect(JSON.parse(localStorage.getItem(KEY) ?? 'null')).toEqual({ uiLanguage: 'zh-CN', theme: 'light', uiStyle: 'classic' })
 
-    applyUiPreferences({ uiLanguage: 'zh-CN', theme: 'auto' })
+    applyUiPreferences({ uiLanguage: 'zh-CN', theme: 'auto', uiStyle: 'classic' })
     expect(root.dataset.theme).toBeUndefined()
-    expect(JSON.parse(localStorage.getItem(KEY) ?? 'null')).toEqual({ uiLanguage: 'zh-CN', theme: 'auto' })
+    expect(JSON.parse(localStorage.getItem(KEY) ?? 'null')).toEqual({ uiLanguage: 'zh-CN', theme: 'auto', uiStyle: 'classic' })
   })
 
   it('写不进缓存：照常应用', async () => {
@@ -90,7 +90,7 @@ describe('applyUiPreferences', () => {
       throw new Error('QuotaExceededError')
     })
     const { applyUiPreferences } = await load()
-    expect(() => applyUiPreferences({ uiLanguage: 'en', theme: 'dark' })).not.toThrow()
+    expect(() => applyUiPreferences({ uiLanguage: 'en', theme: 'dark', uiStyle: 'classic' })).not.toThrow()
     expect(root.dataset.theme).toBe('dark')
   })
 })

@@ -1,18 +1,42 @@
 <template>
   <div class="options">
-    <header class="options-header">
-      <img class="options-logo" :src="LOGO_URL" width="32" height="32" alt="" />
-      <div class="options-brand">
-        <h1 class="options-title">{{ t('appName') }}</h1>
-        <span v-if="version" class="options-version" data-test="version">v{{ version }}</span>
-      </div>
-    </header>
+    <aside class="options-side">
+      <header class="options-header">
+        <img class="options-logo" :src="LOGO_URL" width="32" height="32" alt="" />
+        <div class="options-brand">
+          <h1 class="options-title">{{ t('appName') }}</h1>
+          <span class="options-subtitle">{{ t('brandSubtitle') }}</span>
+          <span v-if="version" class="options-version" data-test="version">v{{ version }}</span>
+        </div>
+      </header>
+
+      <nav class="options-nav" aria-label="Sections">
+        <a
+          v-for="link in navLinks"
+          :key="link.target"
+          :href="`#${link.target}`"
+          :aria-current="currentNav === link.target ? 'page' : undefined"
+          :data-test="`nav-${link.target}`"
+          @click="scrollToSection(link.target, $event)"
+        >
+          {{ t(link.key) }}
+        </a>
+      </nav>
+    </aside>
 
     <main class="options-main">
-      <ExcludedPathsSection />
-      <CustomEntriesSection />
-
-      <section class="section" aria-labelledby="about-title">
+      <div v-if="noticeKey && !noticeDismissed" class="section wt-page-notice" role="alert" data-test="wt-page-notice">
+        <span>{{ t(noticeKey) }}</span>
+        <UiButton size="sm" data-test="wt-notice-dismiss" @click="noticeDismissed = true">{{ t('wtNoticeDismiss') }}</UiButton>
+      </div>
+      <DictionarySection v-if="translationSupported" v-show="currentNav === 'wt-dictionary-title'" />
+      <TranslationSection v-if="translationSupported" v-show="showTranslation" :view="translationView" />
+      <div v-show="currentNav === 'github-title'" id="github-title" class="wt-github-group" role="region" :aria-label="t('navGithub')">
+        <ExcludedPathsSection />
+        <CustomEntriesSection />
+      </div>
+      <AppearanceSection v-if="translationSupported" v-show="currentNav === 'appearance-title'" />
+      <section v-show="currentNav === 'about-title'" class="section" aria-labelledby="about-title">
         <h2 id="about-title" class="section-title">{{ t('about') }}</h2>
         <dl class="pairs">
           <dt>{{ t('githubRepository') }}</dt>
@@ -31,10 +55,18 @@
 
 <script setup lang="ts">
 import ToastHost from '../../components/ToastHost.vue'
+import UiButton from '../../components/ui/UiButton.vue'
 import { useI18n, useUiPreferencesSync } from '../../components/ui-preferences'
-import { getExtensionVersion, REPOSITORY_URL } from '../../shared/extension'
+import { getExtensionVersion, isFirefoxBuild, REPOSITORY_URL } from '../../shared/extension'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import AppearanceSection from './AppearanceSection.vue'
 import CustomEntriesSection from './CustomEntriesSection.vue'
+import type { MessageKey } from '../../i18n'
+import DictionarySection from './DictionarySection.vue'
 import ExcludedPathsSection from './ExcludedPathsSection.vue'
+import TranslationSection from './TranslationSection.vue'
+
+const translationSupported = !isFirefoxBuild()
 
 /** 扩展图标（public/ 下的文件）。用绑定而非静态属性：模板里静态的绝对路径会被编译成模块导入 */
 const LOGO_URL = '/icon/96.png'
@@ -44,6 +76,66 @@ const REPOSITORY_LABEL = REPOSITORY_URL.replace(/^https:\/\//, '')
 useUiPreferencesSync()
 const { t } = useI18n()
 const version = getExtensionVersion()
+
+const navLinks: readonly { target: string; key: MessageKey }[] = translationSupported ? [
+  { target: 'wt-general-title', key: 'navGeneral' },
+  { target: 'wt-title', key: 'navModel' },
+  { target: 'wt-dictionary-title', key: 'navSites' },
+  { target: 'github-title', key: 'navGithub' },
+  { target: 'appearance-title', key: 'navAppearance' },
+  { target: 'about-title', key: 'navAbout' },
+] : [
+  { target: 'github-title', key: 'navGithub' },
+  { target: 'about-title', key: 'navAbout' },
+]
+const defaultNav = translationSupported ? 'wt-general-title' : 'github-title'
+
+function resolveNav(hash: string): string {
+  const raw = hash.replace(/^#/, '')
+  const target = raw === 'wt-site-settings-title' ? 'wt-dictionary-title' : raw
+  return navLinks.some((link) => link.target === target) ? target : defaultNav
+}
+
+const currentNav = ref(resolveNav(window.location.hash))
+const showTranslation = computed(() =>
+  ['wt-general-title', 'wt-title', 'wt-dictionary-title'].includes(currentNav.value),
+)
+const translationView = computed<'general' | 'model' | 'sites'>(() =>
+  currentNav.value === 'wt-title' ? 'model' : currentNav.value === 'wt-dictionary-title' ? 'sites' : 'general',
+)
+const notice = new URLSearchParams(window.location.search).get('notice')
+const noticeKey: MessageKey | undefined = notice === 'disabled'
+  ? 'wtPageDisabled'
+  : notice === 'page-unavailable' ? 'wtPageUnavailable' : undefined
+const noticeDismissed = ref(false)
+
+async function focusSection(target: string): Promise<void> {
+  await nextTick()
+  if (target !== currentNav.value) return
+  const element = document.getElementById(target)
+  if (!(element instanceof HTMLElement)) return
+  element.setAttribute('tabindex', '-1')
+  if (document.activeElement !== element) element.focus({ preventScroll: true })
+  element.scrollIntoView?.({ behavior: 'auto', block: 'start' })
+}
+
+function scrollToSection(target: string, event: Event): void {
+  event.preventDefault()
+  currentNav.value = resolveNav(`#${target}`)
+  window.location.hash = currentNav.value
+  void focusSection(currentNav.value)
+}
+
+function onHashChange(): void {
+  currentNav.value = resolveNav(window.location.hash)
+  void focusSection(currentNav.value)
+}
+
+onMounted(() => {
+  window.addEventListener('hashchange', onHashChange)
+  void focusSection(currentNav.value)
+})
+onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange))
 </script>
 
 <style scoped>
@@ -91,7 +183,26 @@ const version = getExtensionVersion()
 
 .options-main {
   display: grid;
-  gap: 40px;
+  gap: 28px;
+}
+
+.wt-github-group {
+  display: grid;
+  gap: 28px;
+}
+
+.wt-page-notice {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.wt-page-notice > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* 窄屏时值换到名称下方 */
@@ -100,11 +211,16 @@ const version = getExtensionVersion()
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 4px 16px;
+  gap: 6px 16px;
   margin: 0;
-  padding: 12px 16px;
-  border: 1px solid var(--gcn-border);
+  padding: 14px 16px;
+  background: var(--gcn-bg-muted);
+  border: 1px solid var(--gcn-border-muted);
   border-radius: var(--gcn-radius-lg);
+}
+
+.pairs dt {
+  font-weight: 500;
 }
 
 .pairs dd {
@@ -121,5 +237,33 @@ const version = getExtensionVersion()
 .link:hover {
   text-decoration: underline;
   text-underline-offset: 0.2em;
+}
+
+.options-subtitle {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--gcn-eyebrow);
+  text-transform: uppercase;
+}
+
+/* 分区导航：经典风格为胶囊标签；cyber/glass 在 styles/*.css 中覆盖颜色与排布 */
+.options-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 24px;
+}
+
+.options-nav a {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--gcn-border);
+  color: var(--gcn-fg);
+  text-decoration: none;
+}
+
+.options-nav a[aria-current='page'] {
+  color: var(--gcn-accent);
+  background: var(--gcn-selection);
 }
 </style>

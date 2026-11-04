@@ -10,6 +10,7 @@ import { LOCALE_SCRIPT_FILES } from '../shared/locale-loader'
 import { syncLocaleScript } from '../shared/locale-script'
 import { isBackgroundMessage, isContentStatus, type ContentMessage } from '../shared/messages'
 import { getSettings, watchSettings, type Settings } from '../shared/settings'
+import { installTranslationBackground } from '../translation/background'
 
 type MessageSender = Browser.runtime.MessageSender
 
@@ -156,4 +157,5 @@ export default defineBackground(() => {
   globalThis.addEventListener('languagechange', () => scheduleLocaleScriptSync())
   void syncBadgeFromStorage()
   scheduleLocaleScriptSync()
+  if (!isFirefoxBuild()) installTranslationBackground()
 })

@@ -2,7 +2,7 @@
 
 .section {
   display: grid;
-  gap: 12px;
+  gap: 16px;
 }
 
 .section-head {
@@ -10,22 +10,24 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--gcn-border);
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--gcn-border-muted);
 }
 
 .section > .section-title {
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--gcn-border);
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--gcn-border-muted);
 }
 
 .section-title {
   font-size: 20px;
-  font-weight: 400;
+  line-height: 30px;
+  font-weight: 500;
 }
 
 .section-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  flex-wrap: wrap;
 }
