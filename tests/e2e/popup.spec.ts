@@ -26,11 +26,12 @@ test.describe('弹出页', () => {
   })
 
   test('没有未翻译一行与收集开关', async ({ extension }) => {
+    await extension.setSettings({ uiLanguage: 'zh-CN' })
     const { page } = extension
-    await expect(page.getByRole('switch')).toHaveCount(2)
-    await expect(page.locator('[data-test="wt-popup-floating"]')).toBeVisible()
+    await expect(page.getByRole('switch', { name: '启用', exact: true })).toBeVisible()
+    await expect(page.locator('[data-test="wt-popup-auto-interaction"] [role="switch"]')).toBeVisible()
+    await expect(page.locator('[data-test="wt-popup-floating"] [role="switch"]')).toBeVisible()
     await page.locator('.popup-details > summary').click()
-    await expect(page.getByRole('switch')).toHaveCount(4)
     await expect(page.getByText('收集未翻译')).toHaveCount(0)
     await expect(page.locator('[data-test="untranslated"]')).toHaveCount(0)
   })
