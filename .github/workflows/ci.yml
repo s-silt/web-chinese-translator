@@ -81,11 +81,13 @@ jobs:
         run: |
           bun install --frozen-lockfile
           bunx playwright install --with-deps chromium
+          sudo apt-get install -y python3-gi gir1.2-atspi-2.0 at-spi2-core dbus-x11
 
       - name: 构建实际扩展并运行离线浏览器测试
         run: |
           bun run build
-          xvfb-run -a bunx playwright test --project=offline --workers=1 --retries=0 --max-failures=1
+          unset NO_AT_BRIDGE
+          xvfb-run -a dbus-run-session -- bunx playwright test --project=offline --workers=1 --retries=0 --max-failures=1
 
       - name: 保存浏览器失败证据
         if: failure()

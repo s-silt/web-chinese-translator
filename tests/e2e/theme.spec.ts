@@ -6,6 +6,7 @@ import {
   offlineTest as test,
   EXTENSION_PATH,
   acceptOwnedPermission,
+  NATIVE_ACCESSIBILITY_ARGS,
   installClosedShadowInspection,
   waitForSiteScriptRegistration,
   waitForSiteContentReady,
@@ -62,6 +63,7 @@ test.describe('划词卡片风格', () => {
         `--disable-extensions-except=${EXTENSION_PATH}`,
         `--load-extension=${EXTENSION_PATH}`,
         '--lang=zh-CN',
+        ...NATIVE_ACCESSIBILITY_ARGS,
         '--apps-gallery-install-auto-confirm-for-tests=accept',
         '--host-resolver-rules=MAP reader.fixture.test 127.0.0.1',
         '--no-proxy-server',
@@ -108,14 +110,18 @@ test.describe('划词卡片风格', () => {
           })
           await chrome.storage.sync.set({ settings: { uiStyle: style } })
         }, { url: api.url, style })
-        // reader 主机权限：先发起 request（挂起等弹窗），UIA 点允许
-        void options.evaluate(() => {
+        // reader 主机权限：先发起 request（挂起等弹窗），原生辅助功能确认允许
+        const permissionRequest = options.evaluate(() => {
           const { chrome } = globalThis as unknown as {
             chrome: { permissions: { request(query: { origins: string[] }): Promise<boolean> } }
           }
           return chrome.permissions.request({ origins: ['http://*/*', 'https://*/*'] })
         })
+        void permissionRequest.catch((error: unknown) =>
+          console.error('Fixture permission request failed:', error),
+        )
         await acceptOwnedPermission(options, ['http://*/*', 'https://*/*'])
+        expect(await permissionRequest).toBe(true)
         const targetUrl = `${readingUrl()}/page`
         await waitForSiteScriptRegistration(options, {
           url: targetUrl,

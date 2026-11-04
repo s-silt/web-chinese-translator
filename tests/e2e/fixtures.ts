@@ -20,6 +20,9 @@ export const EXTENSION_PATH = resolve(
   process.env.E2E_EXTENSION?.trim() || '.output/chrome-mv3',
 )
 
+/** Linux 下原生权限确认依赖 AT-SPI 可访问树；--force-renderer-accessibility 让 Chromium 暴露它 */
+export const NATIVE_ACCESSIBILITY_ARGS = process.platform === 'linux' ? ['--force-renderer-accessibility'] : []
+
 const FIXTURE_DIR = resolve(import.meta.dirname, 'fixtures')
 
 interface FixtureFile {
@@ -259,7 +262,7 @@ export const test = base.extend<ExtensionFixtures>({
       locale: 'en-US',
       viewport: { width: 1440, height: 900 },
       // 浏览器界面语言用简体中文：扩展界面（自动识别）与页面翻译语言都按简体，断言的界面文字与之对应
-      args: [`--disable-extensions-except=${EXTENSION_PATH}`, `--load-extension=${EXTENSION_PATH}`, '--lang=zh-CN', '--host-resolver-rules=MAP reader.fixture.test 127.0.0.1', '--no-proxy-server'],
+      args: [`--disable-extensions-except=${EXTENSION_PATH}`, `--load-extension=${EXTENSION_PATH}`, '--lang=zh-CN', '--host-resolver-rules=MAP reader.fixture.test 127.0.0.1', '--no-proxy-server', ...NATIVE_ACCESSIBILITY_ARGS],
     })
     await installClosedShadowInspection(context)
     await use(context)
@@ -712,15 +715,16 @@ export function invokeOwnedSelectionMenu(page: Page): Promise<void> {
   return invokeOwnedContextMenu(page, 'WT_MULTILINE_PROBE')
 }
 
-/** Windows 下原生主机权限弹窗：只点本测试浏览器进程的按钮 */
+/** Windows/Linux 下原生主机权限弹窗：只点本测试浏览器进程的按钮 */
 export async function acceptOwnedPermission(page: Page, origins: string[]): Promise<void> {
-  const granted = await page.evaluate(async (patterns) => {
-    const { chrome } = globalThis as unknown as {
-      chrome: { permissions: { contains(query: { origins: string[] }): Promise<boolean> } }
-    }
-    return chrome.permissions.contains({ origins: patterns })
-  }, origins)
-  if (granted || process.platform !== 'win32') return
+  const hasPermission = (): Promise<boolean> =>
+    page.evaluate(async (patterns) => {
+      const { chrome } = globalThis as unknown as {
+        chrome: { permissions: { contains(query: { origins: string[] }): Promise<boolean> } }
+      }
+      return chrome.permissions.contains({ origins: patterns })
+    }, origins)
+  if (await hasPermission() || (process.platform !== 'win32' && process.platform !== 'linux')) return
   const browser = page.context().browser()
   if (browser === null) throw new Error('Missing fixture browser')
   const session = await browser.newBrowserCDPSession()
@@ -728,6 +732,55 @@ export async function acceptOwnedPermission(page: Page, origins: string[]): Prom
   await session.detach()
   const ownedPid = processInfo.find((entry) => entry.type === 'browser')?.id
   if (ownedPid === undefined || !Number.isInteger(ownedPid)) throw new Error('Missing fixture process')
+  if (process.platform === 'linux') {
+    const script = `
+import sys
+import time
+from collections import deque
+import gi
+
+gi.require_version('Atspi', '2.0')
+from gi.repository import Atspi, GLib
+
+pid = int(sys.argv[1])
+buttons: set[str] = set()
+Atspi.init()
+Atspi.set_timeout(100, 1000)
+deadline = time.monotonic() + 8
+while time.monotonic() < deadline:
+    try:
+        desktop = Atspi.get_desktop(0)
+        for index in range(desktop.get_child_count()):
+            app = desktop.get_child_at_index(index)
+            if app is None or app.get_process_id() != pid:
+                continue
+            pending = deque([app])
+            visited = 0
+            while pending and visited < 2000 and time.monotonic() < deadline:
+                node = pending.popleft()
+                visited += 1
+                if node.get_role() == Atspi.Role.PUSH_BUTTON:
+                    name = node.get_name().strip()
+                    buttons.add(name)
+                    state = node.get_state_set()
+                    if name in {'允许', 'Allow', '添加权限', 'Add permissions'} and state.contains(Atspi.StateType.ENABLED) and state.contains(Atspi.StateType.SENSITIVE):
+                        action = node.get_action_iface()
+                        if action is not None and action.get_n_actions() > 0 and action.do_action(0):
+                            print('accepted', flush=True)
+                            sys.exit(0)
+                for child_index in range(node.get_child_count()):
+                    child = node.get_child_at_index(child_index)
+                    if child is not None:
+                        pending.append(child)
+    except GLib.Error as error:
+        print(f'Native accessibility tree changed: {error.message}', file=sys.stderr, flush=True)
+    time.sleep(0.1)
+raise RuntimeError(f'No native permission button in owned browser {pid}; buttons={sorted(buttons)}')
+`
+    execFileSync('/usr/bin/python3', ['-c', script, String(ownedPid)], { encoding: 'utf8', timeout: 12_000 })
+    await expect.poll(hasPermission, { timeout: 5_000 }).toBe(true)
+    return
+  }
   const script = `
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Add-Type -AssemblyName UIAutomationClient

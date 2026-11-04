@@ -10,6 +10,7 @@ import {
   test,
   acceptOwnedPermission,
   EXTENSION_PATH,
+  NATIVE_ACCESSIBILITY_ARGS,
   inspectClosedShadowPage,
   installClosedShadowInspection,
   waitForSiteScriptRegistration,
@@ -46,6 +47,7 @@ test.describe('网页翻译真实流程', () => {
       ignoreDefaultArgs: ['--disable-back-forward-cache'],
       viewport,
       args: [
+        ...NATIVE_ACCESSIBILITY_ARGS,
         `--disable-extensions-except=${EXTENSION_PATH}`,
         `--load-extension=${EXTENSION_PATH}`,
         '--lang=zh-CN',
