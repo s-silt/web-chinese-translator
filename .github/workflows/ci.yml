@@ -85,7 +85,7 @@ jobs:
       - name: 构建实际扩展并运行离线浏览器测试
         run: |
           bun run build
-          xvfb-run -a bunx playwright test --project=offline --workers=1
+          xvfb-run -a bunx playwright test --project=offline --workers=1 --retries=0 --max-failures=1
 
       - name: 保存浏览器失败证据
         if: failure()
