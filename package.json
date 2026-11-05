@@ -79,7 +79,7 @@
     "slate-dom": "0.147.3",
     "slate-react": "0.147.5",
     "tsx": "^4.23.15",
-    "typescript": "~5.9.3",
+    "typescript": "~7.0.2",
     "typescript-eslint": "^8.72.0",
     "vitest": "^5.0.5",
     "vue-tsc": "^3.3.13",
