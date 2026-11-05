@@ -1,8 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { siteScriptMatches } from '../../../src/translation/registration'
+import {
+  INPUT_FRAME_SCRIPT_FILES,
+  INPUT_FRAME_SCRIPT_ID,
+  isYouTubeInputFramePair,
+  isYouTubeLiveChatUrl,
+  isYouTubePageUrl,
+  readInputFrameDocuments,
+  readInputFrameSnapshot,
+} from '../../../src/translation/input-frame'
+import { installSiteScriptSync, SITE_SCRIPT_ID, siteScriptMatches, syncAllSiteScripts } from '../../../src/translation/registration'
 import { customDictionariesItem } from '../../../src/translation/custom-dictionaries'
 import { fakeBrowser } from 'wxt/testing/fake-browser'
-import { installSiteScriptSync, syncAllSiteScripts } from '../../../src/translation/registration'
 import { translationConfigItem, DEFAULT_TRANSLATION_CONFIG } from '../../../src/translation/config'
 import { settingsItem, DEFAULT_SETTINGS } from '../../../src/shared/settings'
 import { fakeContentScripts } from '../shared/fake-scripting'
@@ -274,6 +282,28 @@ describe('网站运行范围脚本注册', () => {
     expect(denied).toEqual([])
   })
 
+  it('仅开启视频字幕或输入翻译时匹配已授权全站并遵守网站运行范围', async () => {
+    for (const flag of [{ videoSubtitlesEnabled: true }, { inputTranslationEnabled: true }] as const) {
+      const matches = await siteScriptMatches({
+        ...DEFAULT_TRANSLATION_CONFIG,
+        selectionPopupEnabled: false,
+        floatingButtonEnabled: false,
+        ...flag,
+      })
+      expect(matches).toEqual(['http://*/*', 'https://*/*'])
+
+      const scoped = await siteScriptMatches({
+        ...DEFAULT_TRANSLATION_CONFIG,
+        selectionPopupEnabled: false,
+        floatingButtonEnabled: false,
+        siteScopeMode: 'include',
+        siteScopeHosts: ['youtube.com'],
+        ...flag,
+      })
+      expect(scoped).toEqual(['http://*.youtube.com/*', 'https://*.youtube.com/*'])
+    }
+  })
+
   it('floating 开启时 include 收窄匹配，exclude 仍写入排除', async () => {
     const included = await siteScriptMatches({
       ...DEFAULT_TRANSLATION_CONFIG,
@@ -318,3 +348,307 @@ describe('网站运行范围脚本注册', () => {
     expect(scripts.registered).toHaveLength(1)
   })
 })
+
+describe('YouTube live_chat 输入子框架注册与同步', () => {
+  it('URL 纯函数与快照解析严格校验同源 YouTube live_chat', async () => {
+    expect(isYouTubePageUrl('https://www.youtube.com/watch?v=fixture')).toBe(true)
+    expect(isYouTubePageUrl('https://youtube.com/live/fixture')).toBe(true)
+    expect(isYouTubePageUrl('http://www.youtube.com/watch?v=fixture')).toBe(false)
+    expect(isYouTubePageUrl('https://www.youtube.com:8443/watch?v=fixture')).toBe(false)
+    expect(isYouTubePageUrl('https://user:pass@www.youtube.com/watch?v=fixture')).toBe(false)
+    expect(isYouTubePageUrl('https://music.youtube.com/watch?v=fixture')).toBe(false)
+    expect(isYouTubePageUrl('https://youtube.com.evil.test/watch?v=fixture')).toBe(false)
+
+    expect(isYouTubeLiveChatUrl('https://www.youtube.com/live_chat?v=fixture')).toBe(true)
+    expect(isYouTubeLiveChatUrl('https://youtube.com/live_chat?is_popout=1')).toBe(true)
+    expect(isYouTubeLiveChatUrl('https://www.youtube.com/live_chat_replay?v=fixture')).toBe(false)
+    expect(isYouTubeLiveChatUrl('https://www.youtube.com/live_chat/extra')).toBe(false)
+    expect(isYouTubeLiveChatUrl('https://www.youtube.com/watch?v=fixture')).toBe(false)
+
+    expect(
+      isYouTubeInputFramePair(
+        'https://www.youtube.com/watch?v=fixture',
+        'https://www.youtube.com/live_chat?v=fixture',
+      ),
+    ).toBe(true)
+    expect(
+      isYouTubeInputFramePair(
+        'https://youtube.com/watch?v=fixture',
+        'https://youtube.com/live_chat?v=fixture',
+      ),
+    ).toBe(true)
+    expect(
+      isYouTubeInputFramePair(
+        'https://www.youtube.com/watch?v=fixture',
+        'https://youtube.com/live_chat?v=fixture',
+      ),
+    ).toBe(false)
+    expect(
+      isYouTubeInputFramePair(
+        'https://outer.fixture.test/player',
+        'https://www.youtube.com/live_chat?v=fixture',
+      ),
+    ).toBe(false)
+
+    vi.spyOn(fakeBrowser.scripting, 'executeScript').mockResolvedValueOnce([
+      {
+        frameId: 0,
+        documentId: 'top-doc',
+        result: {
+          url: 'https://www.youtube.com/watch?v=fixture',
+          topUrl: 'https://www.youtube.com/watch?v=fixture',
+          focused: false,
+        },
+      },
+      {
+        frameId: 2,
+        documentId: 'chat-doc',
+        result: {
+          url: 'https://www.youtube.com/live_chat?v=fixture',
+          topUrl: 'https://www.youtube.com/watch?v=fixture',
+          focused: true,
+        },
+      },
+      {
+        frameId: 3,
+        documentId: '',
+        result: {
+          url: 'https://www.youtube.com/live_chat?v=fixture',
+          topUrl: 'https://www.youtube.com/watch?v=fixture',
+          focused: true,
+        },
+      },
+      {
+        frameId: -1,
+        documentId: 'neg-doc',
+        result: {
+          url: 'https://www.youtube.com/live_chat?v=fixture',
+          topUrl: 'https://www.youtube.com/watch?v=fixture',
+          focused: true,
+        },
+      },
+      {
+        frameId: 4,
+        documentId: 'bad-result',
+        result: undefined,
+      },
+    ] as never)
+    expect(await readInputFrameDocuments(7)).toEqual([
+      {
+        frameId: 0,
+        documentId: 'top-doc',
+        snapshot: {
+          url: 'https://www.youtube.com/watch?v=fixture',
+          topUrl: 'https://www.youtube.com/watch?v=fixture',
+          focused: false,
+        },
+      },
+      {
+        frameId: 2,
+        documentId: 'chat-doc',
+        snapshot: {
+          url: 'https://www.youtube.com/live_chat?v=fixture',
+          topUrl: 'https://www.youtube.com/watch?v=fixture',
+          focused: true,
+        },
+      },
+    ])
+  })
+
+  it('独立注册 wt-input-frames (allFrames: true) 而 wt-sites 保持 allFrames: false；关闭 input、总开关、撤权或排除时注销子脚本', async () => {
+    const scripts = fakeContentScripts()
+    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [] as never)
+    vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async () => ({ ok: true }))
+
+    await translationConfigItem.setValue({
+      ...CONFIG,
+      inputTranslationEnabled: true,
+      videoSubtitlesEnabled: true,
+    })
+    await syncAllSiteScripts()
+
+    const mainScript = scripts.registered.find((s) => s.id === SITE_SCRIPT_ID)
+    const frameScript = scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)
+    expect(mainScript).toMatchObject({
+      id: SITE_SCRIPT_ID,
+      js: ['web-translate.js'],
+      allFrames: false,
+      persistAcrossSessions: true,
+    })
+    expect(frameScript).toMatchObject({
+      id: INPUT_FRAME_SCRIPT_ID,
+      js: ['input-frame.js'],
+      matches: ['https:// www.youtube.com/live_chat*'.replace(' ', ''), 'https://youtube.com/live_chat*'],
+      excludeMatches: [],
+      allFrames: true,
+      persistAcrossSessions: true,
+    })
+
+    // 网站范围只允许 www.youtube.com 时只注册 www
+    await translationConfigItem.setValue({
+      ...CONFIG,
+      inputTranslationEnabled: true,
+      siteScopeMode: 'include',
+      siteScopeHosts: ['www.youtube.com'],
+    })
+    await syncAllSiteScripts()
+    expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toMatchObject({
+      matches: ['https://www.youtube.com/live_chat*'],
+    })
+
+    // 关闭 inputTranslationEnabled 注销子脚本，保留主脚本
+    await translationConfigItem.setValue({
+      ...CONFIG,
+      inputTranslationEnabled: false,
+      videoSubtitlesEnabled: true,
+    })
+    await syncAllSiteScripts()
+    expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toBeUndefined()
+    expect(scripts.registered.find((s) => s.id === SITE_SCRIPT_ID)).toBeDefined()
+
+    // 重新开启后再测排除 youtube.com 注销子脚本
+    await translationConfigItem.setValue({
+      ...CONFIG,
+      inputTranslationEnabled: true,
+      excludedHosts: ['youtube.com'],
+    })
+    await syncAllSiteScripts()
+    expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toBeUndefined()
+
+    // 恢复非排除后测试撤权注销子脚本
+    await translationConfigItem.setValue({
+      ...CONFIG,
+      inputTranslationEnabled: true,
+      excludedHosts: [],
+    })
+    await syncAllSiteScripts()
+    expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toBeDefined()
+
+    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (perm) => {
+      const origins = perm.origins ?? []
+      return !origins.some((o) => o.includes('youtube.com'))
+    })
+    await syncAllSiteScripts()
+    expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toBeUndefined()
+
+    // 恢复权限后测试总开关关闭注销子脚本
+    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async () => true)
+    await syncAllSiteScripts()
+    expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toBeDefined()
+
+    await settingsItem.setValue({ ...DEFAULT_SETTINGS, enabled: false })
+    await syncAllSiteScripts()
+    expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toBeUndefined()
+  })
+
+  it('已打开 YouTube 标签页只注入发现的同源 live_chat documentId，撤权发送专用 stop 且不停止父字幕', async () => {
+    const ytTopUrl = 'https://www.youtube.com/watch?v=fixture'
+    const tabs = [
+      { id: 10, url: ytTopUrl },
+      { id: 11, url: 'https://app.devin.ai/work' },
+    ]
+    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => tabs as never)
+
+    const sent: Array<{ tabId: number; message: unknown; options?: unknown }> = []
+    vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(
+      async (tabId: number, message: unknown, options?: unknown) => {
+        sent.push({ tabId, message, options })
+        return { ok: true }
+      },
+    )
+
+    const injectedTargets: Array<{ target: unknown; files?: unknown }> = []
+    vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation((async (injection: {
+      target: unknown
+      files?: unknown
+      func?: unknown
+    }) => {
+      if (injection.func === readInputFrameSnapshot) {
+        return [
+          {
+            frameId: 0,
+            documentId: 'yt-top-doc',
+            result: { url: ytTopUrl, topUrl: ytTopUrl, focused: false },
+          },
+          {
+            frameId: 2,
+            documentId: 'yt-live-chat-doc',
+            result: {
+              url: 'https://www.youtube.com/live_chat?v=fixture',
+              topUrl: ytTopUrl,
+              focused: true,
+            },
+          },
+          {
+            frameId: 3,
+            documentId: 'yt-replay-doc',
+            result: {
+              url: 'https://www.youtube.com/live_chat_replay?v=fixture',
+              topUrl: ytTopUrl,
+              focused: false,
+            },
+          },
+          {
+            frameId: 4,
+            documentId: 'yt-cross-origin-doc',
+            result: {
+              url: 'https://youtube.com/live_chat?v=fixture',
+              topUrl: ytTopUrl,
+              focused: false,
+            },
+          },
+        ]
+      }
+      injectedTargets.push({ target: injection.target, files: injection.files })
+      return []
+    }) as never)
+
+    await translationConfigItem.setValue({
+      ...CONFIG,
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+    })
+    await syncAllSiteScripts()
+
+    expect(injectedTargets).toEqual([
+      {
+        target: { tabId: 10, documentIds: ['yt-live-chat-doc'] },
+        files: INPUT_FRAME_SCRIPT_FILES,
+      },
+    ])
+    expect(sent).toContainEqual({
+      tabId: 10,
+      message: { type: 'wt:refresh-input-frame' },
+      options: undefined,
+    })
+    expect(sent).toContainEqual({
+      tabId: 10,
+      message: { type: 'wt:refresh-input-frame' },
+      options: { documentId: 'yt-live-chat-doc' },
+    })
+    expect(sent.some((item) => item.tabId === 11 && (item.message as { type?: string }).type === 'wt:refresh-input-frame')).toBe(false)
+
+    // 撤销 YouTube 权限或关闭输入翻译：发送专用 wt:stop-input-frame，不向父页面发 wt:stop（不停止父视频字幕）
+    sent.length = 0
+    injectedTargets.length = 0
+    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (perm) => {
+      const origins = perm.origins ?? []
+      return !origins.some((o) => o.includes('youtube.com'))
+    })
+    await syncAllSiteScripts()
+
+    expect(injectedTargets).toEqual([])
+    expect(sent).toContainEqual({
+      tabId: 10,
+      message: { type: 'wt:stop-input-frame' },
+      options: undefined,
+    })
+    expect(sent.some((item) => (item.message as { type?: string }).type === 'wt:stop')).toBe(false)
+    expect(sent).toContainEqual({
+      tabId: 10,
+      message: { type: 'wt:refresh' },
+      options: { frameId: 0 },
+    })
+  })
+})
+

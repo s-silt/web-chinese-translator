@@ -9,7 +9,8 @@ import {
 describe('isTargetLanguage', () => {
   it('接受枚举值、拒绝其他', () => {
     for (const lang of TARGET_LANGUAGES) expect(isTargetLanguage(lang)).toBe(true)
-    expect(isTargetLanguage('fr')).toBe(false)
+    expect(isTargetLanguage('xx')).toBe(false)
+    expect(isTargetLanguage('auto')).toBe(false)
     expect(isTargetLanguage(1)).toBe(false)
   })
 })
@@ -27,6 +28,14 @@ describe('looksLikeTargetLanguage', () => {
     expect(looksLikeTargetLanguage('안녕', 'ko')).toBe(true)
     expect(looksLikeTargetLanguage('你好', 'zh-CN')).toBe(true)
     expect(looksLikeTargetLanguage('你好', 'en')).toBe(false)
+  })
+
+  it('es/fr/de/pt 不能只凭 ASCII 判定', () => {
+    for (const language of ['es', 'fr', 'de', 'pt'] as const) {
+      expect(looksLikeTargetLanguage('Hello', language)).toBe(false)
+      expect(looksLikeTargetLanguage('Bonjour', language)).toBe(false)
+      expect(joinsWithoutSpaces(language)).toBe(false)
+    }
   })
 })
 

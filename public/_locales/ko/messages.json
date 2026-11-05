@@ -13,5 +13,8 @@
   },
   "cmdTranslateSelection": {
     "message": "선택한 텍스트 번역"
+  },
+  "cmdTranslateInput": {
+    "message": "입력 번역 및 바꾸기"
   }
 }

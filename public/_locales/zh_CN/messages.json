@@ -13,5 +13,8 @@
   },
   "cmdTranslateSelection": {
     "message": "翻译选中文字"
+  },
+  "cmdTranslateInput": {
+    "message": "翻译并替换输入"
   }
 }

@@ -90,17 +90,22 @@ describe.skipIf(!App)('设置页组件', () => {
     it('默认常用设置；分区保留单实例及原有控件', async () => {
       const wrapper = await render()
       expect(wrapper.get('h1').text()).toBe('网页汉化助手')
-      expect(headings(wrapper)).toEqual(['基础界面词库', '常用设置', '排除路径（GitHub）', '自定义词条（GitHub）', '外观', '关于'])
+      expect(headings(wrapper)).toEqual(['基础界面词库', '常用设置', '常规', '语言', '排除路径（GitHub）', '自定义词条（GitHub）', '外观', '关于'])
       expect(wrapper.get('[data-test="wt-general-view"]').isVisible()).toBe(true)
       expect(wrapper.get('[data-test="wt-model-view"]').isVisible()).toBe(false)
       expect(wrapper.get('[data-test="wt-sites-view"]').isVisible()).toBe(false)
-      expect(wrapper.findAll('[role="switch"]')).toHaveLength(28)
+      expect(wrapper.findAll('[role="switch"]')).toHaveLength(32)
+      expect(wrapper.get('[data-test="wt-video-subtitles-toggle"] [role="switch"]').attributes('aria-checked')).toBe('false')
+      expect(wrapper.get('[data-test="wt-input-translation-toggle"] [role="switch"]').attributes('aria-checked')).toBe('false')
       expect(wrapper.get('[data-test="wt-dict-devin"]').find('[role="switch"]').exists()).toBe(true)
       expect(wrapper.get('[data-test="wt-dict-cursor"]').find('[role="switch"]').exists()).toBe(true)
-      // 接口协议、模型、源语言、目标语言、辅助模式、网站运行范围，外观里的界面风格与主题
-      expect(wrapper.findAll('[role="combobox"]')).toHaveLength(8)
+      // 接口协议、模型、源语言、目标语言、输入目标语言、辅助模式、网站运行范围，外观里的界面风格与主题，加上 GitHub 界面语言与词典语言里实际渲染的下拉
+      expect(wrapper.find('[data-test="ui-language"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="page-language"]').exists()).toBe(true)
+      expect(wrapper.findAll('[role="combobox"]')).toHaveLength(11)
       expect(wrapper.find('[data-test="wt-assist-mode"]').exists()).toBe(true)
-      expect(wrapper.text()).not.toContain('快捷键')
+      expect(wrapper.find('[data-test="wt-shortcuts"]').exists()).toBe(false)
+      expect(wrapper.text()).toContain('输入翻译快捷键在自动弹窗关闭时仍可直接替换')
     })
 
     it('标题后紧跟版本号（不在标题内）', async () => {
@@ -125,8 +130,8 @@ describe.skipIf(!App)('设置页组件', () => {
     })
 
     it.each([
-      ['en', 'Web Chinese Translator', ['Built-in UI glossary', 'General settings', 'Excluded paths (GitHub)', 'Custom entries (GitHub)', 'Appearance', 'About'], 'Upstream (github-chinese)'],
-      ['zh-TW', '網頁漢化助手', ['基礎介面詞庫', '常用設定', '排除路徑（GitHub）', '自訂詞條（GitHub）', '外觀', '關於'], 'GitHub 漢化上游'],
+      ['en', 'Web Chinese Translator', ['Built-in UI glossary', 'General settings', 'General', 'Language', 'Excluded paths (GitHub)', 'Custom entries (GitHub)', 'Appearance', 'About'], 'Upstream (github-chinese)'],
+      ['zh-TW', '網頁漢化助手', ['基礎介面詞庫', '常用設定', '一般', '語言', '排除路徑（GitHub）', '自訂詞條（GitHub）', '外觀', '關於'], 'GitHub 漢化上游'],
     ] as const)('界面语言随设置（如在弹出页修改）切换：%s', async (uiLanguage, title, sections, repository) => {
       const wrapper = await render()
       await updateSettings({ uiLanguage })

@@ -185,13 +185,14 @@ describe('悬浮入口选项', () => {
 })
 
 describe('快捷键展示与管理', () => {
-  it('commands.getAll 返回两项时渲染两行，空 shortcut 显示未设置，点击管理调用 tabs.create', async () => {
+  it('commands.getAll 返回三项时渲染三行，空 shortcut 显示未设置，点击管理调用 tabs.create', async () => {
     replies({
       'wt:get-config': () => ({ ok: true, config: CONFIG, keyState: 'ready' }),
     })
     vi.spyOn(fakeBrowser.commands, 'getAll').mockResolvedValue([
       { name: 'toggle-page-translation', shortcut: 'Alt+T' },
       { name: 'translate-selection', shortcut: '' },
+      { name: 'translate-input', shortcut: 'Alt+Y' },
       { name: '_execute_action', shortcut: 'Alt+A' },
     ] as never)
     const create = vi.spyOn(fakeBrowser.tabs, 'create').mockResolvedValue({} as never)
@@ -199,11 +200,13 @@ describe('快捷键展示与管理', () => {
     await flushPromises()
     const block = wrapper.get('[data-test="wt-shortcuts"]')
     const items = block.findAll('.wt-shortcut-list > li')
-    expect(items).toHaveLength(2)
+    expect(items).toHaveLength(3)
     expect(items[0]!.text()).toContain(en.wtCmdTogglePage)
     expect(items[0]!.get('kbd').text()).toBe('Alt+T')
     expect(items[1]!.text()).toContain(en.wtCmdTranslateSelection)
     expect(items[1]!.get('kbd').text()).toBe(en.wtShortcutUnset)
+    expect(items[2]!.text()).toContain(en.wtCmdTranslateInput)
+    expect(items[2]!.get('kbd').text()).toBe('Alt+Y')
     await wrapper.get('[data-test="wt-shortcuts-manage"]').trigger('click')
     await flushPromises()
     expect(create).toHaveBeenCalledWith({ url: 'chrome://extensions/shortcuts' })
@@ -234,14 +237,15 @@ describe('快捷键展示与管理', () => {
     vi.spyOn(fakeBrowser.commands, 'getAll').mockResolvedValue([
       { name: 'toggle-page-translation', shortcut: 'Alt+T' },
       { name: 'translate-selection', shortcut: 'Alt+S' },
+      { name: 'translate-input', shortcut: 'Alt+Y' },
     ] as never)
     const wrapper = mount(TranslationSection)
     await flushPromises()
     const items = wrapper.get('[data-test="wt-shortcuts"]').findAll('.wt-shortcut-list > li > span')
-    expect(items.map((item) => item.text())).toEqual([zhCN.wtCmdTogglePage, zhCN.wtCmdTranslateSelection])
+    expect(items.map((item) => item.text())).toEqual([zhCN.wtCmdTogglePage, zhCN.wtCmdTranslateSelection, zhCN.wtCmdTranslateInput])
     applyUiPreferences({ uiLanguage: 'en', theme: 'auto', uiStyle: 'classic' })
     await flushPromises()
-    expect(items.map((item) => item.text())).toEqual([en.wtCmdTogglePage, en.wtCmdTranslateSelection])
+    expect(items.map((item) => item.text())).toEqual([en.wtCmdTogglePage, en.wtCmdTranslateSelection, en.wtCmdTranslateInput])
     wrapper.unmount()
   })
 
@@ -286,6 +290,69 @@ describe('快捷键展示与管理', () => {
       expect(wrapper.get('[data-test="wt-endpoint-preview"]').text()).toContain(en.wtEndpointPreview)
       expect(wrapper.get('[data-test="wt-advanced"]').text()).toContain(en.wtAdvanced)
       expect(wrapper.text()).toContain(en.wtCustomHeadersSaved)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})
+
+describe('视频字幕与输入翻译开关与权限', () => {
+  it('默认关闭并展示功能说明与限制，启用时申请全站权限，拒绝时不保存，关闭时不申请权限', async () => {
+    applyUiPreferences({ uiLanguage: 'zh-CN', theme: 'auto', uiStyle: 'classic' })
+    const saved: Record<string, unknown>[] = []
+    let current: TranslationConfig = { ...CONFIG }
+    replies({
+      'wt:get-config': () => ({ ok: true, config: current, keyState: 'ready' }),
+      'wt:save-config': (message) => {
+        saved.push(message)
+        current = { ...current, ...(message.patch as Partial<TranslationConfig>) }
+        return { ok: true, config: current, keyState: 'ready' }
+      },
+    })
+    let denyNextRequest = true
+    const request = vi.spyOn(fakeBrowser.permissions, 'request').mockImplementation(async () => {
+      if (denyNextRequest) {
+        denyNextRequest = false
+        return false
+      }
+      return true
+    })
+    const wrapper = mount(TranslationSection)
+    try {
+      await flushPromises()
+      expect(wrapper.text()).toContain(zhCN.wtVideoSubtitles)
+      expect(wrapper.text()).toContain(zhCN.wtVideoSubtitlesHint)
+      expect(wrapper.text()).toContain(zhCN.wtInputTranslation)
+      expect(wrapper.text()).toContain(zhCN.wtInputTranslationHint)
+
+      const subToggle = wrapper.get('[data-test="wt-video-subtitles-toggle"] [role="switch"]')
+      const inToggle = wrapper.get('[data-test="wt-input-translation-toggle"] [role="switch"]')
+      expect(subToggle.attributes('aria-checked')).toBe('false')
+      expect(inToggle.attributes('aria-checked')).toBe('false')
+
+      await subToggle.trigger('click')
+      await flushPromises()
+      expect(request).toHaveBeenCalledWith({ origins: ['http://*/*', 'https://*/*'] })
+      expect(saved).toHaveLength(0)
+      expect(subToggle.attributes('aria-checked')).toBe('false')
+      expect(wrapper.get('[role="status"]').text()).toBe(zhCN.wtPermissionDenied)
+
+      await subToggle.trigger('click')
+      await flushPromises()
+      expect(subToggle.attributes('aria-checked')).toBe('true')
+      expect(saved.at(-1)?.patch).toEqual({ videoSubtitlesEnabled: true })
+
+      await inToggle.trigger('click')
+      await flushPromises()
+      expect(inToggle.attributes('aria-checked')).toBe('true')
+      expect(saved.at(-1)?.patch).toEqual({ inputTranslationEnabled: true })
+
+      request.mockClear()
+      await subToggle.trigger('click')
+      await flushPromises()
+      expect(request).not.toHaveBeenCalled()
+      expect(subToggle.attributes('aria-checked')).toBe('false')
+      expect(saved.at(-1)?.patch).toEqual({ videoSubtitlesEnabled: false })
     } finally {
       wrapper.unmount()
     }

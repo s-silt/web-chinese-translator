@@ -241,16 +241,29 @@ describe('sanitizeTranslationConfig', () => {
     expect(sanitizeTranslationConfig({ disabledDictionaries: ['devin', 'unknown', 'cursor', 'devin'] }).disabledDictionaries).toEqual(['devin', 'cursor'])
   })
 
-  it('非法目标语言回落默认', () => {
-    expect(sanitizeTranslationConfig({ targetLanguage: 'fr' }).targetLanguage).toBe('zh-CN')
+  it('非法目标语言回落默认，已加入的拉丁语种保留', () => {
+    expect(sanitizeTranslationConfig({ targetLanguage: 'xx' }).targetLanguage).toBe('zh-CN')
+    expect(sanitizeTranslationConfig({ targetLanguage: 'auto' }).targetLanguage).toBe('zh-CN')
     expect(sanitizeTranslationConfig({ targetLanguage: 'ja' }).targetLanguage).toBe('ja')
+    for (const targetLanguage of ['es', 'fr', 'de', 'pt'] as const) {
+      expect(sanitizeTranslationConfig({ targetLanguage }).targetLanguage).toBe(targetLanguage)
+    }
   })
 
-  it('缺省与非法源语言迁移为 auto，六种有效值保留', () => {
+  it('缺省输入目标语言迁移为 en，合法值保留，非法值回落 en', () => {
+    expect(sanitizeTranslationConfig({ model: 'legacy' }).inputTargetLanguage).toBe('en')
+    expect(sanitizeTranslationConfig({ inputTargetLanguage: 'auto' }).inputTargetLanguage).toBe('en')
+    expect(sanitizeTranslationConfig({ inputTargetLanguage: 'xx' }).inputTargetLanguage).toBe('en')
+    for (const inputTargetLanguage of ['ja', 'es', 'fr', 'de', 'pt'] as const) {
+      expect(sanitizeTranslationConfig({ inputTargetLanguage }).inputTargetLanguage).toBe(inputTargetLanguage)
+    }
+  })
+
+  it('缺省与非法源语言迁移为 auto，有效值保留', () => {
     expect(sanitizeTranslationConfig({ model: 'legacy' }).sourceLanguage).toBe('auto')
-    expect(sanitizeTranslationConfig({ sourceLanguage: 'fr' }).sourceLanguage).toBe('auto')
+    expect(sanitizeTranslationConfig({ sourceLanguage: 'xx' }).sourceLanguage).toBe('auto')
     expect(sanitizeTranslationConfig({ sourceLanguage: '' }).sourceLanguage).toBe('auto')
-    for (const sourceLanguage of ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const) {
+    for (const sourceLanguage of ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt'] as const) {
       expect(sanitizeTranslationConfig({ sourceLanguage }).sourceLanguage).toBe(sourceLanguage)
     }
   })
@@ -374,5 +387,49 @@ describe('floatingButtonEnabled 保存', () => {
     await updateTranslationConfig({ floatingButtonEnabled: true })
     await updateTranslationConfig({ model: 'm2' })
     expect((await getTranslationConfig()).floatingButtonEnabled).toBe(true)
+  })
+
+  it('视频字幕与输入翻译旧配置默认关闭，开启与保存互不干扰', async () => {
+    expect(DEFAULT_TRANSLATION_CONFIG.videoSubtitlesEnabled).toBe(false)
+    expect(DEFAULT_TRANSLATION_CONFIG.inputTranslationEnabled).toBe(false)
+    expect(sanitizeTranslationConfig({ model: 'legacy' })).toMatchObject({
+      videoSubtitlesEnabled: false,
+      inputTranslationEnabled: false,
+    })
+    for (const invalid of ['true', 1, null, undefined, {}]) {
+      expect(
+        sanitizeTranslationConfig({
+          videoSubtitlesEnabled: invalid,
+          inputTranslationEnabled: invalid,
+        }),
+      ).toMatchObject({
+        videoSubtitlesEnabled: false,
+        inputTranslationEnabled: false,
+      })
+    }
+    expect(
+      sanitizeTranslationConfig({
+        videoSubtitlesEnabled: true,
+        inputTranslationEnabled: true,
+      }),
+    ).toMatchObject({
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+    })
+    await updateTranslationConfig({ videoSubtitlesEnabled: true })
+    expect(await getTranslationConfig()).toMatchObject({
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: false,
+    })
+    await updateTranslationConfig({ inputTranslationEnabled: true })
+    expect(await getTranslationConfig()).toMatchObject({
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+    })
+    await updateTranslationConfig({ model: 'other' })
+    expect(await getTranslationConfig()).toMatchObject({
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+    })
   })
 })

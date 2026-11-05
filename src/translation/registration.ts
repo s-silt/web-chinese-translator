@@ -1,14 +1,36 @@
 import { browser, type Browser } from 'wxt/browser'
 import type { ScriptPublicPath } from 'wxt/utils/inject-script'
-import { getTranslationConfig, hostPermissionPattern, type TranslationConfig } from './config'
+import { getTranslationConfig, hostPermissionPattern, normalizeOrigin, type TranslationConfig } from './config'
 import { getSettings, watchSettings } from '../shared/settings'
 import { BUILTIN_DICTIONARY_META, hostMatchPattern } from './dictionaries/index'
 import { getCustomDictionaries, watchCustomDictionaries } from './custom-dictionaries'
+import {
+  INPUT_FRAME_SCRIPT_FILES,
+  INPUT_FRAME_SCRIPT_ID,
+  isYouTubeInputFramePair,
+  isYouTubePageUrl,
+  readInputFrameDocuments,
+} from './input-frame'
+import { isExcludedSite, isSensitivePage } from './page-policy'
 import { isSiteScopeAllowed, restrictSitePatterns, siteScopeExclusions } from './site-scope'
 
 export const SITE_SCRIPT_ID = 'wt-sites'
 const REGISTERED_JS = 'web-translate.js'
 export const SITE_SCRIPT_FILES: ScriptPublicPath[] = ['/web-translate.js']
+const REGISTERED_INPUT_FRAME_JS = 'input-frame.js'
+
+const YOUTUBE_INPUT_FRAME_TARGETS = [
+  {
+    origin: 'https://www.youtube.com',
+    url: 'https://www.youtube.com/live_chat',
+    match: 'https://www.youtube.com/live_chat*',
+  },
+  {
+    origin: 'https://youtube.com',
+    url: 'https://youtube.com/live_chat',
+    match: 'https://youtube.com/live_chat*',
+  },
+] as const
 
 function reportError(_error: unknown): void {
   console.error('[网页汉化助手] 站点脚本同步失败')
@@ -48,7 +70,12 @@ export async function siteScriptMatches(config: TranslationConfig): Promise<stri
     const pattern = hostPermissionPattern(origin)
     if (await granted(pattern)) matches.push(pattern)
   }
-  if (config.selectionPopupEnabled || config.floatingButtonEnabled) {
+  if (
+    config.selectionPopupEnabled ||
+    config.floatingButtonEnabled ||
+    config.videoSubtitlesEnabled ||
+    config.inputTranslationEnabled
+  ) {
     const grantedAll = await Promise.all(ALL_HTTP_MATCHES.map(granted))
     if (grantedAll.every(Boolean)) return restrictSitePatterns([...ALL_HTTP_MATCHES], config).sort()
     if (grantedAll[1]) matches.push('https://*/*')
@@ -57,17 +84,29 @@ export async function siteScriptMatches(config: TranslationConfig): Promise<stri
   return restrictSitePatterns([...new Set(matches)], config).sort()
 }
 
+export async function inputFrameScriptMatches(config: TranslationConfig): Promise<string[]> {
+  if (!config.inputTranslationEnabled) return []
+  const matches: string[] = []
+  for (const target of YOUTUBE_INPUT_FRAME_TARGETS) {
+    if (!isSiteScopeAllowed(target.url, config)) continue
+    if (isExcludedSite(target.url, config.excludedHosts)) continue
+    if (await granted(hostPermissionPattern(target.origin))) {
+      matches.push(target.match)
+    }
+  }
+  return matches.sort()
+}
+
 function isDuplicateId(error: unknown): boolean {
   return error instanceof Error && error.message.includes('Duplicate script ID')
 }
 
 let queue: Promise<void> = Promise.resolve()
 
-async function syncNow(config: TranslationConfig): Promise<void> {
+async function syncMainScript(config: TranslationConfig, masterOn: boolean): Promise<void> {
   const scripting = browser.scripting
   if (typeof scripting?.getRegisteredContentScripts !== 'function') return
-  const settings = await getSettings().catch(() => undefined)
-  const matches = settings?.enabled === true ? await siteScriptMatches(config) : []
+  const matches = masterOn ? await siteScriptMatches(config) : []
   const exclusions = siteScopeExclusions(config)
   const [current] = await scripting.getRegisteredContentScripts({ ids: [SITE_SCRIPT_ID] })
   if (matches.length === 0) {
@@ -105,6 +144,55 @@ async function syncNow(config: TranslationConfig): Promise<void> {
   }
 }
 
+async function syncInputFrameScript(config: TranslationConfig, masterOn: boolean): Promise<void> {
+  const scripting = browser.scripting
+  if (typeof scripting?.getRegisteredContentScripts !== 'function') return
+  const matches = masterOn ? await inputFrameScriptMatches(config) : []
+  const exclusions = siteScopeExclusions(config)
+  const [current] = await scripting.getRegisteredContentScripts({ ids: [INPUT_FRAME_SCRIPT_ID] })
+  if (matches.length === 0) {
+    if (current !== undefined) await scripting.unregisterContentScripts({ ids: [INPUT_FRAME_SCRIPT_ID] })
+    return
+  }
+  if (
+    current !== undefined &&
+    current.runAt === 'document_idle' &&
+    current.persistAcrossSessions !== false &&
+    current.allFrames === true &&
+    sameSet(current.js?.map((path) => path.replace(/^\//, '')), [REGISTERED_INPUT_FRAME_JS]) &&
+    sameSet(current.matches, matches) &&
+    sameSet(current.excludeMatches ?? [], exclusions)
+  ) {
+    return
+  }
+  const script = {
+    id: INPUT_FRAME_SCRIPT_ID,
+    matches,
+    excludeMatches: exclusions,
+    js: [REGISTERED_INPUT_FRAME_JS],
+    runAt: 'document_idle' as const,
+    allFrames: true,
+    persistAcrossSessions: true,
+  }
+  if (current !== undefined) {
+    await scripting.updateContentScripts([script])
+    return
+  }
+  try {
+    await scripting.registerContentScripts([script])
+  } catch (error) {
+    if (!isDuplicateId(error)) throw error
+  }
+}
+
+async function syncNow(config: TranslationConfig): Promise<void> {
+  if (typeof browser.scripting?.getRegisteredContentScripts !== 'function') return
+  const settings = await getSettings().catch(() => undefined)
+  const masterOn = settings?.enabled === true
+  await syncMainScript(config, masterOn)
+  await syncInputFrameScript(config, masterOn)
+}
+
 export function syncSiteScript(): Promise<void> {
   const pending = queue.then(async () => {
     await syncNow(await getTranslationConfig())
@@ -139,6 +227,77 @@ async function sendToTab(tabId: number, message: unknown): Promise<TabReply> {
   }
 }
 
+async function sendInputFrameControl(
+  tabId: number,
+  message: unknown,
+  options?: Browser.tabs.MessageSendOptions,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      Promise.resolve().then(() =>
+        options === undefined
+          ? browser.tabs.sendMessage(tabId, message)
+          : browser.tabs.sendMessage(tabId, message, options),
+      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), 1000)
+      }),
+    ])
+  } catch {
+    void 0
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+async function syncYouTubeInputFramesInTab(
+  tabId: number,
+  tabUrl: string,
+  config: TranslationConfig,
+  masterOn: boolean,
+): Promise<void> {
+  const scripting = browser.scripting
+  const origin = normalizeOrigin(tabUrl)
+  const enabled =
+    masterOn &&
+    config.inputTranslationEnabled &&
+    origin !== '' &&
+    isSiteScopeAllowed(tabUrl, config) &&
+    !isExcludedSite(tabUrl, config.excludedHosts) &&
+    !isSensitivePage(tabUrl) &&
+    (await granted(hostPermissionPattern(origin)))
+  await sendInputFrameControl(tabId, {
+    type: enabled ? 'wt:refresh-input-frame' : 'wt:stop-input-frame',
+  })
+  if (!enabled || typeof scripting?.executeScript !== 'function') return
+  const docs = await readInputFrameDocuments(tabId)
+  const matching = docs.filter(
+    (doc) =>
+      doc.frameId > 0 &&
+      doc.snapshot.topUrl === tabUrl &&
+      isYouTubeInputFramePair(tabUrl, doc.snapshot.url),
+  )
+  await Promise.all(
+    matching.map(async (doc) => {
+      try {
+        await scripting.executeScript({
+          target: { tabId, documentIds: [doc.documentId] },
+          files: INPUT_FRAME_SCRIPT_FILES,
+          injectImmediately: true,
+        })
+        await sendInputFrameControl(
+          tabId,
+          { type: 'wt:refresh-input-frame' },
+          { documentId: doc.documentId },
+        )
+      } catch {
+        void 0
+      }
+    }),
+  )
+}
+
 export async function syncSiteTabs(previous: TranslationConfig, next: TranslationConfig): Promise<void> {
   const scripting = browser.scripting
   const tabs = browser.tabs
@@ -162,6 +321,9 @@ export async function syncSiteTabs(previous: TranslationConfig, next: Translatio
   for (const tab of allTabs) {
     const id = tab.id
     if (id === undefined) continue
+    if (typeof tab.url === 'string' && isYouTubePageUrl(tab.url)) {
+      jobs.push(syncYouTubeInputFramesInTab(id, tab.url, current, masterOn).catch(() => undefined))
+    }
     if (!masterOn) {
       jobs.push(sendToTab(id, { type: 'wt:stop' }).catch(() => undefined))
       continue

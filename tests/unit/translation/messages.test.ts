@@ -6,6 +6,7 @@ import {
   isTranslationMessage,
   isTranslationReply,
   NO_SELECTION_ERROR,
+  type TranslationMessage,
 } from '../../../src/translation/messages'
 
 describe('wt:read-selection 消息与回复校验', () => {
@@ -221,5 +222,150 @@ describe('wt:open-options 固定分区', () => {
     for (const section of ['general', 'other', 'https://example.com', null, 7]) {
       expect(isTranslationMessage({ type: 'wt:open-options', section })).toBe(false)
     }
+  })
+
+  it('视频字幕与输入翻译配置补丁、PageModes 与 wt:translate 消息严格校验', () => {
+    expect(
+      isTranslationMessage({
+        type: 'wt:save-config',
+        patch: { videoSubtitlesEnabled: true, inputTranslationEnabled: false },
+      }),
+    ).toBe(true)
+    expect(
+      isTranslationMessage({
+        type: 'wt:save-config',
+        patch: { videoSubtitlesEnabled: 'true' },
+      }),
+    ).toBe(false)
+    expect(
+      isTranslationMessage({
+        type: 'wt:save-config',
+        patch: { inputTranslationEnabled: 1 },
+      }),
+    ).toBe(false)
+
+    const baseModes = { enabled: true, fixed: false, auto: false, selection: false, smart: false }
+    expect(
+      isTranslationReply({ ok: true, modes: { ...baseModes, subtitles: true, input: false } }, { type: 'wt:page-modes' }),
+    ).toBe(true)
+    expect(
+      isTranslationReply({ ok: true, modes: { ...baseModes, subtitles: 'true' } }, { type: 'wt:page-modes' }),
+    ).toBe(false)
+    expect(
+      isTranslationReply({ ok: true, modes: { ...baseModes, input: 1 } }, { type: 'wt:page-modes' }),
+    ).toBe(false)
+
+    const validSubtitle: Extract<TranslationMessage, { type: 'wt:translate' }> = {
+      type: 'wt:translate',
+      mode: 'subtitle',
+      texts: ['Hello', 'こんにちは'],
+      requestId: 'req-sub-1',
+    }
+    const validInput: Extract<TranslationMessage, { type: 'wt:translate' }> = {
+      type: 'wt:translate',
+      mode: 'input',
+      texts: ['你好，世界'],
+      requestId: 'req-in-1',
+    }
+    expect(isTranslationMessage(validSubtitle)).toBe(true)
+    expect(isTranslationMessage(validInput)).toBe(true)
+    expect(isTranslationMessage({ ...validInput, manualInput: true })).toBe(true)
+    expect(isTranslationMessage({ ...validInput, manualInput: false })).toBe(true)
+    expect(isTranslationMessage({ ...validInput, manualInput: 'true' })).toBe(false)
+    expect(isTranslationMessage({ ...validSubtitle, manualInput: true })).toBe(false)
+    expect(isTranslationMessage({ type: 'wt:translate', mode: 'selection', texts: ['Hello'], manualInput: true })).toBe(false)
+    expect(isTranslationMessage({ type: 'wt:translate', mode: 'auto', texts: ['Hello'], manualInput: false })).toBe(false)
+    expect(isContentTranslationMessage({ type: 'wt:translate-input' })).toBe(true)
+    expect(isContentTranslationMessage({ type: 'wt:translate-input', text: '你好' })).toBe(false)
+    expect(isContentTranslationReply({ ok: true }, { type: 'wt:translate-input' })).toBe(true)
+    for (const type of ['wt:refresh-input-frame', 'wt:stop-input-frame'] as const) {
+      expect(isContentTranslationMessage({ type })).toBe(true)
+      expect(isContentTranslationMessage({ type, extra: true })).toBe(false)
+      expect(isContentTranslationMessage({ type, text: '你好' })).toBe(false)
+      expect(isContentTranslationReply({ ok: true }, { type })).toBe(true)
+      expect(isContentTranslationReply({ ok: false, error: '失败' }, { type })).toBe(true)
+      expect(isContentTranslationReply({ ok: false }, { type })).toBe(false)
+    }
+    expect(isTranslationMessage({ ...validSubtitle, pageSession: 'page-123' })).toBe(true)
+
+    for (const invalid of [
+      { type: 'wt:translate', mode: 'subtitle', texts: ['Hello'] },
+      { type: 'wt:translate', mode: 'input', texts: ['你好'] },
+      { ...validInput, texts: ['你好', '世界'] },
+      { ...validInput, texts: [] },
+      { ...validSubtitle, texts: ['a', 'b', 'c', 'd', 'e', 'f'] },
+      { ...validSubtitle, texts: ['x'.repeat(1501)] },
+      { ...validSubtitle, texts: ['x'.repeat(1500), 'y'.repeat(1500), 'z'.repeat(1001)] },
+      { ...validInput, page: { title: 't', heading: 'h', site: 'example.com' } },
+      { ...validInput, pageId: 'page-1' },
+      { ...validInput, manualSelectionId: 'ticket-1' },
+      { ...validInput, targetLanguage: 'ja' },
+      { ...validSubtitle, sourceLanguage: 'en' },
+      { ...validSubtitle, extraField: true },
+      { type: 'wt:translate', mode: 'selection', texts: ['Hello'], targetLanguage: 'en' },
+    ]) {
+      expect(isTranslationMessage(invalid)).toBe(false)
+    }
+
+    expect(isTranslationReply({ ok: true, texts: ['你好', ''] }, validSubtitle)).toBe(true)
+    expect(isTranslationReply({ ok: true, texts: ['', ''] }, validSubtitle)).toBe(false)
+    expect(isTranslationReply({ ok: true, texts: ['Hello, world'] }, validInput)).toBe(true)
+    expect(isTranslationReply({ ok: true, texts: ['   '] }, validInput)).toBe(false)
+  })
+
+  it('Discord 草稿替换只接受四个字段、UUID 和 6000 字以内的非空文本，回复必须带状态', () => {
+    const elementId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const message = {
+      type: 'wt:replace-discord-input',
+      elementId,
+      expectedText: '你好',
+      text: 'Hello',
+    } as const
+    expect(isTranslationMessage(message)).toBe(true)
+    expect(isTranslationMessage({ ...message, elementId: elementId.toUpperCase() })).toBe(true)
+    expect(isTranslationMessage({ ...message, expectedText: '你'.repeat(6000), text: 'a'.repeat(6000) })).toBe(true)
+    for (const invalid of [
+      { ...message, elementId: 'not-a-uuid' },
+      { ...message, elementId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeee' },
+      { ...message, expectedText: '' },
+      { ...message, text: '' },
+      { ...message, expectedText: '你'.repeat(6001) },
+      { ...message, text: 'a'.repeat(6001) },
+      { ...message, tabId: 7 },
+      { ...message, frameId: 0 },
+      { ...message, url: 'https://discord.com/channels/@me/1' },
+      { ...message, extra: true },
+    ]) {
+      expect(isTranslationMessage(invalid)).toBe(false)
+    }
+    expect(isTranslationReply({ ok: true }, message)).toBe(false)
+    for (const status of ['ok', 'changed', 'unsupported', 'failed'] as const) {
+      expect(isTranslationReply({ ok: true, inputReplacement: status }, message)).toBe(true)
+    }
+    expect(isTranslationReply({ ok: true, inputReplacement: 'nope' }, message)).toBe(false)
+    expect(isTranslationReply({ ok: true, inputReplacement: 'bogus' })).toBe(false)
+    expect(
+      isTranslationReply(
+        { ok: true, inputReplacement: 'bogus' },
+        { type: 'wt:cancel-models', requestId: 'req-123' },
+      ),
+    ).toBe(false)
+    expect(isTranslationReply({ ok: true }, { type: 'wt:cancel-models', requestId: 'req-123' })).toBe(true)
+  })
+
+  it('聊天草稿替换复用同一组四字段校验，缺状态的回复会被拒绝', () => {
+    const elementId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const message = {
+      type: 'wt:replace-chat-input',
+      elementId,
+      expectedText: '你好',
+      text: 'Hello',
+    } as const
+    expect(isTranslationMessage(message)).toBe(true)
+    expect(isTranslationMessage({ ...message, url: 'https://chatgpt.com/c/1' })).toBe(false)
+    expect(isTranslationMessage({ ...message, extra: true })).toBe(false)
+    expect(isTranslationReply({ ok: true }, message)).toBe(false)
+    expect(isTranslationReply({ ok: true, inputReplacement: 'ok' }, message)).toBe(true)
+    expect(isTranslationReply({ ok: true, inputReplacement: 'changed' }, message)).toBe(true)
   })
 })

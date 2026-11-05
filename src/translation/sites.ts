@@ -9,7 +9,7 @@ export const FIXED_UI_SELECTOR = `${FIXED_CONTROL_SELECTOR},${FIXED_NAVIGATION_S
 export const FIXED_EXCLUDE_SELECTOR =
   '.prose,.markdown,.markdown-body,[data-message-id],[data-message-author-role]'
 
-const PROTECTED_CONTENT_SELECTOR = 'script,style,noscript,code,pre,select,option,svg,math,canvas,[contenteditable=""],[contenteditable="true"],[contenteditable="plaintext-only"],.monaco-editor,.cm-editor,.CodeMirror,[translate="no"],.notranslate,[data-sensitive],[data-wt-root]'
+const PROTECTED_CONTENT_SELECTOR = 'script,style,noscript,code,pre,select,option,svg,math,canvas,[contenteditable=""],[contenteditable="true"],[contenteditable="plaintext-only"],.monaco-editor,.cm-editor,.CodeMirror,[translate="no"],.notranslate,[data-sensitive],[data-wt-root],.ytp-caption-window-container,.player-timedtext,.player-timedtext-text-container'
 export const GENERAL_EXCLUDE_SELECTOR = `input,textarea,${PROTECTED_CONTENT_SELECTOR}`
 export const FIXED_ATTRIBUTES: readonly string[] = ['title', 'aria-label', 'placeholder']
 

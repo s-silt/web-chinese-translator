@@ -32,6 +32,10 @@
       <DictionarySection v-if="translationSupported" v-show="currentNav === 'wt-dictionary-title'" />
       <TranslationSection v-if="translationSupported" v-show="showTranslation" :view="translationView" />
       <div v-show="currentNav === 'github-title'" id="github-title" class="wt-github-group" role="region" :aria-label="t('navGithub')">
+        <div class="section wt-github-preferences">
+          <GeneralSection />
+          <LanguageSection />
+        </div>
         <ExcludedPathsSection />
         <CustomEntriesSection />
       </div>
@@ -64,6 +68,8 @@ import CustomEntriesSection from './CustomEntriesSection.vue'
 import type { MessageKey } from '../../i18n'
 import DictionarySection from './DictionarySection.vue'
 import ExcludedPathsSection from './ExcludedPathsSection.vue'
+import GeneralSection from '../popup/GeneralSection.vue'
+import LanguageSection from '../popup/LanguageSection.vue'
 import TranslationSection from './TranslationSection.vue'
 
 const translationSupported = !isFirefoxBuild()
@@ -139,6 +145,11 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange))
 </script>
 
 <style scoped>
+.wt-github-preferences {
+  display: grid;
+  gap: 16px;
+}
+
 .options {
   max-width: 760px;
   margin: 0 auto;

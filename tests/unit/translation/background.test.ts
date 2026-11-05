@@ -2,6 +2,8 @@ import { customDictionariesItem } from '../../../src/translation/custom-dictiona
 import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { fakeBrowser } from 'wxt/testing/fake-browser'
 import { installTranslationBackground } from '../../../src/translation/background'
+import { replaceChatDraftInMainWorld } from '../../../src/translation/chat-input'
+import { replaceDiscordDraftInMainWorld } from '../../../src/translation/discord-input'
 import {
   isContentTranslationMessage,
   isTranslationMessage,
@@ -803,11 +805,14 @@ describe('模型隐私边界真实消息入口', () => {
     const { excludedHosts: _omitted, ...legacy } = VALID_CONFIG
     expect(isTranslationReply({ ok: true, config: legacy })).toBe(false)
     expect(isTranslationMessage({ type: 'wt:save-config', patch: { excludedHosts: [] } })).toBe(true)
-    for (const sourceLanguage of ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const) {
+    for (const sourceLanguage of ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt'] as const) {
       expect(isTranslationMessage({ type: 'wt:save-config', patch: { sourceLanguage } })).toBe(true)
       expect(isTranslationReply({ ok: true, config: { ...VALID_CONFIG, sourceLanguage } })).toBe(true)
     }
-    expect(isTranslationMessage({ type: 'wt:save-config', patch: { sourceLanguage: 'fr' } })).toBe(false)
+    expect(isTranslationMessage({ type: 'wt:save-config', patch: { sourceLanguage: 'xx' } })).toBe(false)
+    expect(isTranslationMessage({ type: 'wt:save-config', patch: { sourceLanguage: 'auto' } })).toBe(true)
+    expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputTargetLanguage: 'es' } })).toBe(true)
+    expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputTargetLanguage: 'xx' } })).toBe(false)
     const { sourceLanguage: _source, ...missingSource } = VALID_CONFIG
     expect(isTranslationReply({ ok: true, config: missingSource })).toBe(false)
     expect(isTranslationReply({ ok: true, config: VALID_CONFIG })).toBe(true)
@@ -2773,6 +2778,29 @@ describe('浏览器快捷键', () => {
     expect(sent).toEqual([])
   })
 
+  it('translate-input 只在已授权的普通标签页发送 wt:translate-input，不读取选区', async () => {
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true, autoInteractionEnabled: false })
+    const inject = vi.spyOn(fakeBrowser.scripting, 'executeScript')
+    const sent: unknown[] = []
+    vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async (_tabId, message) => {
+      sent.push(message)
+      return { ok: true }
+    })
+    commandTrigger!('translate-input', { id: contentSender.tab.id, url: contentSender.url } as never)
+    await vi.waitFor(() => expect(sent).toEqual([{ type: 'wt:translate-input' }]))
+    expect(inject).not.toHaveBeenCalled()
+
+    sent.length = 0
+    commandTrigger!('translate-input', { id: contentSender.tab.id, url: contentSender.url, incognito: true } as never)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(sent).toEqual([])
+
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: false })
+    commandTrigger!('translate-input', { id: contentSender.tab.id, url: contentSender.url } as never)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(sent).toEqual([])
+  })
+
   it('Alt+S 焦点在已授权跨源 iframe 时优先读取该 frame 并展示到 top doc，不聚合其他 frame，且语境仅用源 frame 站点', async () => {
     await translationConfigItem.setValue({
       ...VALID_CONFIG,
@@ -4018,5 +4046,543 @@ describe('悬浮模型设置入口', () => {
     expect(open).not.toHaveBeenCalled()
     expect(await trigger({ type: 'wt:open-options', section: 'model' }, { ...contentSender, id: 'foreign' })).toMatchObject({ ok: false })
     expect(create).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('视频字幕与输入翻译后台策略与方向控制', () => {
+  beforeEach(async () => {
+    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [] as never)
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    await clearPersistentTranslations()
+    vi.mocked(readPersistentTranslations).mockClear()
+    vi.mocked(writePersistentTranslations).mockClear()
+  })
+
+  it('开启视频字幕或输入翻译时检查全站访问权限，未获授时拒绝保存', async () => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (perm) => {
+      const origins = perm.origins ?? []
+      return !origins.includes('http://*/*')
+    })
+    expect(
+      await trigger({ type: 'wt:save-config', patch: { videoSubtitlesEnabled: true } }, extSender),
+    ).toEqual({ ok: false, error: '未授权访问站点' })
+    expect(
+      await trigger({ type: 'wt:save-config', patch: { inputTranslationEnabled: true } }, extSender),
+    ).toEqual({ ok: false, error: '未授权访问站点' })
+
+    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async () => true)
+    expect(
+      await trigger(
+        { type: 'wt:save-config', patch: { videoSubtitlesEnabled: true, inputTranslationEnabled: true } },
+        extSender,
+      ),
+    ).toMatchObject({
+      ok: true,
+      config: { videoSubtitlesEnabled: true, inputTranslationEnabled: true },
+    })
+  })
+
+  it('page-modes 按总开关、模型配置、自动弹窗与功能开关计算 subtitles 和 input，且不依赖 autoOrigins', async () => {
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+    })
+    expect(await trigger({ type: 'wt:page-modes' }, contentSender)).toMatchObject({
+      ok: true,
+      modes: { auto: false, subtitles: true, input: true },
+    })
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+      autoInteractionEnabled: false,
+    })
+    expect(await trigger({ type: 'wt:page-modes' }, contentSender)).toMatchObject({
+      ok: true,
+      modes: { subtitles: false, input: true },
+    })
+  })
+
+  it('功能未开启、自动弹窗关闭、无站点权限、敏感页、排除站点、网站范围外或非顶层 frame 均拒绝且不发起网络请求', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completionReply(['out']))
+    const subMsg = { type: 'wt:translate', mode: 'subtitle', texts: ['Hello'], requestId: 'sub-deny-1' } as const
+    const inMsg = { type: 'wt:translate', mode: 'input', texts: ['你好'], requestId: 'in-deny-1' } as const
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      videoSubtitlesEnabled: false,
+      inputTranslationEnabled: false,
+    })
+    expect(await trigger(subMsg, contentSender)).toMatchObject({ ok: false })
+    expect(await trigger(inMsg, contentSender)).toMatchObject({ ok: false })
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+      autoInteractionEnabled: false,
+    })
+    expect(await trigger({ ...subMsg, requestId: 'sub-deny-2' }, contentSender)).toMatchObject({ ok: false })
+    expect(await trigger({ ...inMsg, requestId: 'in-deny-2' }, contentSender)).toMatchObject({ ok: false })
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+    })
+    expect(
+      await trigger({ ...subMsg, requestId: 'sub-deny-frame' }, { ...contentSender, frameId: 1 }),
+    ).toMatchObject({ ok: false })
+    expect(
+      await trigger({ ...subMsg, requestId: 'sub-deny-sens' }, { ...contentSender, url: 'https://app.devin.ai/settings/tokens' }),
+    ).toMatchObject({ ok: false })
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+      excludedHosts: ['app.devin.ai'],
+    })
+    expect(await trigger({ ...subMsg, requestId: 'sub-deny-excl' }, contentSender)).toMatchObject({ ok: false })
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+      siteScopeMode: 'include',
+      siteScopeHosts: ['other.example'],
+    })
+    expect(await trigger({ ...inMsg, requestId: 'in-deny-scope' }, contentSender)).toMatchObject({ ok: false })
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+    })
+    await putManualPageGrant({ id: 'manual-1', tabId: 7, documentId: 'doc-top', url: contentSender.url })
+    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (perm) => {
+      const origins = perm.origins ?? []
+      return !origins.includes('https://app.devin.ai/*')
+    })
+    expect(await trigger({ ...subMsg, requestId: 'sub-deny-perm' }, contentSender)).toMatchObject({ ok: false })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('方向固定：input 固定译为英文且 source=auto，subtitle 除 zh-TW 外固定译为 zh-CN 且不读写持久缓存、不附带阅读语境', async () => {
+    const prompts: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { messages?: Array<{ content: string }> }
+      prompts.push(body.messages?.[0]?.content ?? '')
+      return completionReply(['Translated line'])
+    })
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      targetLanguage: 'ja',
+      sourceLanguage: 'en',
+      proactiveAssistEnabled: true,
+      selectionPopupEnabled: true,
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+    })
+
+    const inReply = await trigger(
+      { type: 'wt:translate', mode: 'input', texts: ['你好，世界'], requestId: 'in-dir-1' },
+      contentSender,
+    )
+    expect(inReply).toEqual({ ok: true, texts: ['Translated line'] })
+    expect(prompts.at(-1)).toContain('into natural, accurate English')
+    expect(prompts.at(-1)).not.toContain('Japanese')
+    expect(prompts.at(-1)).not.toContain('Translate from English')
+    expect(prompts.at(-1)).not.toContain('app.devin.ai')
+
+    const subReply = await trigger(
+      { type: 'wt:translate', mode: 'subtitle', texts: ['こんにちは'], requestId: 'sub-dir-1' },
+      contentSender,
+    )
+    expect(subReply).toEqual({ ok: true, texts: ['Translated line'] })
+    expect(prompts.at(-1)).toContain('into natural, accurate Simplified Chinese')
+    expect(prompts.at(-1)).not.toContain('Translate from English')
+    expect(prompts.at(-1)).not.toContain('app.devin.ai')
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      targetLanguage: 'zh-TW',
+      sourceLanguage: 'en',
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+    })
+    const twReply = await trigger(
+      { type: 'wt:translate', mode: 'subtitle', texts: ['Hello world'], requestId: 'sub-dir-tw' },
+      contentSender,
+    )
+    expect(twReply).toEqual({ ok: true, texts: ['Translated line'] })
+    expect(prompts.at(-1)).toContain('into natural, accurate Traditional Chinese')
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      targetLanguage: 'ja',
+      inputTargetLanguage: 'es',
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+    })
+    const esReply = await trigger(
+      { type: 'wt:translate', mode: 'input', texts: ['请检查这段代码'], requestId: 'in-dir-es', manualInput: true },
+      contentSender,
+    )
+    expect(esReply).toEqual({ ok: true, texts: ['Translated line'] })
+    expect(prompts.at(-1)).toContain('into natural, accurate Spanish')
+    expect(prompts.at(-1)).not.toContain('Japanese')
+    const stored = await translationConfigItem.getValue()
+    expect(stored.targetLanguage).toBe('ja')
+    const subStill = await trigger(
+      { type: 'wt:translate', mode: 'subtitle', texts: ['Hello'], requestId: 'sub-dir-es-indep' },
+      contentSender,
+    )
+    expect(subStill).toEqual({ ok: true, texts: ['Translated line'] })
+    expect(prompts.at(-1)).toContain('into natural, accurate Simplified Chinese')
+
+    expect(readPersistentTranslations).not.toHaveBeenCalled()
+    expect(writePersistentTranslations).not.toHaveBeenCalled()
+  })
+
+  it('同模式新请求仅中止同标签页同模式旧请求，subtitle、input 与手动划词互不抢占', async () => {
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+    })
+    const signals: Record<string, AbortSignal> = {}
+    const resolvers: Record<string, (res: Response) => void> = {}
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { messages?: Array<{ content: string }> }
+      const userContent = body.messages?.[1]?.content ?? ''
+      const tag = userContent.includes('SUB_1')
+        ? 'sub1'
+        : userContent.includes('SUB_2')
+          ? 'sub2'
+          : userContent.includes('IN_1')
+            ? 'in1'
+            : 'sel1'
+      const sig = init?.signal as AbortSignal
+      signals[tag] = sig
+      return new Promise<Response>((resolve, reject) => {
+        sig?.addEventListener('abort', () => {
+          const err = new Error('aborted')
+          err.name = 'AbortError'
+          reject(err)
+        })
+        resolvers[tag] = resolve
+      })
+    })
+
+    const pSub1 = trigger(
+      { type: 'wt:translate', mode: 'subtitle', texts: ['SUB_1'], requestId: 'r-sub-1' },
+      contentSender,
+    )
+    const pIn1 = trigger(
+      { type: 'wt:translate', mode: 'input', texts: ['IN_1 中文'], requestId: 'r-in-1' },
+      contentSender,
+    )
+    await vi.waitFor(() => {
+      expect(signals.sub1).toBeDefined()
+      expect(signals.in1).toBeDefined()
+    })
+
+    const pSub2 = trigger(
+      { type: 'wt:translate', mode: 'subtitle', texts: ['SUB_2'], requestId: 'r-sub-2' },
+      contentSender,
+    )
+    await vi.waitFor(() => expect(signals.sub1?.aborted).toBe(true))
+    expect(signals.in1?.aborted).toBe(false)
+    expect(await pSub1).toMatchObject({ ok: false, code: 'cancelled' })
+
+    await vi.waitFor(() => expect(signals.sub2).toBeDefined())
+    resolvers.in1!(completionReply(['English draft']))
+    resolvers.sub2!(completionReply(['字幕二']))
+    expect(await pIn1).toEqual({ ok: true, texts: ['English draft'] })
+    expect(await pSub2).toEqual({ ok: true, texts: ['字幕二'] })
+  })
+
+  it('在途字幕或输入请求期间关闭对应功能开关立即取消', async () => {
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+    })
+    let subSignal: AbortSignal | undefined
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      const sig = init?.signal as AbortSignal
+      subSignal = sig
+      return new Promise<Response>((_resolve, reject) => {
+        sig?.addEventListener('abort', () => {
+          const err = new Error('aborted')
+          err.name = 'AbortError'
+          reject(err)
+        })
+      })
+    })
+
+    const pending = trigger(
+      { type: 'wt:translate', mode: 'subtitle', texts: ['Inflight subtitle'], requestId: 'r-inflight-sub' },
+      contentSender,
+    )
+    await vi.waitFor(() => expect(subSignal).toBeDefined())
+    await trigger({ type: 'wt:save-config', patch: { videoSubtitlesEnabled: false } }, extSender)
+    expect(subSignal?.aborted).toBe(true)
+    expect(await pending).toMatchObject({ ok: false, code: 'cancelled' })
+  })
+})
+
+describe('Discord 输入替换授权', () => {
+  const elementId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+  const discordMessage = {
+    type: 'wt:replace-discord-input',
+    elementId,
+    expectedText: '你好',
+    text: 'Hello',
+  } as const
+
+  beforeEach(async () => {
+    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [] as never)
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    await clearPersistentTranslations()
+    vi.mocked(readPersistentTranslations).mockClear()
+    vi.mocked(writePersistentTranslations).mockClear()
+  })
+
+  function discordSender(patch: Record<string, unknown> = {}) {
+    return { ...contentSender, documentId: 'doc-discord', url: 'https://discord.com/channels/@me/1', ...patch }
+  }
+
+  it('只向发送者自己的顶层 documentId 注入 MAIN 世界函数，不读翻译接口或持久缓存', async () => {
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      inputTranslationEnabled: true,
+    })
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    const exec = vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation(async () => ([
+      { frameId: 0, documentId: 'doc-discord', result: 'ok' },
+    ]) as never)
+    const reply = await trigger(discordMessage, discordSender())
+    expect(reply).toEqual({ ok: true, inputReplacement: 'ok' })
+    expect(exec).toHaveBeenCalledTimes(1)
+    const injection = exec.mock.calls[0]?.[0]
+    expect(injection).toMatchObject({
+      target: { tabId: 7, documentIds: ['doc-discord'] },
+      world: 'MAIN',
+      func: replaceDiscordDraftInMainWorld,
+      args: [{ elementId, expectedText: '你好', text: 'Hello' }],
+    })
+    expect(injection?.target && 'frameIds' in injection.target).toBe(false)
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(writePersistentTranslations).not.toHaveBeenCalled()
+
+    exec.mockImplementation(async () => ([
+      { frameId: 0, documentId: 'doc-discord', result: 'nope' },
+    ]) as never)
+    expect(await trigger(discordMessage, discordSender())).toEqual({ ok: true, inputReplacement: 'failed' })
+    exec.mockImplementation(async () => ([
+      { frameId: 1, documentId: 'doc-discord', result: 'ok' },
+    ]) as never)
+    expect(await trigger(discordMessage, discordSender())).toEqual({ ok: true, inputReplacement: 'failed' })
+    exec.mockImplementation(async () => ([
+      { frameId: 0, documentId: 'other-doc', result: 'ok' },
+    ]) as never)
+    expect(await trigger(discordMessage, discordSender())).toEqual({ ok: true, inputReplacement: 'failed' })
+    exec.mockRejectedValue(new Error('draft 你好 should not leak'))
+    const failed = await trigger(discordMessage, discordSender())
+    expect(failed).toMatchObject({ ok: false, error: '无法连接翻译服务' })
+    expect(JSON.stringify(failed)).not.toContain('你好')
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('错误主机、缺 documentId、子框架、扩展页、功能关闭、撤权和排除站点都不注入', async () => {
+    const exec = vi.spyOn(fakeBrowser.scripting, 'executeScript').mockResolvedValue([] as never)
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      inputTranslationEnabled: true,
+    })
+
+    expect(await trigger(discordMessage, discordSender({ url: 'https://evil-discord.com/channels/@me/1' }))).toMatchObject({ ok: false })
+    expect(await trigger(discordMessage, discordSender({ documentId: '' }))).toMatchObject({ ok: false })
+    expect(await trigger(discordMessage, discordSender({ frameId: 1 }))).toMatchObject({ ok: false })
+    expect(await trigger(discordMessage, extSender)).toMatchObject({ ok: false })
+    expect(await trigger(discordMessage, discordSender({ tab: { id: 7, incognito: true } }))).toMatchObject({
+      ok: false,
+      error: '无痕窗口不启用模型功能',
+    })
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      inputTranslationEnabled: false,
+    })
+    expect(await trigger(discordMessage, discordSender())).toMatchObject({ ok: false })
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      inputTranslationEnabled: true,
+      autoInteractionEnabled: false,
+    })
+    exec.mockResolvedValueOnce([{ frameId: 0, documentId: 'doc-discord', result: 'ok' }] as never)
+    expect(await trigger(discordMessage, discordSender())).toMatchObject({ ok: true, inputReplacement: 'ok' })
+    expect(exec).toHaveBeenCalled()
+    exec.mockClear()
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      inputTranslationEnabled: true,
+      excludedHosts: ['discord.com'],
+    })
+    expect(await trigger(discordMessage, discordSender())).toMatchObject({ ok: false })
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      inputTranslationEnabled: true,
+      siteScopeMode: 'include',
+      siteScopeHosts: ['other.example'],
+    })
+    expect(await trigger(discordMessage, discordSender())).toMatchObject({ ok: false })
+
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      inputTranslationEnabled: true,
+    })
+    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (perm) => {
+      const origins = perm.origins ?? []
+      return !origins.includes('https://discord.com/*')
+    })
+    expect(await trigger(discordMessage, discordSender())).toMatchObject({ ok: false, error: '未授权访问该站点' })
+    expect(exec).not.toHaveBeenCalled()
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(writePersistentTranslations).not.toHaveBeenCalled()
+  })
+})
+
+describe('聊天输入替换授权', () => {
+  const elementId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+  const chatMessage = {
+    type: 'wt:replace-chat-input',
+    elementId,
+    expectedText: '你好',
+    text: 'Hello',
+  } as const
+  const discordMessage = {
+    type: 'wt:replace-discord-input',
+    elementId,
+    expectedText: '你好',
+    text: 'Hello',
+  } as const
+
+  beforeEach(async () => {
+    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [] as never)
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    await clearPersistentTranslations()
+    vi.mocked(readPersistentTranslations).mockClear()
+    vi.mocked(writePersistentTranslations).mockClear()
+  })
+
+  function chatSender(url: string, patch: Record<string, unknown> = {}) {
+    return { ...contentSender, documentId: 'doc-chat', url, ...patch }
+  }
+
+  it('三个允许的主机注入对应 MAIN 函数和发送者 documentId', async () => {
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      inputTranslationEnabled: true,
+    })
+    const exec = vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation(async () => ([
+      { frameId: 0, documentId: 'doc-chat', result: 'ok' },
+    ]) as never)
+    for (const url of [
+      'https://chatgpt.com/c/1',
+      'https://claude.ai/chat/1',
+      'https://web.telegram.org/a/',
+      'https://web.telegram.org/k/1',
+      'https://web.whatsapp.com/',
+      'https://app.slack.com/client/T/C',
+      'https://acme.slack.com/client/T/C',
+      'https://teams.microsoft.com/v2/',
+      'https://teams.live.com/',
+      'https://teams.cloud.microsoft/v2/',
+    ]) {
+      exec.mockClear()
+      expect(await trigger(chatMessage, chatSender(url))).toEqual({ ok: true, inputReplacement: 'ok' })
+      expect(exec.mock.calls[0]?.[0]).toMatchObject({
+        target: { tabId: 7, documentIds: ['doc-chat'] },
+        world: 'MAIN',
+        func: replaceChatDraftInMainWorld,
+        args: [{ elementId, expectedText: '你好', text: 'Hello' }],
+      })
+    }
+    expect(await trigger(discordMessage, chatSender('https://chatgpt.com/c/1'))).toMatchObject({ ok: false })
+    expect(await trigger(chatMessage, chatSender('https://discord.com/channels/@me/1'))).toMatchObject({ ok: false })
+    expect(await trigger(chatMessage, chatSender('https://chatgpt.com/login'))).toMatchObject({ ok: false })
+    expect(await trigger(chatMessage, chatSender('https://app.slack.com/ssb/redirect'))).toMatchObject({ ok: false })
+    expect(await trigger(chatMessage, chatSender('https://slack.com/client/T'))).toMatchObject({ ok: false })
+    expect(await trigger(chatMessage, chatSender('https://web.whatsapp.com/settings'))).toMatchObject({ ok: false })
+    expect(await trigger(chatMessage, chatSender('https://teams.microsoft.com.evil/v2/'))).toMatchObject({ ok: false })
+  })
+
+  it('错误主机、缺 documentId、子框架、扩展页、功能关闭、撤权和排除站点都不注入', async () => {
+    const exec = vi.spyOn(fakeBrowser.scripting, 'executeScript').mockResolvedValue([] as never)
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      inputTranslationEnabled: true,
+    })
+    expect(await trigger(chatMessage, chatSender('https://chat.openai.com/'))).toMatchObject({ ok: false })
+    expect(await trigger(chatMessage, chatSender('https://claude.ai/chat/1', { documentId: '' }))).toMatchObject({ ok: false })
+    expect(await trigger(chatMessage, chatSender('https://claude.ai/chat/1', { frameId: 1 }))).toMatchObject({ ok: false })
+    expect(await trigger(chatMessage, extSender)).toMatchObject({ ok: false })
+    expect(await trigger(chatMessage, chatSender('https://claude.ai/chat/1', { tab: { id: 7, incognito: true } }))).toMatchObject({
+      ok: false,
+      error: '无痕窗口不启用模型功能',
+    })
+    await translationConfigItem.setValue({ ...VALID_CONFIG, autoOrigins: [], inputTranslationEnabled: false })
+    expect(await trigger(chatMessage, chatSender('https://claude.ai/chat/1'))).toMatchObject({ ok: false })
+    await translationConfigItem.setValue({ ...VALID_CONFIG, autoOrigins: [], inputTranslationEnabled: true, autoInteractionEnabled: false })
+    exec.mockResolvedValueOnce([{ frameId: 0, documentId: 'doc-chat', result: 'ok' }] as never)
+    expect(await trigger(chatMessage, chatSender('https://claude.ai/chat/1'))).toMatchObject({ ok: true, inputReplacement: 'ok' })
+    expect(exec).toHaveBeenCalled()
+    exec.mockClear()
+    await translationConfigItem.setValue({ ...VALID_CONFIG, autoOrigins: [], inputTranslationEnabled: true, excludedHosts: ['claude.ai'] })
+    expect(await trigger(chatMessage, chatSender('https://claude.ai/chat/1'))).toMatchObject({ ok: false })
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      autoOrigins: [],
+      inputTranslationEnabled: true,
+      siteScopeMode: 'include',
+      siteScopeHosts: ['other.example'],
+    })
+    expect(await trigger(chatMessage, chatSender('https://claude.ai/chat/1'))).toMatchObject({ ok: false })
+    await translationConfigItem.setValue({ ...VALID_CONFIG, autoOrigins: [], inputTranslationEnabled: true })
+    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (perm) => {
+      const origins = perm.origins ?? []
+      return !origins.includes('https://claude.ai/*')
+    })
+    expect(await trigger(chatMessage, chatSender('https://claude.ai/chat/1'))).toMatchObject({ ok: false, error: '未授权访问该站点' })
+    expect(exec).not.toHaveBeenCalled()
   })
 })

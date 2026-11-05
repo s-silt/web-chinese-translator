@@ -4,8 +4,10 @@ import { fakeBrowser } from 'wxt/testing/fake-browser'
 export interface RegisteredScript {
   readonly id: string
   readonly matches?: readonly string[]
+  readonly excludeMatches?: readonly string[]
   readonly js?: readonly string[]
   readonly runAt?: string
+  readonly allFrames?: boolean
   /** 是否跨会话保留；测试直接放入、不带该字段的注册模拟不返回它的浏览器 */
   readonly persistAcrossSessions?: boolean
 }

@@ -22,12 +22,15 @@ export interface TranslationConfig {
   readonly autoOrigins: readonly string[]
   readonly disabledDictionaries: readonly string[]
   readonly targetLanguage: TargetLanguage
+  readonly inputTargetLanguage: TargetLanguage
   readonly sourceLanguage: SourceLanguage
   readonly selectionPopupEnabled: boolean
   readonly selectionToolbarEnabled: boolean
   readonly proactiveAssistEnabled: boolean
   readonly floatingButtonEnabled: boolean
   readonly autoInteractionEnabled: boolean
+  readonly videoSubtitlesEnabled: boolean
+  readonly inputTranslationEnabled: boolean
   readonly excludedHosts: readonly string[]
   readonly siteScopeMode: SiteScopeMode
   readonly siteScopeHosts: readonly string[]
@@ -43,12 +46,15 @@ export const DEFAULT_TRANSLATION_CONFIG: TranslationConfig = {
   autoOrigins: [],
   disabledDictionaries: [],
   targetLanguage: 'zh-CN',
+  inputTargetLanguage: 'en',
   sourceLanguage: 'auto',
   selectionPopupEnabled: false,
   selectionToolbarEnabled: false,
   proactiveAssistEnabled: false,
   floatingButtonEnabled: true,
   autoInteractionEnabled: true,
+  videoSubtitlesEnabled: false,
+  inputTranslationEnabled: false,
   excludedHosts: [],
   siteScopeMode: 'all',
   siteScopeHosts: [],
@@ -216,12 +222,15 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
     autoOrigins: sanitizeOrigins(value.autoOrigins),
     disabledDictionaries: sanitizeDisabledDictionaries(value),
     targetLanguage: isTargetLanguage(value.targetLanguage) ? value.targetLanguage : 'zh-CN',
+    inputTargetLanguage: isTargetLanguage(value.inputTargetLanguage) ? value.inputTargetLanguage : 'en',
     sourceLanguage: isSourceLanguage(value.sourceLanguage) ? value.sourceLanguage : 'auto',
     selectionPopupEnabled: selectionOn,
     selectionToolbarEnabled: toolbarOn,
     proactiveAssistEnabled: selectionOn && !toolbarOn && value.proactiveAssistEnabled === true,
     floatingButtonEnabled: value.floatingButtonEnabled !== false,
     autoInteractionEnabled: value.autoInteractionEnabled !== false,
+    videoSubtitlesEnabled: value.videoSubtitlesEnabled === true,
+    inputTranslationEnabled: value.inputTranslationEnabled === true,
     excludedHosts: sanitizeExcludedHosts(value.excludedHosts),
     siteScopeMode: isSiteScopeMode(value.siteScopeMode) ? value.siteScopeMode : 'all',
     siteScopeHosts: sanitizeExcludedHosts(value.siteScopeHosts),

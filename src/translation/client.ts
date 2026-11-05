@@ -55,7 +55,9 @@ function withPageSession<M extends TranslationMessage>(message: M): M {
 
 function queueWaitMs(message: TranslationMessage): number {
   if (message.type === 'wt:translate') {
-    return message.mode === 'auto' ? QUEUE_WAIT_LIMIT_MS.automatic : QUEUE_WAIT_LIMIT_MS.interactive
+    return message.mode === 'auto' || message.mode === 'subtitle'
+      ? QUEUE_WAIT_LIMIT_MS.automatic
+      : QUEUE_WAIT_LIMIT_MS.interactive
   }
   if (message.type === 'wt:assist') {
     return message.input.trigger === 'selection' ? QUEUE_WAIT_LIMIT_MS.interactive : QUEUE_WAIT_LIMIT_MS.automatic

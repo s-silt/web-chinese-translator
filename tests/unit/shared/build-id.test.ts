@@ -112,7 +112,7 @@ describe('清单权限', () => {
     // 网页翻译功能只在 Chromium 构建里：翻译/恢复本页与翻译选中文字两条命令，描述走 _locales
     if (browser === 'firefox') expect(manifest.commands).toBeUndefined()
     else {
-      expect(Object.keys(manifest.commands ?? {})).toEqual(['toggle-page-translation', 'translate-selection'])
+      expect(Object.keys(manifest.commands ?? {})).toEqual(['toggle-page-translation', 'translate-selection', 'translate-input'])
       expect(manifest.commands?.['toggle-page-translation']).toEqual({
         suggested_key: { default: 'Alt+T' },
         description: '__MSG_cmdTogglePage__',
@@ -120,6 +120,10 @@ describe('清单权限', () => {
       expect(manifest.commands?.['translate-selection']).toEqual({
         suggested_key: { default: 'Alt+S' },
         description: '__MSG_cmdTranslateSelection__',
+      })
+      expect(manifest.commands?.['translate-input']).toEqual({
+        suggested_key: { default: 'Alt+Y', mac: 'Command+Shift+Y' },
+        description: '__MSG_cmdTranslateInput__',
       })
     }
   })

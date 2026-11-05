@@ -44,6 +44,10 @@ import { parseGitHubUrl } from '../shared/github'
 import { fixedTranslationWith } from './dictionaries/index'
 import { isExcludedSite, isSensitivePage } from './page-policy'
 import { isSiteScopeAllowed, SITE_SCOPE_BLOCKED_ERROR } from './site-scope'
+import type { LiveTranslationWatcher } from './live-translation'
+import { createSubtitleTranslation } from './subtitles'
+import { createInputTranslation, type InputTranslationWatcher } from './input-translation'
+import { currentYouTubeInputFrameTopUrl } from './input-frame'
 
 const SINGLETON_KEY = Symbol.for('webTranslate.instance')
 const MODES_RETRY_MS = 1000
@@ -58,7 +62,11 @@ export interface Instance {
   healthy(): boolean
 }
 
-function createInstance(): Instance {
+export interface StartPageTranslationOptions {
+  readonly inputOnly?: boolean
+}
+
+function createInstance(inputOnly = false): Instance {
   let config: TranslationConfig | undefined
   let modes: PageModes = { enabled: false, fixed: false, auto: false, selection: false, smart: false }
   let engine: DomEngine | undefined
@@ -71,6 +79,8 @@ function createInstance(): Instance {
   let watcher: SelectionWatcher | undefined
   let toolbarSelection: ToolbarSelection | undefined
   let reading: { dispose(): void; reset(): void } | undefined
+  let subtitles: LiveTranslationWatcher | undefined
+  let inputTranslation: InputTranslationWatcher | undefined
   let disposed = false
   let suspended = false
   let pageRestored = false
@@ -134,9 +144,35 @@ function createInstance(): Instance {
     return smartOn() && !proactiveSuppressed
   }
 
+  function subtitlesOn(): boolean {
+    return modes.enabled && modes.subtitles === true && !suspended && !pageRestored && config?.autoInteractionEnabled !== false
+  }
+
+  function inputFrameLiveAllowed(): boolean {
+    if (config === undefined || !config.inputTranslationEnabled) return false
+    const topUrl = currentYouTubeInputFrameTopUrl()
+    if (topUrl === undefined) return false
+    const frameUrl = location.href
+    if (!isSiteScopeAllowed(topUrl, config) || !isSiteScopeAllowed(frameUrl, config)) return false
+    if (isExcludedSite(topUrl, config.excludedHosts) || isExcludedSite(frameUrl, config.excludedHosts)) return false
+    if (isSensitivePage(topUrl) || isSensitivePage(frameUrl)) return false
+    return true
+  }
+
+  function inputTranslationOn(): boolean {
+    if (!modes.enabled || modes.input !== true || suspended || pageRestored) return false
+    return inputOnly ? inputFrameLiveAllowed() : true
+  }
+
   function status(): PageTranslationStatus {
     return {
-      supported: modes.enabled && (modes.fixed || modes.auto || modes.selection),
+      supported:
+        modes.enabled &&
+        (modes.fixed ||
+          modes.auto ||
+          modes.selection ||
+          modes.subtitles === true ||
+          (inputOnly ? inputTranslationOn() : modes.input === true)),
       fixed: fixedActive && !pageRestored,
       auto: autoActive && engine !== undefined && !engine.isAutoPaused() && !engine.isCapped() && !pageRestored,
       paused: pageRestored || (modes.auto && (engine?.isAutoPaused() ?? false)),
@@ -152,7 +188,7 @@ function createInstance(): Instance {
   }
 
   function floatingEligible(): boolean {
-    if (disposed || suspended || floatingSuppressed || config === undefined) return false
+    if (inputOnly || disposed || suspended || floatingSuppressed || config === undefined) return false
     if (!config.floatingButtonEnabled || !modes.enabled || modes.floating !== true) return false
     const url = location.href
     if (!isSiteScopeAllowed(url, config)) return false
@@ -478,11 +514,72 @@ function createInstance(): Instance {
     })
   }
 
+  function ensureSubtitles(): void {
+    if (subtitles !== undefined) return
+    subtitles = createSubtitleTranslation({
+      translate: (texts, requestId) =>
+        sendTranslationMessage({
+          type: 'wt:translate',
+          mode: 'subtitle',
+          texts,
+          requestId,
+        }),
+      cancel: (requestId) => {
+        void sendTranslationMessage({ type: 'wt:cancel-assist', requestId })
+      },
+      t: (key) => t(key),
+    })
+  }
+
+  function ensureInputTranslation(): void {
+    if (inputTranslation !== undefined) return
+    inputTranslation = createInputTranslation({
+      autoPreview: () => config?.autoInteractionEnabled !== false,
+      targetLanguage: () => config?.inputTargetLanguage ?? 'en',
+      translate: async (texts, requestId, manualInput) => {
+        if (!inputTranslationOn()) {
+          return { ok: false, error: t('wtInputUnavailable') }
+        }
+        return sendTranslationMessage({
+          type: 'wt:translate',
+          mode: 'input',
+          texts,
+          requestId,
+          ...(manualInput === true ? { manualInput: true } : {}),
+        })
+      },
+      cancel: (requestId) => {
+        void sendTranslationMessage({ type: 'wt:cancel-assist', requestId })
+      },
+      t: (key) => t(key),
+      ...(inputOnly
+        ? {}
+        : {
+            replaceDiscordInput: async (request) => {
+              const reply = await sendTranslationMessage({ type: 'wt:replace-discord-input', ...request })
+              return reply.ok ? reply.inputReplacement : 'failed'
+            },
+            replaceChatInput: async (request) => {
+              const reply = await sendTranslationMessage({ type: 'wt:replace-chat-input', ...request })
+              return reply.ok ? reply.inputReplacement : 'failed'
+            },
+          }),
+    })
+  }
+
+  function disposeLiveFeatures(): void {
+    subtitles?.dispose()
+    subtitles = undefined
+    inputTranslation?.dispose()
+    inputTranslation = undefined
+  }
+
   function disposeWatchers(): void {
     watcher?.dispose()
     watcher = undefined
     reading?.dispose()
     reading = undefined
+    disposeLiveFeatures()
   }
 
   function syncWatchers(): void {
@@ -496,6 +593,16 @@ function createInstance(): Instance {
     else if (reading !== undefined) {
       reading.dispose()
       reading = undefined
+    }
+    if (subtitlesOn()) ensureSubtitles()
+    else if (subtitles !== undefined) {
+      subtitles.dispose()
+      subtitles = undefined
+    }
+    if (inputTranslationOn()) ensureInputTranslation()
+    else if (inputTranslation !== undefined) {
+      inputTranslation.dispose()
+      inputTranslation = undefined
     }
     if (!selectionOn() && !proactiveOn()) cancelAssist()
     tracker.refresh()
@@ -686,7 +793,11 @@ function createInstance(): Instance {
         sendTranslationMessage({ type: 'wt:page-modes' }),
       ])
       if (disposed || suspended || epoch !== reloadEpoch) return false
+      const previousUiLanguage = uiLanguage
       uiLanguage = resolveUiLanguage(nextSettings.uiLanguage, languageEnvironment())
+      if (previousUiLanguage !== uiLanguage) {
+        disposeLiveFeatures()
+      }
       panel.setLabels({
         translate: t('wtPanelTranslate'),
         define: t('wtPanelDefine'),
@@ -722,17 +833,44 @@ function createInstance(): Instance {
         return false
       }
       modesRetries = 0
-      const nextModes =
+      const rawModes =
         modesReply.ok && modesReply.modes !== undefined
           ? modesReply.modes
           : { enabled: false, fixed: false, auto: false, selection: false, smart: false }
+      const nextModes: PageModes = inputOnly
+        ? {
+            enabled: rawModes.enabled,
+            fixed: false,
+            auto: false,
+            selection: false,
+            smart: false,
+            floating: false,
+            subtitles: false,
+            input: rawModes.input === true,
+          }
+        : rawModes
       if (
         pageRestored &&
-        (nextModes.enabled !== hadEnabled || nextModes.fixed !== hadFixed || nextModes.auto !== hadAuto)
+        (nextModes.enabled !== hadEnabled ||
+          nextModes.fixed !== hadFixed ||
+          nextModes.auto !== hadAuto ||
+          nextModes.subtitles !== modes.subtitles ||
+          nextModes.input !== modes.input)
       ) {
         pageRestored = false
       }
       const connectionChanged = translationOutputChanged(previousConfig, nextConfig)
+      if (
+        connectionChanged ||
+        nextConfig.videoSubtitlesEnabled !== previousConfig.videoSubtitlesEnabled ||
+        nextConfig.inputTranslationEnabled !== previousConfig.inputTranslationEnabled ||
+        nextConfig.inputTargetLanguage !== previousConfig.inputTargetLanguage ||
+        nextConfig.autoInteractionEnabled !== previousConfig.autoInteractionEnabled ||
+        nextModes.subtitles !== modes.subtitles ||
+        nextModes.input !== modes.input
+      ) {
+        disposeLiveFeatures()
+      }
       const interactiveChanged =
         nextModes.enabled !== hadEnabled ||
         nextModes.selection !== hadSelection ||
@@ -779,6 +917,19 @@ function createInstance(): Instance {
     }
   }
 
+  function stopInstance(): void {
+    reloadEpoch += 1
+    resetFloating()
+    cancelAll()
+    modes = { enabled: false, fixed: false, auto: false, selection: false, smart: false }
+    fixedActive = false
+    autoActive = false
+    disposeWatchers()
+    engine?.restore()
+    tracker.refresh()
+    panel.hidePauseStatus()
+  }
+
   const messageListener = (
     message: unknown,
     sender: { id?: string; tab?: unknown },
@@ -786,17 +937,31 @@ function createInstance(): Instance {
   ): true | undefined => {
     if (!isContentTranslationMessage(message)) return undefined
     if (sender.id !== browser.runtime.id || sender.tab !== undefined) return undefined
+    if (message.type === 'wt:refresh-input-frame' || message.type === 'wt:stop-input-frame') {
+      if (!inputOnly) return undefined
+      if (message.type === 'wt:stop-input-frame') {
+        stopInstance()
+        sendResponse({ ok: true } satisfies ContentTranslationReply<'wt:stop-input-frame'>)
+        return true
+      }
+      void ready.then(() => {
+        void reload().then(() => {
+          sendResponse({ ok: true } satisfies ContentTranslationReply<'wt:refresh-input-frame'>)
+        })
+      })
+      return true
+    }
+    if (
+      inputOnly &&
+      message.type !== 'wt:refresh' &&
+      message.type !== 'wt:stop' &&
+      message.type !== 'wt:status' &&
+      message.type !== 'wt:translate-input'
+    ) {
+      return undefined
+    }
     if (message.type === 'wt:stop') {
-      reloadEpoch += 1
-      resetFloating()
-      cancelAll()
-      modes = { enabled: false, fixed: false, auto: false, selection: false, smart: false }
-      fixedActive = false
-      autoActive = false
-      disposeWatchers()
-      engine?.restore()
-      tracker.refresh()
-      panel.hidePauseStatus()
+      stopInstance()
       sendResponse({ ok: true } satisfies ContentTranslationReply<'wt:stop'>)
       return true
     }
@@ -819,6 +984,16 @@ function createInstance(): Instance {
           return
         case 'wt:read-selection':
           sendResponse({ ok: true, text: readSelectionText() } satisfies ContentTranslationReply<'wt:read-selection'>)
+          return
+        case 'wt:translate-input': {
+          if (inputTranslationOn()) ensureInputTranslation()
+          const accepted = inputTranslationOn() && inputTranslation?.translateAndReplace() === true
+          sendResponse(
+            accepted
+              ? { ok: true }
+              : { ok: false, error: t('wtInputUnavailable') },
+          )
+        }
       }
     })
     return true
@@ -882,6 +1057,7 @@ function createInstance(): Instance {
 
   const unwatchConfig = watchTranslationConfig((next) => {
     const url = location.href
+    disposeLiveFeatures()
     if (
       next.floatingButtonEnabled === false ||
       !isSiteScopeAllowed(url, next) ||
@@ -898,6 +1074,7 @@ function createInstance(): Instance {
   })
   const unwatchSettings = watchSettings((next) => {
     panel.setStyle(next.uiStyle)
+    disposeLiveFeatures()
     if (!next.enabled) {
       pageRestored = false
       floatingSuppressed = true
@@ -958,13 +1135,18 @@ function createInstance(): Instance {
   }
 }
 
-export async function startPageTranslation(): Promise<void> {
-  if (window.top !== window) return
+export async function startPageTranslation(options: StartPageTranslationOptions = {}): Promise<void> {
+  const inputOnly = options.inputOnly === true
+  if (inputOnly) {
+    if (window.top === window || currentYouTubeInputFrameTopUrl() === undefined) return
+  } else if (window.top !== window) {
+    return
+  }
   const scope = globalThis as Record<symbol, Instance | undefined>
   const existing = scope[SINGLETON_KEY]
   if (existing !== undefined) {
     if (existing.healthy()) return
     existing.dispose()
   }
-  scope[SINGLETON_KEY] = createInstance()
+  scope[SINGLETON_KEY] = createInstance(inputOnly)
 }

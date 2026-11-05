@@ -96,7 +96,17 @@ import {
   syncSiteScript,
   syncSiteTabs,
 } from './registration'
+import {
+  INPUT_FRAME_SCRIPT_FILES,
+  isYouTubeInputFramePair,
+  isYouTubePageUrl,
+  parseInputFrameDocument,
+  readInputFrameDocuments,
+  readInputFrameSnapshot,
+} from './input-frame'
 import { EXCLUDED_LIMIT_ERROR, isExcludedSite, isSensitivePage, MAX_EXCLUDED_HOSTS, normalizeExcludedHost, sanitizeExcludedHosts } from './page-policy'
+import { isSupportedChatUrl, replaceChatDraftInMainWorld } from './chat-input'
+import { isDiscordChatUrl, replaceDiscordDraftInMainWorld, type DiscordReplacementStatus } from './discord-input'
 import {
   isSiteScopeAllowed,
   MAX_SITE_SCOPE_HOSTS,
@@ -160,6 +170,67 @@ function fromOurContent(sender: MessageSender): boolean {
     typeof sender.url === 'string' &&
     /^https?:/.test(sender.url)
   )
+}
+
+function fromOurInputFrame(sender: MessageSender): boolean {
+  if (
+    sender.id !== browser.runtime.id ||
+    typeof sender.tab?.id !== 'number' ||
+    !Number.isSafeInteger(sender.tab.id) ||
+    sender.tab.id < 0 ||
+    sender.tab.incognito === true ||
+    typeof sender.frameId !== 'number' ||
+    !Number.isSafeInteger(sender.frameId) ||
+    sender.frameId <= 0 ||
+    typeof sender.documentId !== 'string' ||
+    sender.documentId === '' ||
+    sender.documentId.length > 256 ||
+    typeof sender.url !== 'string' ||
+    typeof sender.tab.url !== 'string' ||
+    typeof sender.origin !== 'string' ||
+    !isYouTubeInputFramePair(sender.tab.url, sender.url)
+  ) {
+    return false
+  }
+  const expectedOrigin = normalizeOrigin(sender.url)
+  return expectedOrigin !== '' && sender.origin === expectedOrigin
+}
+
+async function inputFrameAllowed(sender: MessageSender, config: TranslationConfig): Promise<boolean> {
+  if (!fromOurInputFrame(sender) || !config.inputTranslationEnabled) return false
+  const tabId = sender.tab!.id!
+  const frameId = sender.frameId!
+  const documentId = sender.documentId!
+  const sourceUrl = sender.url!
+  const tabs = browser.tabs
+  const scripting = browser.scripting
+  if (typeof tabs?.get !== 'function' || typeof scripting?.executeScript !== 'function') return false
+  try {
+    const currentTab = await tabs.get(tabId)
+    if (currentTab.incognito === true || typeof currentTab.url !== 'string') return false
+    const topUrl = currentTab.url
+    if (!isYouTubeInputFramePair(topUrl, sourceUrl)) return false
+    if (!isSiteScopeAllowed(topUrl, config) || !isSiteScopeAllowed(sourceUrl, config)) return false
+    if (isExcludedSite(topUrl, config.excludedHosts) || isExcludedSite(sourceUrl, config.excludedHosts)) return false
+    if (isSensitivePage(topUrl) || isSensitivePage(sourceUrl)) return false
+    const origin = normalizeOrigin(sourceUrl)
+    if (origin === '' || !(await originAllowed(origin))) return false
+    const results: unknown = await scripting.executeScript({
+      target: { tabId, documentIds: [documentId] },
+      func: readInputFrameSnapshot,
+    })
+    if (!Array.isArray(results) || results.length !== 1) return false
+    const parsed = parseInputFrameDocument(results[0])
+    if (parsed === undefined) return false
+    return (
+      parsed.frameId === frameId &&
+      parsed.documentId === documentId &&
+      parsed.snapshot.url === sourceUrl &&
+      parsed.snapshot.topUrl === topUrl
+    )
+  } catch {
+    return false
+  }
 }
 
 async function keyStateFor(baseUrl: string): Promise<{ keyState: KeyState; hasKey?: boolean }> {
@@ -361,6 +432,8 @@ interface ManualGrant {
 interface DispatchPolicy {
   origin?: string
   auto?: boolean
+  feature?: 'subtitle' | 'input'
+  manualInput?: boolean
   assist?: AssistInput
   sensitive?: boolean
   manualGrant?: ManualGrant
@@ -381,6 +454,27 @@ async function assertDispatchAllowed(
     await manualPageAllowed(policy.pageSender)
   checkCurrent(snapshot, signal)
   if (config.baseUrl === '' || config.model === '') throw new TranslationError('请先配置接口地址与模型')
+  if (policy.feature !== undefined) {
+    if (policy.pageSender?.frameId !== 0) {
+      if (
+        policy.feature !== 'input' ||
+        policy.pageSender === undefined ||
+        !(await inputFrameAllowed(policy.pageSender, config))
+      ) {
+        throw new TranslationError('无权访问')
+      }
+      checkCurrent(snapshot, signal)
+    }
+    if (!config.autoInteractionEnabled && !(policy.feature === 'input' && policy.manualInput === true)) {
+      throw new TranslationError('自动弹窗已关闭')
+    }
+    if (policy.feature === 'subtitle' && !config.videoSubtitlesEnabled) {
+      throw new TranslationError('未开启视频字幕翻译')
+    }
+    if (policy.feature === 'input' && !config.inputTranslationEnabled) {
+      throw new TranslationError('未开启输入翻译')
+    }
+  }
   if (policy.auto === true && !manualPage && (policy.origin === undefined || !config.autoOrigins.includes(policy.origin))) {
     throw new TranslationError('该站点未开启自动翻译')
   }
@@ -408,7 +502,7 @@ async function assertDispatchAllowed(
   const manualTopAllowed = grant !== undefined && grant.source.frameId === 0
   if (
     policy.sensitive === true &&
-    (policy.auto === true || policy.assist !== undefined || !manualTopAllowed)
+    (policy.auto === true || policy.feature !== undefined || policy.assist !== undefined || !manualTopAllowed)
   ) {
     throw new TranslationError('该页面仅支持通过右键菜单主动翻译所选文字')
   }
@@ -422,8 +516,7 @@ async function assertDispatchAllowed(
   if (
     policy.origin !== undefined &&
     !(await originAllowed(policy.origin)) &&
-    grant === undefined &&
-    !manualPage
+    (policy.feature !== undefined || (grant === undefined && !manualPage))
   ) {
     checkCurrent(snapshot, signal)
     throw new TranslationError('未授权访问该站点')
@@ -668,9 +761,9 @@ function invalidateForConfig(previous: TranslationConfig, next: TranslationConfi
   }
 }
 
-/** 带上标签页，一个页面无法靠猜测会话 ID 影响其他标签页。 */
+/** 带上标签页与文档作用域，一个页面或子文档无法影响其他会话。 */
 function pageSessionKey(sender: MessageSender, session: string | undefined): string | undefined {
-  return session === undefined ? undefined : `${sender.tab?.id ?? -1}:${session}`
+  return session === undefined ? undefined : `${assistScope(sender)}:${session}`
 }
 
 function pageSessionEnded(key: string | undefined): boolean {
@@ -700,7 +793,7 @@ function installPageSessions(): void {
     if (!port.name.startsWith(PAGE_PORT_PREFIX)) return
     const session = port.name.slice(PAGE_PORT_PREFIX.length)
     const sender = port.sender
-    if (sender === undefined || !fromOurContent(sender) || !isPageId(session)) {
+    if (sender === undefined || (!fromOurContent(sender) && !fromOurInputFrame(sender)) || !isPageId(session)) {
       port.disconnect()
       return
     }
@@ -871,7 +964,11 @@ async function saveConfig(
     const selectionOn = patch.selectionPopupEnabled ?? previous.selectionPopupEnabled
     const toolbarOn = selectionOn && (patch.selectionToolbarEnabled ?? previous.selectionToolbarEnabled)
     const proactiveOn = selectionOn && !toolbarOn && (patch.proactiveAssistEnabled ?? previous.proactiveAssistEnabled)
-    if (patch.selectionPopupEnabled === true) {
+    if (
+      patch.selectionPopupEnabled === true ||
+      patch.videoSubtitlesEnabled === true ||
+      patch.inputTranslationEnabled === true
+    ) {
       const allowed = await Promise.all(['http://*/*', 'https://*/*'].map(patternAllowed))
       if (!allowed.every(Boolean)) {
         reply = { ok: false, error: '未授权访问站点' }
@@ -943,6 +1040,9 @@ async function saveConfig(
       proactiveAssistEnabled: proactiveOn,
       floatingButtonEnabled: patch.floatingButtonEnabled ?? previous.floatingButtonEnabled,
       autoInteractionEnabled: patch.autoInteractionEnabled ?? previous.autoInteractionEnabled,
+      videoSubtitlesEnabled: patch.videoSubtitlesEnabled ?? previous.videoSubtitlesEnabled,
+      inputTranslationEnabled: patch.inputTranslationEnabled ?? previous.inputTranslationEnabled,
+      inputTargetLanguage: patch.inputTargetLanguage ?? previous.inputTargetLanguage,
       excludedHosts: nextExcluded,
       siteScopeMode: nextMode,
       siteScopeHosts: nextScopeHosts,
@@ -1148,6 +1248,7 @@ async function handleTranslate(
   const key = `${scope}:${message.requestId ?? crypto.randomUUID()}`
   if (requests.has(key)) return { ok: false, error: '请求 ID 重复' }
   const controller = new TrackedRequest(message.mode, sender.url ?? '', pageSession)
+  if (fromOurInputFrame(sender)) controller.sourceUrl = sender.tab?.url
   const failed = (error: unknown): TranslationFailure => {
     const reply = failureReply(error)
     if (message.manualSelectionId === undefined || reply.code !== 'cancelled') return reply
@@ -1155,8 +1256,17 @@ async function handleTranslate(
     if (controller.cancellationHint === 'settings') return { ...reply, error: TRANSLATION_CONFIG_CHANGED_ERROR }
     return reply
   }
+  const feature = message.mode === 'subtitle' || message.mode === 'input' ? message.mode : undefined
+  const manualInput = feature === 'input' && message.manualInput === true
   const isInteractive = message.mode === 'selection'
-  if (isInteractive) {
+  if (feature !== undefined) {
+    for (const [other, existing] of requests) {
+      if (other !== key && other.startsWith(`${scope}:`) && existing.kind === feature) {
+        existing.abort()
+        requests.delete(other)
+      }
+    }
+  } else if (isInteractive) {
     for (const other of interactive) {
       if (other !== key && other.startsWith(`${scope}:`)) {
         requests.get(other)?.abort()
@@ -1198,6 +1308,8 @@ async function handleTranslate(
         origin,
         pageSender: sender,
         auto: message.mode === 'auto',
+        feature,
+        manualInput,
         sensitive: isSensitivePage(sender.url ?? ''),
         manualGrant: grant,
       })
@@ -1216,6 +1328,8 @@ async function handleTranslate(
           origin,
           pageSender: sender,
           auto: message.mode === 'auto',
+          feature,
+          manualInput,
           sensitive: isSensitivePage(sender.url ?? ''),
           manualGrant: currentGrant,
         })
@@ -1225,45 +1339,75 @@ async function handleTranslate(
         return false
       }
     }
-    const context: TranslationContext =
-      grant !== undefined && grant.source.frameId !== 0
-        ? {
-            currentPage: {
-              title: '',
-              heading: '',
-              site: new URL(grant.source.url).hostname,
-            },
-            recentPages: [],
-          }
-        : await translationContext(
-            sender.url ?? '',
-            message.page,
-            message.pageId ?? sender.documentId,
-            config.proactiveAssistEnabled,
-            sender.tab?.id ?? -1,
-            config,
-          )
+    const context: TranslationContext | undefined =
+      feature !== undefined
+        ? undefined
+        : grant !== undefined && grant.source.frameId !== 0
+          ? {
+              currentPage: {
+                title: '',
+                heading: '',
+                site: new URL(grant.source.url).hostname,
+              },
+              recentPages: [],
+            }
+          : await translationContext(
+              sender.url ?? '',
+              message.page,
+              message.pageId ?? sender.documentId,
+              config.proactiveAssistEnabled,
+              sender.tab?.id ?? -1,
+              config,
+            )
     checkCurrent(snapshot, controller.signal)
-    if (context.recentPages.length > 0 && readingGeneration !== reading0) {
+    if (context !== undefined && context.recentPages.length > 0 && readingGeneration !== reading0) {
       controller.cancellationHint ??= 'settings'
       throw new CompletionCancelledError()
     }
-    controller.recentSites = context.recentPages.map((entry) => entry.site)
+    controller.recentSites = context === undefined ? [] : context.recentPages.map((entry) => entry.site)
+    const requestSnapshot: ModelSnapshot =
+      feature === undefined
+        ? snapshot
+        : {
+            ...snapshot,
+            config: {
+              ...snapshot.config,
+              sourceLanguage: 'auto',
+              targetLanguage:
+                feature === 'input'
+                  ? snapshot.config.inputTargetLanguage
+                  : snapshot.config.targetLanguage === 'zh-TW'
+                    ? 'zh-TW'
+                    : 'zh-CN',
+            },
+          }
+    const queueMode =
+      message.mode === 'input'
+        ? 'selection'
+        : message.mode === 'subtitle'
+          ? 'auto'
+          : message.mode
     const outcome = await requestTranslation(
-      snapshot,
-      message.mode,
+      requestSnapshot,
+      queueMode,
       message.texts,
       stillAllowed,
       context,
       controller.signal,
       // 敏感页面的文字只在右键时发送一次，译文不落盘。
-      !isSensitivePage(sender.url ?? '') && (grant === undefined || !isSensitivePage(grant.source.url)),
+      feature === undefined &&
+        !isSensitivePage(sender.url ?? '') &&
+        (grant === undefined || !isSensitivePage(grant.source.url)),
     )
     checkCurrent(snapshot, controller.signal)
     if (outcome.ok && ticketId !== undefined) {
       const finalGrant = await verifyManualTicket(sender, message.texts[0] ?? '', ticketId, key)
       checkCurrent(snapshot, controller.signal)
       if (finalGrant === undefined) throw new CompletionCancelledError()
+    }
+    if (outcome.ok && fromOurInputFrame(sender)) {
+      if (!(await inputFrameAllowed(sender, snapshot.config))) throw new CompletionCancelledError()
+      checkCurrent(snapshot, controller.signal)
     }
     if (!outcome.ok) {
       return {
@@ -1553,6 +1697,58 @@ async function handleCurrentPageControls(
   )
 }
 
+function isDiscordReplacementStatus(value: unknown): value is DiscordReplacementStatus {
+  return value === 'ok' || value === 'changed' || value === 'unsupported' || value === 'failed'
+}
+
+function readReplacementResult(results: unknown, documentId: string): DiscordReplacementStatus {
+  if (!Array.isArray(results) || results.length !== 1) return 'failed'
+  const item = results[0]
+  if (typeof item !== 'object' || item === null) return 'failed'
+  const record = item as { frameId?: unknown; documentId?: unknown; result?: unknown }
+  if (record.frameId !== 0 || record.documentId !== documentId) return 'failed'
+  return isDiscordReplacementStatus(record.result) ? record.result : 'failed'
+}
+
+async function handleRichInputReplacement(
+  message: Extract<TranslationMessage, { type: 'wt:replace-discord-input' | 'wt:replace-chat-input' }>,
+  sender: MessageSender,
+): Promise<TranslationReply<'wt:replace-discord-input' | 'wt:replace-chat-input'>> {
+  if (sender.tab?.incognito === true) return { ok: false, error: '无痕窗口不启用模型功能' }
+  if (!fromOurContent(sender)) return { ok: false, error: '无权访问' }
+  const pageUrl = sender.url
+  const documentId = sender.documentId
+  const tabId = sender.tab?.id
+  if (typeof pageUrl !== 'string' || typeof documentId !== 'string' || documentId === '' || typeof tabId !== 'number') {
+    return { ok: false, error: '无权访问' }
+  }
+  const allowed = message.type === 'wt:replace-discord-input' ? isDiscordChatUrl(pageUrl) : isSupportedChatUrl(pageUrl)
+  if (!allowed) return { ok: false, error: '无权访问' }
+  const snapshot = await modelSnapshot().catch(() => undefined)
+  if (snapshot === undefined) return unavailableReply(snapshot)
+  const signal = new AbortController().signal
+  try {
+    await assertDispatchAllowed(snapshot, signal, {
+      origin: pageUrl,
+      sensitive: isSensitivePage(pageUrl),
+      feature: 'input',
+      manualInput: true,
+      pageSender: sender,
+    })
+    checkCurrent(snapshot, signal)
+    const func = message.type === 'wt:replace-discord-input' ? replaceDiscordDraftInMainWorld : replaceChatDraftInMainWorld
+    const results = await browser.scripting.executeScript({
+      target: { tabId, documentIds: [documentId] },
+      world: 'MAIN',
+      func,
+      args: [{ elementId: message.elementId, expectedText: message.expectedText, text: message.text }],
+    })
+    return { ok: true, inputReplacement: readReplacementResult(results, documentId) }
+  } catch (error) {
+    return failureReply(error)
+  }
+}
+
 async function dispatch(message: TranslationMessage, sender: MessageSender): Promise<TranslationReply> {
   if (sender.tab?.incognito === true) return { ok: false, error: '无痕窗口不启用模型功能' }
   switch (message.type) {
@@ -1583,6 +1779,24 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
       }).catch((): TranslationFailure => ({ ok: false, error: '无法读取接口配置或密钥，请在设置中检查' }))
     }
     case 'wt:page-modes': {
+      if (fromOurInputFrame(sender)) {
+        const [settings, config] = await Promise.all([getSettings(), getTranslationConfig()])
+        const allowed = settings.enabled && (await inputFrameAllowed(sender, config))
+        const modelReady = config.baseUrl !== '' && config.model !== ''
+        return {
+          ok: true,
+          modes: {
+            enabled: allowed,
+            fixed: false,
+            auto: false,
+            selection: false,
+            smart: false,
+            floating: false,
+            subtitles: false,
+            input: allowed && modelReady,
+          },
+        } satisfies TranslationReply<'wt:page-modes'>
+      }
       if (!fromOurContent(sender)) return { ok: false, error: '无权访问' }
       const [settings, config] = await Promise.all([getSettings(), getTranslationConfig()])
       const origin = normalizeOrigin(sender.url ?? '')
@@ -1619,6 +1833,8 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
           selection,
           smart: selection && !config.selectionToolbarEnabled && config.proactiveAssistEnabled,
           floating: interactiveAllowed && config.floatingButtonEnabled,
+          subtitles: modelAllowed && config.autoInteractionEnabled && config.videoSubtitlesEnabled,
+          input: modelAllowed && config.inputTranslationEnabled,
           ...(fixed ? { fixedEntries: merged } : {}),
         },
       } satisfies TranslationReply<'wt:page-modes'>
@@ -1708,13 +1924,18 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
       if (!fromExtensionPage(sender)) return { ok: false, error: '无权访问' }
       return handlePageAction(message)
     case 'wt:translate':
-      if (!fromOurContent(sender)) return { ok: false, error: '无权访问' }
+      if (!fromOurContent(sender) && !(fromOurInputFrame(sender) && message.mode === 'input')) {
+        return { ok: false, error: '无权访问' }
+      }
       return handleTranslate(message, sender)
+    case 'wt:replace-discord-input':
+    case 'wt:replace-chat-input':
+      return handleRichInputReplacement(message, sender)
     case 'wt:assist':
       if (!fromOurContent(sender)) return { ok: false, error: '无权访问' }
       return handleAssist(message, sender)
     case 'wt:cancel-assist':
-      if (!fromOurContent(sender)) return { ok: false, error: '无权访问' }
+      if (!fromOurContent(sender) && !fromOurInputFrame(sender)) return { ok: false, error: '无权访问' }
       return handleCancelAssist(message, sender)
     case 'wt:page-context': {
       if (!fromOurContent(sender)) return { ok: false, error: '无权访问' }
@@ -2161,7 +2382,7 @@ function installCommandListener(): void {
     browser.commands.onCommand.addListener((command, passedTab) => {
       void (async () => {
         try {
-          if (command !== 'toggle-page-translation' && command !== 'translate-selection') return
+          if (command !== 'toggle-page-translation' && command !== 'translate-selection' && command !== 'translate-input') return
           const tab =
             passedTab ??
             (typeof browser.tabs?.query === 'function'
@@ -2171,6 +2392,47 @@ function installCommandListener(): void {
           const tabId = tab.id
           const url = tab.url
           if (await shortcutBlocked(url, tabId)) return
+          if (command === 'translate-input') {
+            const config = await getTranslationConfig()
+            if (!config.inputTranslationEnabled) return
+            if (!isYouTubePageUrl(url)) {
+              await sendToTabMessage(tabId, { type: 'wt:translate-input' }, undefined)
+              return
+            }
+            const documents = await readInputFrameDocuments(tabId)
+            const candidates = documents.filter(
+              (item) =>
+                item.snapshot.focused &&
+                item.snapshot.topUrl === url &&
+                ((item.frameId === 0 && item.snapshot.url === url) ||
+                  (item.frameId > 0 && isYouTubeInputFramePair(url, item.snapshot.url))),
+            )
+            if (candidates.length !== 1) return
+            const chosen = candidates[0]!
+            if (chosen.frameId > 0) {
+              const candidateSender: MessageSender = {
+                id: browser.runtime.id,
+                tab: { id: tabId, url, incognito: false } as Browser.tabs.Tab,
+                frameId: chosen.frameId,
+                documentId: chosen.documentId,
+                url: chosen.snapshot.url,
+                origin: normalizeOrigin(chosen.snapshot.url),
+              }
+              if (!(await inputFrameAllowed(candidateSender, config))) return
+              if (typeof browser.scripting?.executeScript !== 'function') return
+              await browser.scripting.executeScript({
+                target: { tabId, documentIds: [chosen.documentId] },
+                files: INPUT_FRAME_SCRIPT_FILES,
+                injectImmediately: true,
+              })
+            }
+            await browser.tabs.sendMessage(
+              tabId,
+              { type: 'wt:translate-input' } satisfies ContentTranslationMessage,
+              { frameId: chosen.frameId, documentId: chosen.documentId },
+            )
+            return
+          }
           if (command === 'toggle-page-translation') {
             const isGithub = parseGitHubUrl(url) !== undefined
             const statusMessage: ContentTranslationMessage = { type: 'wt:status' }

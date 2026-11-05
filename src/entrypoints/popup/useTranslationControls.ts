@@ -56,6 +56,9 @@ export interface UseTranslationControls {
   readonly canTranslate: ComputedRef<boolean>
   readonly floatingEnabled: ComputedRef<boolean>
   readonly autoInteractionEnabled: ComputedRef<boolean>
+  readonly videoSubtitlesEnabled: ComputedRef<boolean>
+  readonly inputTranslationEnabled: ComputedRef<boolean>
+  readonly pageTranslationEnabled: ComputedRef<boolean>
   readonly configurationReady: ComputedRef<boolean>
   readonly pageError: Readonly<Ref<string>>
   readonly canRestore: ComputedRef<boolean>
@@ -68,6 +71,9 @@ export interface UseTranslationControls {
   setFloating(enabled: boolean): Promise<void>
   setAutoInteraction(enabled: boolean): Promise<void>
   setAuto(enabled: boolean): Promise<void>
+  setPageTranslation(enabled: boolean): Promise<void>
+  setVideoSubtitles(enabled: boolean): Promise<void>
+  setInputTranslation(enabled: boolean): Promise<void>
   restore(): Promise<void>
   resume(): Promise<void>
   retryFailed(): Promise<void>
@@ -132,6 +138,9 @@ export function useTranslationControls(): UseTranslationControls {
   const configurationReady = computed(() => loaded.value && config.value !== undefined)
   const floatingEnabled = computed(() => config.value?.floatingButtonEnabled === true)
   const autoInteractionEnabled = computed(() => config.value?.autoInteractionEnabled !== false)
+  const videoSubtitlesEnabled = computed(() => config.value?.videoSubtitlesEnabled === true)
+  const inputTranslationEnabled = computed(() => config.value?.inputTranslationEnabled === true)
+  const pageTranslationEnabled = computed(() => canRestore.value && !canResume.value)
   const canTranslate = computed(() =>
     supported.value && masterEnabled.value && configurationReady.value && !outOfScope.value,
   )
@@ -324,6 +333,53 @@ export function useTranslationControls(): UseTranslationControls {
     await (enabled ? enableAuto() : disableAuto())
   }
 
+  async function setPageTranslation(enabled: boolean): Promise<void> {
+    if (enabled) {
+      if (canResume.value) await pageAction('resume')
+      else await translatePage()
+      return
+    }
+    await pageAction('restore')
+  }
+
+  async function setRealtimeFeature(
+    key: 'videoSubtitlesEnabled' | 'inputTranslationEnabled',
+    enabled: boolean,
+  ): Promise<void> {
+    const current = key === 'videoSubtitlesEnabled' ? videoSubtitlesEnabled.value : inputTranslationEnabled.value
+    if (disposed || busy.value || !configurationReady.value || enabled === current) return
+    busy.value = true
+    autoError.value = ''
+    pageError.value = ''
+    toast.clear()
+    try {
+      if (enabled) {
+        let granted = false
+        try {
+          granted = await browser.permissions.request({ origins: ['http://*/*', 'https://*/*'] })
+        } catch {
+          if (!disposed) autoError.value = 'wtPermissionDenied'
+          return
+        }
+        if (!granted || disposed) return
+      }
+      const reply = await sendTranslationMessage({ type: 'wt:save-config', patch: { [key]: enabled } })
+      if (disposed) return
+      if (!reply.ok || reply.config === undefined) {
+        if (!reply.ok) pageError.value = reply.error
+        else autoError.value = 'saveFailed'
+        return
+      }
+      config.value = reply.config
+      await load()
+      if (!disposed && reply.warning !== undefined) pageError.value = reply.warning
+    } catch {
+      if (!disposed) autoError.value = 'saveFailed'
+    } finally {
+      busy.value = false
+    }
+  }
+
   async function pageAction(action: PageAction): Promise<void> {
     const current = tab.value
     if (current === undefined || busy.value) return
@@ -380,6 +436,9 @@ export function useTranslationControls(): UseTranslationControls {
     canTranslate,
     floatingEnabled,
     autoInteractionEnabled,
+    videoSubtitlesEnabled,
+    inputTranslationEnabled,
+    pageTranslationEnabled,
     configurationReady,
     pageError,
     canRestore,
@@ -392,6 +451,9 @@ export function useTranslationControls(): UseTranslationControls {
     setFloating,
     setAutoInteraction,
     setAuto,
+    setPageTranslation,
+    setVideoSubtitles: (enabled: boolean) => setRealtimeFeature('videoSubtitlesEnabled', enabled),
+    setInputTranslation: (enabled: boolean) => setRealtimeFeature('inputTranslationEnabled', enabled),
     restore: () => pageAction('restore'),
     resume: () => pageAction('resume'),
     retryFailed: () => pageAction('retry-failed'),

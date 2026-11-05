@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isExcludedElement,
   isModelCandidateText,
   joinTranslatedChunks,
   MAX_MODEL_TEXT,
@@ -108,5 +109,19 @@ describe('isModelCandidateText 显式源语言', () => {
     expect(isModelCandidateText('Settings page', 'en', 'en')).toBe(false)
     expect(isModelCandidateText('部署失败', 'zh-CN', 'zh-CN')).toBe(false)
     expect(isModelCandidateText('https://example.com/a/b', 'en', 'zh-CN')).toBe(false)
+  })
+})
+
+describe('字幕容器排除', () => {
+  it('YouTube 与 Netflix 字幕源节点被整页翻译排除，避免改写原始字幕', () => {
+    const root = document.createElement('div')
+    root.innerHTML = `
+      <div class="ytp-caption-window-container"><span class="ytp-caption-segment">Hello</span></div>
+      <div class="player-timedtext"><div class="player-timedtext-text-container"><span>World</span></div></div>
+      <p class="normal-text">Normal paragraph</p>
+    `
+    expect(isExcludedElement(root.querySelector('.ytp-caption-segment')!)).toBe(true)
+    expect(isExcludedElement(root.querySelector('.player-timedtext-text-container span')!)).toBe(true)
+    expect(isExcludedElement(root.querySelector('.normal-text')!)).toBe(false)
   })
 })

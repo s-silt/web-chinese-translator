@@ -513,7 +513,7 @@ export interface NativeShortcutResult {
  */
 export async function sendOwnedBrowserAltShortcut(
   page: Page,
-  key: 'T' | 'S',
+  key: 'T' | 'S' | 'Y',
   verifyEffect?: () => Promise<boolean>,
 ): Promise<NativeShortcutResult> {
   if (process.platform !== 'win32') {
@@ -523,7 +523,7 @@ export async function sendOwnedBrowserAltShortcut(
   if (pageTitle === '') return { sent: false, reason: 'Missing target window title' }
   const titleBase64 = Buffer.from(pageTitle, 'utf8').toString('base64')
   const ownedPid = await getOwnedBrowserPid(page.context())
-  const vkCode = key === 'T' ? 0x54 : 0x53
+  const vkCode = key.charCodeAt(0)
 
   const methods: ReadonlyArray<{ readonly name: string; readonly sendBody: string }> = [
     {

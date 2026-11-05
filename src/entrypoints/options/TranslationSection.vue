@@ -187,6 +187,41 @@
           {{ allSitesGranted ? t('wtFloatingGranted') : t('wtFloatingGrant') }}
         </UiButton>
       </div>
+      <div class="wt-floating-group">
+        <UiSwitch
+          :checked="videoSubtitlesEnabled"
+          :label="t('wtVideoSubtitles')"
+          :disabled="!ready || saving"
+          aria-describedby="wt-video-subtitles-hint"
+          data-test="wt-video-subtitles-toggle"
+          @change="changeVideoSubtitles"
+        />
+        <p id="wt-video-subtitles-hint" class="wt-hint">{{ t('wtVideoSubtitlesHint') }}</p>
+      </div>
+      <div class="wt-floating-group">
+        <UiSwitch
+          :checked="inputTranslationEnabled"
+          :label="t('wtInputTranslation')"
+          :disabled="!ready || saving"
+          aria-describedby="wt-input-translation-hint"
+          data-test="wt-input-translation-toggle"
+          @change="changeInputTranslation"
+        />
+        <p id="wt-input-translation-hint" class="wt-hint">{{ t('wtInputTranslationHint') }}</p>
+        <label class="wt-field">
+          <span id="wt-input-target-language-label" class="wt-label">{{ t('wtInputTargetLanguage') }}</span>
+          <UiSelect
+            :model-value="inputTargetLanguage"
+            :disabled="!ready || saving"
+            :options="languageOptions"
+            aria-labelledby="wt-input-target-language-label"
+            aria-describedby="wt-input-target-language-hint"
+            data-test="wt-input-target-language"
+            @update:model-value="changeInputTargetLanguage($event as TargetLanguage)"
+          />
+          <span id="wt-input-target-language-hint" class="wt-hint">{{ t('wtInputTargetLanguageHint') }}</span>
+        </label>
+      </div>
       <label class="wt-field">
         <span id="wt-assist-mode-label" class="wt-label">{{ t('wtAssistMode') }}</span>
         <UiSelect
@@ -414,6 +449,9 @@ const proactiveAssistEnabled = ref(false)
 const assistMode = ref<AssistMode>('off')
 const floatingButtonEnabled = ref(false)
 const autoInteractionEnabled = ref(true)
+const videoSubtitlesEnabled = ref(false)
+const inputTranslationEnabled = ref(false)
+const inputTargetLanguage = ref<TargetLanguage>('en')
 const shortcuts = ref<ShortcutItem[]>([])
 const newSite = ref('')
 const statusMessage = ref('')
@@ -551,6 +589,9 @@ function applyConfig(
   proactiveAssistEnabled.value = config.proactiveAssistEnabled
   floatingButtonEnabled.value = config.floatingButtonEnabled
   autoInteractionEnabled.value = config.autoInteractionEnabled
+  videoSubtitlesEnabled.value = config.videoSubtitlesEnabled
+  inputTranslationEnabled.value = config.inputTranslationEnabled
+  inputTargetLanguage.value = config.inputTargetLanguage
   assistMode.value = persistedMode()
   keyState.value = state
 }
@@ -911,6 +952,59 @@ async function changeAutoInteraction(enabled: boolean): Promise<void> {
   }
 }
 
+async function changeVideoSubtitles(enabled: boolean): Promise<void> {
+  if (!ready.value || saving.value || enabled === videoSubtitlesEnabled.value) return
+  saving.value = true
+  setStatus('', false)
+  try {
+    if (enabled) {
+      const granted = await browser.permissions
+        .request({ origins: ['http://*/*', 'https://*/*'] })
+        .catch(() => false)
+      if (!granted) {
+        setStatus(t('wtPermissionDenied'), true)
+        return
+      }
+      allSitesGranted.value = true
+    }
+    await savePatch({ videoSubtitlesEnabled: enabled })
+  } finally {
+    saving.value = false
+  }
+}
+
+async function changeInputTargetLanguage(value: TargetLanguage): Promise<void> {
+  if (!ready.value || saving.value || value === inputTargetLanguage.value) return
+  saving.value = true
+  setStatus('', false)
+  try {
+    await savePatch({ inputTargetLanguage: value })
+  } finally {
+    saving.value = false
+  }
+}
+
+async function changeInputTranslation(enabled: boolean): Promise<void> {
+  if (!ready.value || saving.value || enabled === inputTranslationEnabled.value) return
+  saving.value = true
+  setStatus('', false)
+  try {
+    if (enabled) {
+      const granted = await browser.permissions
+        .request({ origins: ['http://*/*', 'https://*/*'] })
+        .catch(() => false)
+      if (!granted) {
+        setStatus(t('wtPermissionDenied'), true)
+        return
+      }
+      allSitesGranted.value = true
+    }
+    await savePatch({ inputTranslationEnabled: enabled })
+  } finally {
+    saving.value = false
+  }
+}
+
 async function changeFloatingButton(enabled: boolean): Promise<void> {
   if (!ready.value || saving.value || enabled === floatingButtonEnabled.value) return
   saving.value = true
@@ -1109,6 +1203,8 @@ async function loadShortcuts(): Promise<void> {
         items.push({ name: command.name, labelKey: 'wtCmdTogglePage', shortcut: command.shortcut ?? '' })
       } else if (command.name === 'translate-selection') {
         items.push({ name: command.name, labelKey: 'wtCmdTranslateSelection', shortcut: command.shortcut ?? '' })
+      } else if (command.name === 'translate-input') {
+        items.push({ name: command.name, labelKey: 'wtCmdTranslateInput', shortcut: command.shortcut ?? '' })
       }
     }
     shortcuts.value = items

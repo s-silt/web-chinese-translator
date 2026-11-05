@@ -57,6 +57,7 @@ export async function startMock(): Promise<{
   longResults(): void
   failNext(...next: MockFault[]): void
   wrongCountWhen(predicate: (texts: readonly string[]) => boolean): void
+  setTextTranslator(translator: (text: string) => string): void
   /** 模拟慢接口：之后每个批量翻译请求都等这么久才回复 */
   delayTexts(ms: number): void
   close(): Promise<void>
@@ -68,6 +69,7 @@ export async function startMock(): Promise<{
   const responses = new Map<string, (error: boolean) => void>()
   const faults: MockFault[] = []
   let wrongCount: (texts: readonly string[]) => boolean = () => false
+  let textTranslator: ((text: string) => string) | undefined
   let long = false
   let textsDelayMs = 0
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -110,7 +112,12 @@ export async function startMock(): Promise<{
       const userText = responsesApi
         ? parsed.input?.find((item) => item.role === 'user')?.content.find((part) => part.type === 'input_text')?.text
         : parsed.messages?.[1]?.content
-      const user = JSON.parse(userText ?? '{}') as Record<string, unknown>
+      const parsedUser = JSON.parse(userText ?? '{}') as Record<string, unknown> | unknown[]
+      // 连接测试固定发送 ["Hello"]，仍按 other 统计；字幕、输入翻译等无语境请求也是裸数组，按 texts 处理
+      const connectionProbe = Array.isArray(parsedUser) && parsedUser.length === 1 && parsedUser[0] === 'Hello'
+      const user: Record<string, unknown> = Array.isArray(parsedUser)
+        ? connectionProbe ? { probe: parsedUser } : { texts: parsedUser }
+        : parsedUser
       const customHeader = req.headers['x-fixture-token']
       const call: MockCall = {
         path: req.url ?? '',
@@ -144,6 +151,7 @@ export async function startMock(): Promise<{
         }
         const texts = (user as { texts: string[] }).texts
         const results = texts.map((text) =>
+          textTranslator !== undefined ? textTranslator(text) :
           long || text.includes('constrained')
             ? LONG_RESULT
             : text.includes('</')
@@ -211,6 +219,7 @@ export async function startMock(): Promise<{
     longResults: () => { long = true },
     failNext: (...next) => { faults.push(...next) },
     wrongCountWhen: (predicate) => { wrongCount = predicate },
+    setTextTranslator: (translator) => { textTranslator = translator },
     delayTexts: (ms) => { textsDelayMs = ms },
     close: () => new Promise((resolve) => {
       server.close(() => resolve())

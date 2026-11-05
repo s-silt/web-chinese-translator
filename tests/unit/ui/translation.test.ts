@@ -3,6 +3,7 @@ import { fakeBrowser } from 'wxt/testing/fake-browser'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import TranslationSection from '../../../src/entrypoints/options/TranslationSection.vue'
 import TranslationControls from '../../../src/entrypoints/popup/TranslationControls.vue'
+import { WT_STATE_MESSAGE } from '../../../src/entrypoints/popup/useTranslationControls'
 import en from '../../../src/i18n/en'
 import { settingsItem, DEFAULT_SETTINGS } from '../../../src/shared/settings'
 import { DEFAULT_TRANSLATION_CONFIG, type TranslationConfig } from '../../../src/translation/config'
@@ -1338,47 +1339,18 @@ describe('选项页真实挂载', () => {
 })
 
 describe('弹出页站点控制', () => {
-  const TAB = { id: 9, url: 'https://app.devin.ai/work' }
-
   function tabAndStatus(url: string, status: unknown): void {
-    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [{ id: TAB.id, url }] as never)
+    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [{ id: 9, url }] as never)
     vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async () => status)
   }
 
-  it('配置了 autoOrigins 但页内未运行 => wtAutoInactive', async () => {
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    tabAndStatus('https://app.devin.ai/work', { ok: true, status: { supported: true, fixed: false, auto: false, paused: false, capped: false, failed: 0, error: '' } })
-    replies({
-      'wt:get-config': () => ({ ok: true, config: { ...CONFIG, autoOrigins: ['https://app.devin.ai'] } }),
-    })
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    expect(wrapper.find('[data-test="wt-state"]').text()).toBe(en.wtAutoInactive)
-    wrapper.unmount()
-    tabAndStatus('https://app.devin.ai/work', undefined)
-    const w2 = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    expect(w2.find('[data-test="wt-state"]').text()).toBe(en.wtAutoInactive)
-    w2.unmount()
-  })
-
-  it('总开关关闭显示 wtMasterOff，开启后按真实状态显示', async () => {
-    await settingsItem.setValue({ ...DEFAULT_SETTINGS, enabled: false })
-    tabAndStatus('https://app.devin.ai/work', { ok: true, status: { supported: true, fixed: false, auto: true, paused: false, capped: false, failed: 0, error: '' } })
-    replies({
-      'wt:get-config': () => ({ ok: true, config: { ...CONFIG, autoOrigins: ['https://app.devin.ai'] } }),
-    })
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    expect(wrapper.find('[data-test="wt-state"]').text()).toBe(en.wtMasterOff)
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    await flushPromises()
-    await flushPromises()
-    expect(wrapper.find('[data-test="wt-state"]').text()).toBe(en.wtAutoOn)
-    wrapper.unmount()
+  it('WT_STATE_MESSAGE 映射完整且对应有效英文文案', () => {
+    expect(WT_STATE_MESSAGE.inactive).toBe('wtAutoInactive')
+    expect(WT_STATE_MESSAGE['master-off']).toBe('wtMasterOff')
+    expect(WT_STATE_MESSAGE['out-of-scope']).toBe('wtScopeBlocked')
+    for (const key of Object.values(WT_STATE_MESSAGE)) {
+      expect(en[key]).toBeTruthy()
+    }
   })
 
   it('localhost:1234 按正确 pattern 请求权限且并发确认只请求一次', async () => {
@@ -1408,138 +1380,7 @@ describe('弹出页站点控制', () => {
     wrapper.unmount()
   })
 
-  it('fixed-only 页面恢复/继续按钮按 canRestore/canResume 显示', async () => {
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    let status: unknown = { ok: true, status: { supported: true, fixed: true, auto: false, paused: false, capped: false, failed: 0, error: '' } }
-    tabAndStatus('https://app.devin.ai/work', undefined)
-    vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async (_id: unknown, msg: unknown) => {
-      if ((msg as { type: string }).type === 'wt:status') return status
-      return { ok: true }
-    })
-    const actions: unknown[] = []
-    replies({
-      'wt:get-config': () => ({ ok: true, config: { ...CONFIG, autoOrigins: [] } }),
-      'wt:page-action': (message) => { actions.push(message); return { ok: true } },
-    })
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    expect(wrapper.find('[data-test="wt-restore"]').exists()).toBe(true)
-    status = { ok: true, status: { supported: true, fixed: false, auto: false, paused: true, capped: false, failed: 0, error: '' } }
-    await wrapper.find('[data-test="wt-restore"]').trigger('click')
-    await flushPromises()
-    expect(actions).toEqual([{
-      type: 'wt:page-action', action: 'restore', tabId: TAB.id, url: 'https://app.devin.ai/work',
-    }])
-    expect(wrapper.find('[data-test="wt-resume"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="wt-disable"]').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it.each([false, true])('硬上限且paused=%s时保留恢复，不显示无效的继续', async (paused) => {
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    tabAndStatus('https://app.devin.ai/work', {
-      ok: true,
-      status: { supported: true, fixed: false, auto: false, paused, capped: true, budgetCapped: false, failed: 0, error: 'limit' },
-    })
-    replies({ 'wt:get-config': () => ({ ok: true, config: CONFIG }) })
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    expect(wrapper.find('[data-test="wt-restore"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="wt-resume"]').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('字符预算上限后恢复原文：显示继续按钮，点击发送 resume 并刷新状态', async () => {
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    let status: unknown = { ok: true, status: { supported: true, fixed: false, auto: false, paused: true, capped: true, budgetCapped: true, failed: 0, error: '' } }
-    tabAndStatus('https://app.devin.ai/work', undefined)
-    vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async () => status)
-    const actions: unknown[] = []
-    replies({
-      'wt:get-config': () => ({ ok: true, config: { ...CONFIG, autoOrigins: ['https://app.devin.ai'] } }),
-      'wt:page-action': (m) => {
-        actions.push(m.action)
-        status = { ok: true, status: { supported: true, fixed: false, auto: true, paused: false, capped: false, failed: 0, error: '' } }
-        return { ok: true }
-      },
-    })
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    expect(wrapper.find('[data-test="wt-state"]').text()).toBe(en.wtAutoCapped)
-    const resume = wrapper.find('[data-test="wt-resume"]')
-    expect(resume.exists()).toBe(true)
-    expect((resume.element as HTMLButtonElement).disabled).toBe(false)
-    await resume.trigger('click')
-    await flushPromises()
-    expect(actions).toEqual(['resume'])
-    expect(wrapper.find('[data-test="wt-state"]').text()).toBe(en.wtAutoOn)
-    expect(wrapper.find('[data-test="wt-resume"]').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('达到字符预算上限时弹出页仍可继续，不依赖自动气泡', async () => {
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    tabAndStatus('https://app.devin.ai/work', { ok: true, status: { supported: true, fixed: false, auto: false, paused: false, capped: true, budgetCapped: true, failed: 0, error: '' } })
-    replies({
-      'wt:get-config': () => ({ ok: true, config: { ...CONFIG, autoOrigins: ['https://app.devin.ai'] } }),
-    })
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    expect(wrapper.find('[data-test="wt-state"]').text()).toBe(en.wtAutoCapped)
-    expect(wrapper.find('[data-test="wt-resume"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="wt-restore"]').exists()).toBe(true)
-    wrapper.unmount()
-  })
-
-  it('有失败段：显示数量；全部重试发送 retry-failed，成功后数量消失', async () => {
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    let status: unknown = { ok: true, status: { supported: true, fixed: false, auto: true, paused: false, capped: false, failed: 3, error: '' } }
-    tabAndStatus('https://app.devin.ai/work', undefined)
-    vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async () => status)
-    const actions: unknown[] = []
-    replies({
-      'wt:get-config': () => ({ ok: true, config: { ...CONFIG, autoOrigins: ['https://app.devin.ai'] } }),
-      'wt:page-action': (m) => {
-        actions.push(m.action)
-        status = { ok: true, status: { supported: true, fixed: false, auto: true, paused: false, capped: false, failed: 0, error: '' } }
-        return { ok: true }
-      },
-    })
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    expect(wrapper.find('[data-test="wt-failed"]').text()).toBe(en.wtFailedCount.replace('{count}', '3'))
-    expect(wrapper.find('[data-test="wt-state"]').text()).toBe(en.wtAutoOn)
-    await wrapper.find('[data-test="wt-retry-failed"]').trigger('click')
-    await flushPromises()
-    expect(actions).toEqual(['retry-failed'])
-    expect(wrapper.find('[data-test="wt-failed"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="wt-retry-failed"]').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it.each([
-    ['暂停', { auto: false, paused: true, capped: false }],
-    ['上限', { auto: false, paused: false, capped: true }],
-  ])('%s时仍显示失败数量，但不提供全部重试', async (_name, flags) => {
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    tabAndStatus('https://app.devin.ai/work', { ok: true, status: { supported: true, fixed: false, failed: 2, error: '', ...flags } })
-    replies({
-      'wt:get-config': () => ({ ok: true, config: { ...CONFIG, autoOrigins: ['https://app.devin.ai'] } }),
-    })
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    expect(wrapper.find('[data-test="wt-failed"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="wt-retry-failed"]').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('总开关关闭时不显示失败数量', async () => {
+  it('总开关关闭时不显示失败数量与已移除的站点状态控件', async () => {
     await settingsItem.setValue({ ...DEFAULT_SETTINGS, enabled: false })
     tabAndStatus('https://app.devin.ai/work', { ok: true, status: { supported: true, fixed: false, auto: true, paused: false, capped: false, failed: 2, error: '' } })
     replies({
@@ -1548,131 +1389,9 @@ describe('弹出页站点控制', () => {
     const wrapper = mount(TranslationControls)
     await flushPromises()
     await flushPromises()
-    expect(wrapper.find('[data-test="wt-failed"]').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('过期 load 不能覆盖新状态', async () => {
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    const resolvers: Array<(v: unknown) => void> = []
-    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [{ id: TAB.id, url: 'https://app.devin.ai/work' }] as never)
-    vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(
-      async () => await new Promise<unknown>((r) => resolvers.push(r)),
-    )
-    replies({
-      'wt:get-config': () => ({ ok: true, config: { ...CONFIG, autoOrigins: ['https://app.devin.ai'] } }),
-    })
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await settingsItem.setValue({ ...DEFAULT_SETTINGS, enabled: false })
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    await flushPromises()
-    // resolve newer load (B) first, then stale A
-    expect(resolvers.length).toBeGreaterThanOrEqual(2)
-    const resolversCopy = [...resolvers]
-    resolversCopy.at(-1)!({ ok: true, status: { supported: true, fixed: false, auto: true, paused: false, capped: false, failed: 0, error: '' } })
-    await flushPromises()
-    expect(wrapper.find('[data-test="wt-state"]').text()).toBe(en.wtAutoOn)
-    for (const resolve of resolversCopy.slice(0, -1)) {
-      resolve({ ok: true, status: { supported: true, fixed: false, auto: false, paused: true, capped: false, failed: 0, error: 'stale' } })
+    for (const removed of ['wt-state', 'wt-origin', 'wt-restore', 'wt-resume', 'wt-failed', 'wt-retry-failed', 'wt-data-hint']) {
+      expect(wrapper.find(`[data-test="${removed}"]`).exists()).toBe(false)
     }
-    await flushPromises()
-    expect(wrapper.find('[data-test="wt-state"]').text()).toBe(en.wtAutoOn)
-    wrapper.unmount()
-  })
-
-  it('范围外先于错误、上限和暂停，总开关关闭优先', async () => {
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    tabAndStatus('https://app.devin.ai/work', {
-      ok: true,
-      status: { supported: true, fixed: true, auto: true, paused: true, capped: true, failed: 2, error: 'boom' },
-    })
-    replies({
-      'wt:get-config': () => ({
-        ok: true,
-        config: {
-          ...CONFIG,
-          autoOrigins: ['https://app.devin.ai'],
-          siteScopeMode: 'include',
-          siteScopeHosts: ['other.example'],
-        },
-      }),
-    })
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    expect(wrapper.find('[data-test="wt-state"]').text()).toBe(en.wtScopeBlocked)
-    expect(wrapper.find('[data-test="wt-restore"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="wt-resume"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="wt-retry-failed"]').exists()).toBe(false)
-    wrapper.unmount()
-
-    await settingsItem.setValue({ ...DEFAULT_SETTINGS, enabled: false })
-    const off = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    expect(off.find('[data-test="wt-state"]').text()).toBe(en.wtMasterOff)
-    off.unmount()
-  })
-
-  it('范围外自动开关禁用；范围变化及时反映且不申请权限', async () => {
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    clearToasts()
-    const sent: Record<string, unknown>[] = []
-    let narrowed = true
-    replies({
-      'wt:get-config': () => ({
-        ok: true,
-        config: {
-          ...CONFIG,
-          autoOrigins: [],
-          siteScopeMode: narrowed ? 'include' as const : 'all' as const,
-          siteScopeHosts: [],
-        },
-      }),
-      'wt:set-site-auto': (message) => {
-        sent.push(message)
-        return { ok: true, config: { ...CONFIG, autoOrigins: ['https://app.devin.ai'] } }
-      },
-    })
-    const req = vi.spyOn(fakeBrowser.permissions, 'request').mockImplementation(async () => true)
-    tabAndStatus('https://app.devin.ai/work', {
-      ok: true,
-      status: { supported: true, fixed: false, auto: false, paused: false, capped: false, failed: 0, error: '' },
-    })
-    const blocked = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    expect(blocked.find('[data-test="wt-state"]').text()).toBe(en.wtScopeBlocked)
-    const blockedSwitch = blocked.get('[data-test="wt-auto"] [role="switch"]')
-    expect((blockedSwitch.element as HTMLButtonElement).disabled).toBe(true)
-    await blockedSwitch.trigger('click')
-    await flushPromises()
-    expect(req).not.toHaveBeenCalled()
-    expect(sent).toEqual([])
-    expect(blocked.find('[data-test="wt-confirm"]').exists()).toBe(false)
-    expect(useToasts().value).toEqual([])
-    blocked.unmount()
-
-    narrowed = false
-    clearToasts()
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    expect((wrapper.get('[data-test="wt-auto"] [role="switch"]').element as HTMLButtonElement).disabled).toBe(false)
-    expect(wrapper.find('[data-test="wt-confirm"]').exists()).toBe(false)
-    narrowed = true
-    const { translationConfigItem, DEFAULT_TRANSLATION_CONFIG } = await import('../../../src/translation/config')
-    await translationConfigItem.setValue({ ...DEFAULT_TRANSLATION_CONFIG, ...CONFIG, siteScopeMode: 'include', siteScopeHosts: [] })
-    await flushPromises()
-    await flushPromises()
-    const updatedSwitch = wrapper.get('[data-test="wt-auto"] [role="switch"]')
-    expect((updatedSwitch.element as HTMLButtonElement).disabled).toBe(true)
-    await updatedSwitch.trigger('click')
-    await flushPromises()
-    expect(req).not.toHaveBeenCalled()
-    expect(sent).toEqual([])
-    expect(useToasts().value).toEqual([])
     wrapper.unmount()
   })
 
@@ -1808,114 +1527,6 @@ describe('弹出页站点控制', () => {
     expect(assistLabel(wrapper)).toBe(en.wtModeOff)
     expect(wrapper.text()).toContain('保存失败')
     expect(wrapper.text()).not.toContain(en.wtSavedOk)
-    wrapper.unmount()
-  })
-
-  it('本页翻译绑定当前URL，不申请永久权限或开启自动站点', async () => {
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    let started = false
-    tabAndStatus(TAB.url, undefined)
-    vi.mocked(fakeBrowser.tabs.sendMessage).mockImplementation(async () => ({
-      ok: true, status: { supported: true, fixed: false, auto: started, paused: false, capped: false, failed: 0, error: '' },
-    }))
-    const calls: Record<string, unknown>[] = []
-    replies({
-      'wt:get-config': () => ({ ok: true, config: { ...CONFIG, autoOrigins: [] } }),
-      'wt:translate-page': (m) => { calls.push(m); started = true; return { ok: true } },
-      'wt:set-site-auto': () => { throw new Error('不应修改自动名单') },
-    })
-    const permission = vi.spyOn(fakeBrowser.permissions, 'request')
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    await wrapper.get('[data-test="wt-translate-page"]').trigger('click')
-    await flushPromises()
-    await flushPromises()
-    expect(calls).toEqual([{ type: 'wt:translate-page', tabId: TAB.id, url: TAB.url }])
-    expect(wrapper.get('[data-test="wt-state"]').text()).toBe(en.wtPageOn)
-    expect(wrapper.find('[data-test="wt-disable"]').exists()).toBe(false)
-    expect(permission).not.toHaveBeenCalled()
-    wrapper.unmount()
-  })
-
-  it('本页启动失败明确提示，重试使用重新读取的URL', async () => {
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    let url = TAB.url
-    tabAndStatus(url, { ok: true, status: { supported: true, fixed: false, auto: false, paused: false, capped: false, failed: 0, error: '' } })
-    vi.mocked(fakeBrowser.tabs.query).mockImplementation(async () => [{ id: TAB.id, url }] as never)
-    const calls: Record<string, unknown>[] = []
-    replies({
-      'wt:get-config': () => ({ ok: true, config: CONFIG }),
-      'wt:translate-page': (m) => {
-        calls.push(m)
-        url = 'https://app.devin.ai/new'
-        return calls.length === 1 ? { ok: false, error: '页面已变化，请重试' } : { ok: true }
-      },
-    })
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    await wrapper.get('[data-test="wt-translate-page"]').trigger('click')
-    await flushPromises()
-    await flushPromises()
-    expect(wrapper.get('[data-test="wt-page-error"]').text()).toBe('页面已变化，请重试')
-    expect(wrapper.get('[data-test="wt-translate-page"]').attributes('disabled')).toBeUndefined()
-    await wrapper.get('[data-test="wt-translate-page"]').trigger('click')
-    await flushPromises()
-    await flushPromises()
-    expect(calls.map((m) => m.url)).toEqual([TAB.url, 'https://app.devin.ai/new'])
-    expect(wrapper.find('[data-test="wt-page-error"]').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('未配置本页按钮进入模型设置，不尝试翻译', async () => {
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    tabAndStatus(TAB.url, undefined)
-    const translate = vi.fn(() => ({ ok: true }))
-    replies({
-      'wt:get-config': () => ({ ok: true, config: { ...CONFIG, model: '' } }),
-      'wt:translate-page': translate,
-    })
-    const create = vi.spyOn(fakeBrowser.tabs, 'create').mockImplementation(async () => ({ id: 90 } as never))
-    const close = vi.spyOn(window, 'close').mockImplementation(() => undefined)
-    const wrapper = mount(TranslationControls)
-    try {
-      await flushPromises()
-      await flushPromises()
-      await wrapper.get('[data-test="wt-translate-page"]').trigger('click')
-      await flushPromises()
-      expect(create).toHaveBeenCalledWith({ url: fakeBrowser.runtime.getURL('/options.html') + '#wt-title' })
-      expect(translate).not.toHaveBeenCalled()
-      expect(close).toHaveBeenCalled()
-    } finally {
-      wrapper.unmount()
-      close.mockRestore()
-    }
-  })
-
-  it.each(['master', 'scope', 'incognito'] as const)('本页入口拒绝%s', async (reason) => {
-    await settingsItem.setValue({ ...DEFAULT_SETTINGS, enabled: reason !== 'master' })
-    tabAndStatus(TAB.url, undefined)
-    if (reason === 'incognito') {
-      vi.mocked(fakeBrowser.tabs.query).mockImplementation(async () => [{ ...TAB, incognito: true }] as never)
-    }
-    const translate = vi.fn(() => ({ ok: true }))
-    replies({
-      'wt:get-config': () => ({ ok: true, config: {
-        ...CONFIG, siteScopeMode: reason === 'scope' ? 'include' : 'all', siteScopeHosts: [],
-      } }),
-      'wt:translate-page': translate,
-    })
-    const wrapper = mount(TranslationControls)
-    await flushPromises()
-    await flushPromises()
-    const button = wrapper.find('[data-test="wt-translate-page"]')
-    if (reason === 'incognito') expect(button.exists()).toBe(false)
-    else {
-      expect(button.attributes('disabled')).toBeDefined()
-      await button.trigger('click')
-    }
-    expect(translate).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

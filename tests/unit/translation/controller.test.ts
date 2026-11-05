@@ -1,3 +1,4 @@
+import type { Browser } from 'wxt/browser'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeBrowser } from 'wxt/testing/fake-browser'
 import { startPageTranslation } from '../../../src/translation/controller'
@@ -1981,4 +1982,262 @@ describe('快捷键选区读取与空选区提示', () => {
       expect(document.querySelector('p')?.textContent).toBe('译文')
     },
   )
+})
+
+describe('字幕与输入翻译生命周期联动', () => {
+  it('根据 modes.subtitles 与 modes.input 安装并在恢复原文、继续与设置变更时联动', async () => {
+    const { sendTranslationMessage } = await import('../../../src/translation/client')
+    let subtitlesAllowed = true
+    let inputAllowed = true
+    vi.mocked(sendTranslationMessage).mockImplementation((async (message: {
+      type: string
+      mode?: string
+      texts?: string[]
+    }) => {
+      if (message.type === 'wt:page-modes') {
+        return {
+          ok: true,
+          modes: {
+            enabled: true,
+            fixed: false,
+            auto: false,
+            selection: false,
+            smart: false,
+            subtitles: subtitlesAllowed,
+            input: inputAllowed,
+          },
+        }
+      }
+      if (message.type === 'wt:translate') {
+        return {
+          ok: true,
+          texts: (message.texts ?? []).map((t) => (message.mode === 'input' ? `EN:${t}` : `ZH:${t}`)),
+        }
+      }
+      return { ok: true }
+    }) as never)
+
+    await translationConfigItem.setValue({
+      ...CONFIG,
+      videoSubtitlesEnabled: true,
+      inputTranslationEnabled: true,
+      autoInteractionEnabled: true,
+    })
+
+    const input = document.createElement('input')
+    input.type = 'text'
+    document.body.append(input)
+
+    await startPageTranslation()
+    await settle(100)
+
+    input.value = '你好世界'
+    input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+    await settle(650)
+
+    expect(vi.mocked(sendTranslationMessage).mock.calls.map(([m]) => m)).toContainEqual(
+      expect.objectContaining({ type: 'wt:translate', mode: 'input', texts: ['你好世界'] }),
+    )
+
+    await triggerMessage({ type: 'wt:page-action', action: 'restore' })
+    await settle(50)
+    vi.mocked(sendTranslationMessage).mockClear()
+
+    input.value = '再试一次'
+    input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+    await settle(650)
+    expect(vi.mocked(sendTranslationMessage)).not.toHaveBeenCalled()
+
+    await triggerMessage({ type: 'wt:page-action', action: 'resume' })
+    await settle(50)
+    input.value = '恢复后输入'
+    input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+    await settle(650)
+    expect(vi.mocked(sendTranslationMessage).mock.calls.map(([m]) => m)).toContainEqual(
+      expect.objectContaining({ type: 'wt:translate', mode: 'input', texts: ['恢复后输入'] }),
+    )
+
+    subtitlesAllowed = false
+    inputAllowed = false
+    await translationConfigItem.setValue({
+      ...CONFIG,
+      videoSubtitlesEnabled: false,
+      inputTranslationEnabled: false,
+    })
+    await settle(100)
+    vi.mocked(sendTranslationMessage).mockClear()
+
+    input.value = '关闭后输入'
+    input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+    await settle(650)
+    expect(
+      vi.mocked(sendTranslationMessage).mock.calls.some(([m]) => m.type === 'wt:translate'),
+    ).toBe(false)
+  })
+
+  it('带 tab 的伪造发送方不能触发输入翻译', async () => {
+    await translationConfigItem.setValue({ ...CONFIG, inputTranslationEnabled: true })
+    await startPageTranslation()
+    await settle(50)
+    const input = document.createElement('textarea')
+    input.value = '请检查这段代码'
+    document.body.append(input)
+    input.focus()
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+    let replied = false
+    await new Promise<void>((resolve) => {
+      const handled = fakeBrowser.runtime.onMessage.trigger(
+        { type: 'wt:translate-input' },
+        { id: fakeBrowser.runtime.id, tab: { id: 7 } as Browser.tabs.Tab },
+        () => {
+          replied = true
+        },
+      )
+      expect(handled).not.toBe(true)
+      resolve()
+    })
+    await settle(20)
+    expect(replied).toBe(false)
+    expect(input.value).toBe('请检查这段代码')
+  })
+
+  it('inputOnly 模式拒绝顶层与非同源 live_chat，在合规子框架内屏蔽非输入模式并响应专用控制消息', async () => {
+    const { sendTranslationMessage } = await import('../../../src/translation/client')
+    vi.mocked(sendTranslationMessage).mockImplementation((async (message: {
+      type: string
+      mode?: string
+      texts?: string[]
+    }) => {
+      if (message.type === 'wt:page-modes') {
+        return {
+          ok: true,
+          modes: {
+            enabled: true,
+            fixed: true,
+            auto: true,
+            selection: true,
+            smart: true,
+            floating: true,
+            subtitles: true,
+            input: true,
+            fixedEntries: DEVIN_ENTRIES,
+          },
+        }
+      }
+      if (message.type === 'wt:translate') {
+        return { ok: true, texts: (message.texts ?? []).map((t) => `ES:${t}`) }
+      }
+      return { ok: true }
+    }) as never)
+
+    await settingsItem.setValue({ ...DEFAULT_SETTINGS, uiLanguage: 'zh-CN' })
+    await translationConfigItem.setValue({
+      ...CONFIG,
+      inputTranslationEnabled: true,
+      inputTargetLanguage: 'es',
+      videoSubtitlesEnabled: true,
+      floatingButtonEnabled: true,
+    })
+
+    // 顶层调用 inputOnly 被拒绝；顶层正常实例忽略 wt:stop-input-frame 与 wt:refresh-input-frame
+    vi.stubGlobal('location', new URL('https://www.youtube.com/live_chat?v=fixture'))
+    await startPageTranslation({ inputOnly: true })
+    await settle(50)
+    expect((globalThis as Record<symbol, unknown>)[SINGLETON_KEY]).toBeUndefined()
+
+    await startPageTranslation()
+    await settle(50)
+    for (const type of ['wt:stop-input-frame', 'wt:refresh-input-frame'] as const) {
+      let replied = false
+      const handled = await fakeBrowser.runtime.onMessage.trigger(
+        { type },
+        { id: fakeBrowser.runtime.id },
+        () => {
+          replied = true
+        },
+      )
+      expect(handled.every((result) => result === undefined)).toBe(true)
+      await settle(20)
+      expect(replied).toBe(false)
+    }
+    ;((globalThis as Record<symbol, { dispose(): void } | undefined>)[SINGLETON_KEY])?.dispose()
+
+    // 模拟同源 YouTube live_chat 子框架
+    const topDescriptor = Object.getOwnPropertyDescriptor(window, 'top')
+    try {
+      Object.defineProperty(window, 'top', {
+        configurable: true,
+        value: { location: { href: 'https://www.youtube.com/watch?v=fixture' } },
+      })
+      document.body.innerHTML = '<nav><button id="btn">Settings</button></nav><p id="p">English sentence.</p><textarea id="chat"></textarea>'
+      await startPageTranslation({ inputOnly: true })
+      await settle(200)
+
+      // DOM 固定词典与自动翻译均不启动
+      expect(document.querySelector('#btn')?.textContent).toBe('Settings')
+      expect(document.querySelector('#p')?.textContent).toBe('English sentence.')
+      expect(await triggerMessage({ type: 'wt:status' })).toEqual({
+        ok: true,
+        status: {
+          supported: true,
+          fixed: false,
+          auto: false,
+          paused: false,
+          capped: false,
+          budgetCapped: false,
+          failed: 0,
+          error: '',
+        },
+      })
+
+      // 子框架忽略顶层专属消息
+      for (const msg of [
+        { type: 'wt:show-selection', text: 'Hello' },
+        { type: 'wt:page-action', action: 'restore' },
+        { type: 'wt:read-selection' },
+      ] as const) {
+        const handled = await fakeBrowser.runtime.onMessage.trigger(msg, { id: fakeBrowser.runtime.id }, () => undefined)
+        expect(handled.every((result) => result === undefined)).toBe(true)
+      }
+
+      // 正常触发子框架输入翻译
+      const chat = document.querySelector<HTMLTextAreaElement>('#chat')!
+      chat.value = '请检查这段代码'
+      chat.focus()
+      vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+      expect(await triggerMessage({ type: 'wt:translate-input' })).toEqual({ ok: true })
+      await settle(50)
+      expect(chat.value).toBe('ES:请检查这段代码')
+
+      // 父页面变为敏感页时实时阻断输入翻译
+      Object.defineProperty(window, 'top', {
+        configurable: true,
+        value: { location: { href: 'https://www.youtube.com/account' } },
+      })
+      chat.value = '敏感父页草稿'
+      expect(await triggerMessage({ type: 'wt:translate-input' })).toEqual({
+        ok: false,
+        error: zhCN.wtInputUnavailable,
+      })
+
+      // 恢复父页面后测试 wt:stop-input-frame 与 wt:refresh-input-frame
+      Object.defineProperty(window, 'top', {
+        configurable: true,
+        value: { location: { href: 'https://www.youtube.com/watch?v=fixture' } },
+      })
+      expect(await triggerMessage({ type: 'wt:stop-input-frame' })).toEqual({ ok: true })
+      expect(await triggerMessage({ type: 'wt:status' })).toMatchObject({
+        ok: true,
+        status: { supported: false },
+      })
+      expect(await triggerMessage({ type: 'wt:refresh-input-frame' })).toEqual({ ok: true })
+      await settle(50)
+      expect(await triggerMessage({ type: 'wt:status' })).toMatchObject({
+        ok: true,
+        status: { supported: true },
+      })
+    } finally {
+      if (topDescriptor !== undefined) Object.defineProperty(window, 'top', topDescriptor)
+    }
+  })
 })

@@ -19,6 +19,8 @@ import {
   invokeOwnedContextMenu,
   invokeOwnedSelectionMenu,
 } from './fixtures'
+import { bundleDanmakuFixture, bundleManagedChatFixture, bundleProseMirrorFixture } from './chat-editors-fixture'
+import { bundleDiscordSlateFixture } from './discord-slate-fixture'
 import { startMock, PHYSICS, ENTROPY, THIRD, LONG_RESULT, PAGE_HTML, type MockCall } from './mock-server'
 
 type FixtureChrome = typeof import('wxt/browser').browser
@@ -1813,18 +1815,47 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         }
       })
       expect(actual).toEqual({ activeId: tabId, ownTabId: null, isPopup: true })
-      await expect(popup.locator('[data-test="wt-origin"]')).toHaveText(new URL(page.url()).origin)
+      await expect(popup.locator('.popup-enable [role="switch"]')).toHaveCount(1)
+      await expect(popup.locator('[data-test="wt-popup-auto-interaction"] [role="switch"]')).toHaveCount(1)
+      await expect(popup.locator('[data-test="wt-popup-floating"] [role="switch"]')).toHaveCount(1)
+      await expect(popup.locator('[data-test="wt-popup-video-subtitles"] [role="switch"]')).toHaveCount(1)
+      await expect(popup.locator('[data-test="wt-popup-input-translation"] [role="switch"]')).toHaveCount(1)
+      await expect(popup.locator('[data-test="settings"]')).toBeVisible()
       const autoInteraction = popup.locator('[data-test="wt-popup-auto-interaction"] [role="switch"]')
       await autoInteraction.click()
       await expect(autoInteraction).toHaveAttribute('aria-checked', 'false')
       await expect.poll(() => configFlag(options, 'autoInteractionEnabled')).toBe(false)
-      await popup.locator('[data-test="wt-translate-page"]').click()
+      const pageUrl = page.url()
+      expect(
+        await popup.evaluate(
+          async ({ id, url }) => {
+            const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+            return chrome.runtime.sendMessage({ type: 'wt:translate-page', tabId: id, url })
+          },
+          { id: tabId, url: pageUrl },
+        ),
+      ).toEqual({ ok: true })
       await expect(page.locator('#p1')).toHaveText('中文译文')
-      await expect(popup.locator('[data-test="wt-state"]')).toHaveText(zhCN.wtPageOn)
       expect((await entryConfig(options)).autoOrigins).toEqual([])
-      await popup.locator('[data-test="wt-restore"]').click()
+      expect(
+        await popup.evaluate(
+          async ({ id, url }) => {
+            const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+            return chrome.runtime.sendMessage({ type: 'wt:page-action', action: 'restore', tabId: id, url })
+          },
+          { id: tabId, url: pageUrl },
+        ),
+      ).toEqual({ ok: true })
       await expect(page.locator('#p1')).toHaveText(PHYSICS)
-      await popup.locator('[data-test="wt-resume"]').click()
+      expect(
+        await popup.evaluate(
+          async ({ id, url }) => {
+            const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+            return chrome.runtime.sendMessage({ type: 'wt:page-action', action: 'resume', tabId: id, url })
+          },
+          { id: tabId, url: pageUrl },
+        ),
+      ).toEqual({ ok: true })
       await expect(page.locator('#p1')).toHaveText('中文译文')
       const floating = popup.locator('[data-test="wt-popup-floating"] [role="switch"]')
       await expect(floating).toHaveAttribute('aria-checked', 'true')
@@ -2211,6 +2242,257 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
     }
     expect(manifest.commands['toggle-page-translation']?.suggested_key.default).toBe('Alt+T')
     expect(manifest.commands['translate-selection']?.suggested_key.default).toBe('Alt+S')
+    expect(manifest.commands['translate-input']?.suggested_key.default).toBe('Alt+Y')
+  })
+
+  test('弹出页只有总开关、五项全局开关和设置齿轮', async () => {
+    const testInfo = test.info()
+    const { context, extensionId } = await launch()
+    try {
+      const blank = await context.newPage()
+      await blank.goto('about:blank')
+      const popup = await context.newPage()
+      await popup.goto(`chrome-extension://${extensionId}/popup.html`)
+      await expect(popup.locator('[data-test="settings"]')).toBeVisible()
+      await expect(popup.locator('[role="switch"]')).toHaveCount(5)
+      await expect(popup.locator('.popup-details, [data-test="repository"]')).toHaveCount(0)
+      await expect(popup.getByRole('button', { name: '规则' })).toHaveCount(0)
+      await expect(popup.getByText('GitHub 词典语言', { exact: true })).toHaveCount(0)
+      await popup.screenshot({ path: testInfo.outputPath('popup-compact.png') })
+      const optionsUrlRegex = new RegExp(`^chrome-extension://${extensionId}/options\\.html`)
+      const optionsPrefix = `chrome-extension://${extensionId}/options.html`
+      const optionsPromise = context.waitForEvent('page')
+      await popup.locator('[data-test="settings"]').click()
+      await Promise.race([
+        optionsPromise.then((page) => page.waitForLoadState('domcontentloaded')),
+        popup.waitForURL(optionsUrlRegex),
+      ].map((pending) => pending.catch(() => undefined)))
+      await expect.poll(() => context.pages().some((page) => page.url().startsWith(optionsPrefix))).toBe(true)
+      const options = context.pages().find((page) => page.url().startsWith(optionsPrefix))!
+      await options.waitForLoadState('domcontentloaded')
+      await options.locator('[data-test="nav-github-title"]').click()
+      await expect(options.locator('.wt-github-preferences')).toBeVisible()
+      await expect(options.locator('label[for="page-language"]')).toBeVisible()
+    } finally {
+      await context.close()
+    }
+  })
+
+  test('精简弹出页：开关与设置齿轮', async () => {
+    const testInfo = test.info()
+    const { context, extensionId } = await launch()
+    try {
+      const blank = await context.newPage()
+      await blank.goto('about:blank')
+      const popup = await context.newPage()
+      await popup.setViewportSize({ width: 300, height: 720 })
+      await context.serviceWorkers()[0]!.evaluate(async () => {
+        const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+        const stored = await chrome.storage.sync.get('settings')
+        await chrome.storage.sync.set({ settings: { ...(stored.settings as object ?? {}), uiLanguage: 'zh-CN' } })
+      })
+      await popup.goto(`chrome-extension://${extensionId}/popup.html`)
+      await expect(popup.locator('[role="switch"]')).toHaveCount(5)
+      await expect(popup.locator('[data-test="wt-popup-auto-interaction"] [role="switch"]')).toHaveCount(1)
+      await expect(popup.locator('[data-test="wt-popup-floating"] [role="switch"]')).toHaveCount(1)
+      await expect(popup.locator('[data-test="wt-popup-video-subtitles"] [role="switch"]')).toHaveCount(1)
+      await expect(popup.locator('[data-test="wt-popup-input-translation"] [role="switch"]')).toHaveCount(1)
+      await expect(popup.locator('.popup-enable [role="switch"]')).toHaveCount(1)
+      await expect(popup.locator('.popup-details')).toHaveCount(0)
+      await expect(popup.locator('footer a[href]')).toHaveCount(0)
+      await expect(popup.getByRole('button', { name: '规则' })).toHaveCount(0)
+      await expect(popup.locator('[data-test="wt-settings"]')).toHaveCount(0)
+      const footerButtons = popup.locator('footer button')
+      await expect(footerButtons).toHaveCount(1)
+      await expect(footerButtons).toHaveAttribute('data-test', 'settings')
+      await expect(footerButtons).toHaveAttribute('aria-label', '设置')
+      await popup.evaluate(async () => {
+        const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+        const stored = await chrome.storage.sync.get('settings')
+        await chrome.storage.sync.set({
+          settings: {
+            ...(stored.settings as object ?? {}),
+            uiLanguage: 'zh-CN',
+            language: 'zh-TW',
+            translateTime: false,
+            translateTitle: true,
+          },
+        })
+      })
+      await popup.screenshot({ path: testInfo.outputPath('compact-popup.png') })
+      const optionsUrlRegex = new RegExp(`^chrome-extension://${extensionId}/options\\.html`)
+      const optionsPrefix = `chrome-extension://${extensionId}/options.html`
+      const optionsPromise = context.waitForEvent('page')
+      await popup.locator('button[data-test="settings"]').click()
+      // Full-page extension views reuse the popup target, so openOptionsPage may
+      // navigate this page instead of opening a new one. Either landing is valid.
+      await Promise.race([
+        optionsPromise.then((page) => page.waitForLoadState('domcontentloaded')),
+        popup.waitForURL(optionsUrlRegex),
+      ].map((pending) => pending.catch(() => undefined)))
+      await expect.poll(() => context.pages().some((page) => page.url().startsWith(optionsPrefix))).toBe(true)
+      const options = context.pages().find((page) => page.url().startsWith(optionsPrefix))!
+      await options.waitForLoadState('domcontentloaded')
+      await expect(options).toHaveURL(new RegExp(`^chrome-extension://${extensionId}/options\\.html`))
+      await expect(options.locator('[data-test="wt-general-view"]')).toBeVisible()
+      await expect(options.locator('[data-test="wt-input-target-language"]')).toBeVisible()
+      await expect(options.locator('[data-test="wt-shortcuts"]')).toBeVisible()
+      await expect(options.locator('.wt-privacy-note')).toContainText('不随浏览器账号同步')
+      await options.locator('[data-test="wt-shortcuts"]').scrollIntoViewIfNeeded()
+      await options.screenshot({ path: testInfo.outputPath('input-settings.png'), fullPage: true })
+      await options.locator('[data-test="nav-github-title"]').click()
+      await expect(options.locator('.wt-github-preferences')).toBeVisible()
+      await expect(options.getByText('GitHub 词典语言', { exact: true })).toBeVisible()
+      await expect(options.locator('[data-test="ui-language"]')).toContainText('简体中文')
+      await expect(options.locator('[data-test="page-language"]')).toContainText('繁體中文')
+      const githubSwitches = options.locator('.wt-github-preferences [role="switch"]')
+      await expect(githubSwitches).toHaveCount(2)
+      await expect(githubSwitches.nth(0)).toHaveAttribute('aria-checked', 'false')
+      await expect(githubSwitches.nth(1)).toHaveAttribute('aria-checked', 'true')
+    } finally {
+      await context.close()
+    }
+  })
+
+  test('输入翻译快捷键：目标语言与直接替换', async () => {
+    const testInfo = test.info()
+    const bundle = await bundleProseMirrorFixture()
+    const { context, extensionId } = await launch()
+    const targetUrl = 'https://chatgpt.com/c/shortcut'
+    const origin = new URL(targetUrl).origin
+    const scriptUrl = `${origin}/wt-chat-fixture.js`
+    await context.route(`${origin}/**`, async (route) => {
+      const url = route.request().url().split('?')[0] ?? ''
+      if (url === targetUrl) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'text/html; charset=utf-8',
+          body: `<!doctype html><html><head><meta charset="utf-8"><title>Input Shortcut Fixture</title></head><body style="margin:24px"><div id="editor-mount"></div><button id="fixture-send" type="button">Send</button><script src="${scriptUrl}"></script></body></html>`,
+        })
+        return
+      }
+      if (url === scriptUrl) {
+        await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: bundle })
+        return
+      }
+      await route.abort()
+    })
+    try {
+      const options = await saveAndConnect(context, extensionId)
+      api.setTextTranslator((text) => {
+        if (text === '请检查这段代码') return 'Revisa este código.'
+        if (text === '你好') return 'こんにちは'
+        return `EN:${text}`
+      })
+      await enableRealtimeFeature(options, 'input')
+      expect(await options.evaluate(async () => {
+        const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+        return chrome.runtime.sendMessage({
+          type: 'wt:save-config',
+          patch: {
+            inputTargetLanguage: 'es',
+            targetLanguage: 'ja',
+            autoInteractionEnabled: false,
+            floatingButtonEnabled: false,
+          },
+        })
+      })).toMatchObject({
+        ok: true,
+        config: { inputTargetLanguage: 'es', targetLanguage: 'ja', autoInteractionEnabled: false },
+      })
+      const page = await context.newPage()
+      await page.goto(targetUrl)
+      await waitForSiteScriptRegistration(options, { url: targetUrl })
+      await waitForSiteContentReady(options, page, { supported: true })
+      const readModel = (): Promise<string> => page.evaluate(() => {
+        const root = document.getElementById('chat-editor') as (HTMLElement & { editor?: { state: { doc: { content: { size: number }; textBetween(from: number, to: number, blockSeparator: string, leafText: string): string } } } }) | null
+        const current = root?.editor
+        if (current === undefined) return ''
+        return current.state.doc.textBetween(0, current.state.doc.content.size, '\n', '\n')
+      })
+      const readSent = (): Promise<string[]> => page.evaluate(() => (window as unknown as { __sentDrafts?: string[] }).__sentDrafts ?? [])
+      await page.bringToFront()
+      const editor = page.locator('#chat-editor')
+      const readDOM = (): Promise<string> => editor.innerText()
+      await editor.click()
+      const callsBefore = api.calls.length
+      await page.keyboard.type('请检查这段代码')
+      await page.waitForTimeout(650)
+      expect(api.calls.slice(callsBefore).filter((call) => call.kind === 'texts')).toEqual([])
+      expect(await readModel()).toBe('请检查这段代码')
+      await context.serviceWorkers()[0]!.evaluate(() => {
+        const probe = globalThis as unknown as { chrome: FixtureChrome; __wtNativeCommands: string[] }
+        probe.__wtNativeCommands = []
+        probe.chrome.commands.onCommand.addListener((command) => { probe.__wtNativeCommands.push(command) })
+      })
+      const readNativeCommands = (): Promise<string[]> => context.serviceWorkers()[0]!.evaluate(() => {
+        const probe = globalThis as unknown as { __wtNativeCommands?: string[] }
+        return probe.__wtNativeCommands ?? []
+      })
+      const shortcut = await sendOwnedBrowserAltShortcut(page, 'Y', async () => (await readModel()) === 'Revisa este código.')
+      const commands = await readNativeCommands()
+      if (!shortcut.sent && !commands.includes('translate-input')) {
+        testInfo.skip(true, `ENVIRONMENT GATE: Windows 原生快捷键未触发浏览器扩展命令: ${shortcut.reason ?? 'unknown'}`)
+        return
+      }
+      expect(commands).toContain('translate-input')
+      await expect.poll(readModel).toBe('Revisa este código.')
+      await expect.poll(readDOM).toBe('Revisa este código.')
+      expect(await readSent()).toEqual([])
+      const spanish = api.calls.findLast((call) => {
+        const texts = call.payload.texts
+        return call.kind === 'texts' && Array.isArray(texts) && texts[0] === '请检查这段代码'
+      })
+      expect(JSON.stringify(spanish?.requestBody)).toContain('Spanish')
+      expect(await options.evaluate(async () => {
+        const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+        const reply = await chrome.runtime.sendMessage({ type: 'wt:get-config' }) as { config?: { targetLanguage?: string } }
+        return reply.config?.targetLanguage
+      })).toBe('ja')
+      await page.locator('[data-wt-root] .popover button[data-action="restore"]').click()
+      await expect.poll(readModel).toBe('请检查这段代码')
+
+      expect(await options.evaluate(async () => {
+        const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+        return chrome.runtime.sendMessage({ type: 'wt:save-config', patch: { inputTargetLanguage: 'ja' } })
+      })).toMatchObject({ ok: true, config: { inputTargetLanguage: 'ja', targetLanguage: 'ja' } })
+      await page.bringToFront()
+      await editor.click()
+      await page.keyboard.press('Control+A')
+      await page.keyboard.press('Backspace')
+      await page.keyboard.type('你好')
+      await page.waitForTimeout(200)
+      const japanese = await sendOwnedBrowserAltShortcut(page, 'Y', async () => (await readModel()) === 'こんにちは')
+      expect(japanese.sent, japanese.reason).toBe(true)
+      await expect.poll(readModel).toBe('こんにちは')
+      await expect.poll(readDOM).toBe('こんにちは')
+      expect(await readSent()).toEqual([])
+
+      api.hold('请检查这段代码')
+      await editor.click()
+      await page.keyboard.press('Control+A')
+      await page.keyboard.press('Backspace')
+      await page.keyboard.type('请检查这段代码')
+      const heldCommandsBefore = (await readNativeCommands()).filter((name) => name === 'translate-input').length
+      const heldCallsBefore = api.calls.length
+      const held = await sendOwnedBrowserAltShortcut(page, 'Y', async () => {
+        const count = (await readNativeCommands()).filter((name) => name === 'translate-input').length
+        return count > heldCommandsBefore && api.calls.slice(heldCallsBefore).some((call) => {
+          const texts = call.payload.texts
+          return call.kind === 'texts' && Array.isArray(texts) && texts[0] === '请检查这段代码'
+        })
+      })
+      expect(held.sent, held.reason).toBe(true)
+      expect((await readNativeCommands()).filter((name) => name === 'translate-input')).toHaveLength(heldCommandsBefore + 1)
+      await page.keyboard.press('Control+A')
+      await page.keyboard.type('新的中文')
+      api.release('请检查这段代码')
+      await page.waitForTimeout(400)
+      expect(await readModel()).toBe('新的中文')
+      expect(await readSent()).toEqual([])
+    } finally {
+      await context.close()
+    }
   })
 
   test('快捷键 Alt+T 切换本页翻译、Alt+S 翻译选中文字（原生按键触发）', async () => {
@@ -2481,11 +2763,13 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       const block = options.locator('[data-test="wt-shortcuts"]')
       await expect(block).toBeVisible()
       const rows = block.locator('li')
-      await expect(rows).toHaveCount(2)
+      await expect(rows).toHaveCount(3)
       await expect(rows.nth(0)).toContainText('翻译本页 / 恢复原文')
-      await expect(rows.nth(1)).toContainText('翻译选中文字')
+      await expect(rows.nth(1)).toContainText('翻译并替换输入')
+      await expect(rows.nth(2)).toContainText('翻译选中文字')
       await expect(rows.nth(0).locator('kbd')).toHaveText(/^(Alt\+T|未设置)$/)
-      await expect(rows.nth(1).locator('kbd')).toHaveText(/^(Alt\+S|未设置)$/)
+      await expect(rows.nth(1).locator('kbd')).toHaveText(/^(Alt\+Y|未设置)$/)
+      await expect(rows.nth(2).locator('kbd')).toHaveText(/^(Alt\+S|未设置)$/)
       await expect(options.locator('[data-test="wt-shortcuts-manage"]')).toBeEnabled()
       await expect(options.getByText('用于模型翻译和各网站内置词典', { exact: false })).toBeVisible()
       await block.scrollIntoViewIfNeeded()
@@ -2498,19 +2782,23 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         }, language)
       await setLanguage('en')
       await expect(rows.nth(0)).toContainText('Translate page / show original')
-      await expect(rows.nth(1)).toContainText('Translate selected text')
+      await expect(rows.nth(1)).toContainText('Translate and replace input')
+      await expect(rows.nth(2)).toContainText('Translate selected text')
       await expect(options.getByText('Used by model translation and the built-in site dictionaries', { exact: false })).toBeVisible()
       await options.screenshot({ path: `${SCREENS}/options-shortcuts-en.png` })
       await setLanguage('zh-CN')
-      const popup = await context.newPage()
-      await popup.goto(`chrome-extension://${extensionId}/popup.html`)
-      const hint = popup.locator('#page-language-hint')
-      // 语言区在折叠的 <details> 里：先展开再核对
-      await hint.locator('xpath=ancestor::details').locator('summary').click()
+      await options.locator('[data-test="nav-github-title"]').click()
+      const hint = options.locator('#page-language-hint')
       await expect(hint).toBeVisible()
       await expect(hint).toHaveText('仅决定 GitHub 内置词典用简体还是繁体；其他网站和模型翻译跟随「翻译目标语言」。')
-      await expect(popup.getByText('GitHub 词典语言', { exact: true })).toBeVisible()
-      expect(await popup.locator('[data-test="page-language"]').getAttribute('aria-describedby')).toBe('page-language-hint')
+      await expect(options.getByText('GitHub 词典语言', { exact: true })).toBeVisible()
+      expect(await options.locator('[data-test="page-language"]').getAttribute('aria-describedby')).toBe('page-language-hint')
+      const popup = await context.newPage()
+      await popup.goto(`chrome-extension://${extensionId}/popup.html`)
+      await expect(popup.locator('[data-test="settings"]')).toBeVisible()
+      await expect(popup.locator('.popup-details')).toHaveCount(0)
+      await expect(popup.locator('[data-test="repository"]')).toHaveCount(0)
+      await expect(popup.getByText('GitHub 词典语言', { exact: true })).toHaveCount(0)
       await popup.screenshot({ path: `${SCREENS}/popup-language-hint-zh.png` })
     } finally {
       await context.close()
@@ -3348,6 +3636,1903 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await expect(openrouterSwitch).toBeEnabled()
       expect(await getDisabled()).not.toContain('openrouter')
       expect(api.calls).toHaveLength(0)
+    } finally {
+      await context.close()
+    }
+  })
+
+  async function enableRealtimeFeature(options: Page, feature: 'input' | 'video'): Promise<void> {
+    await showOptionsSection(options, 'general')
+    const selector = feature === 'input' ? 'wt-input-translation-toggle' : 'wt-video-subtitles-toggle'
+    const toggle = options.locator(`[data-test="${selector}"] [role="switch"]`)
+    await expect(toggle).toHaveAttribute('aria-checked', 'false')
+    await toggle.click()
+    await acceptOwnedPermission(options, ['http://*/*', 'https://*/*'])
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
+    await expect(toggle).toBeEnabled()
+  }
+
+  test('实时功能扩展链路：输入开关注入已打开页面，草稿英文预览确认替换还原与关闭取消', async () => {
+    const testInfo = test.info()
+    const { context, extensionId } = await launch()
+    try {
+      const targetUrl = 'https://chat.fixture.test/chat'
+      await context.route(targetUrl, (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'text/html; charset=utf-8',
+          body: `<!doctype html>
+            <html>
+              <body style="margin:24px">
+                <p id="history">CHAT_HISTORY_SENTINEL</p>
+                <form id="chat-form" style="display:flex;flex-direction:column;gap:140px;margin-bottom:200px">
+                  <textarea id="draft" rows="4" style="width:360px;height:84px"></textarea>
+                  <div id="plain" contenteditable="true" style="width:360px;min-height:64px;border:1px solid #999"></div>
+                </form>
+                <input id="pwd" type="password" style="width:240px">
+                <script>
+                  window.__submittedCount = 0;
+                  window.__navCounter = (window.__navCounter || 0) + 1;
+                  document.getElementById('chat-form').addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    window.__submittedCount += 1;
+                  });
+                </script>
+              </body>
+            </html>`,
+        }),
+      )
+
+      const options = await saveAndConnect(context, extensionId)
+      api.setTextTranslator((t) =>
+        t === '请检查这段代码'
+          ? 'Please review this code.'
+          : t === '你好\n世界'
+            ? 'Hello\nworld'
+            : `English: ${t}`,
+      )
+
+      const page = await context.newPage()
+      let navigations = 0
+      page.on('framenavigated', (frame) => {
+        if (frame === page.mainFrame()) navigations += 1
+      })
+      await page.goto(targetUrl)
+      expect(navigations).toBe(1)
+      await page.evaluate(() => {
+        ;(window as unknown as { __aliveMarker?: string }).__aliveMarker = 'stay-on-page'
+      })
+
+      const callsBeforeEnable = api.calls.length
+      const draft = page.locator('#draft')
+      await draft.click()
+      await draft.fill('你好\n世界')
+      await page.waitForTimeout(800)
+      expect(api.calls).toHaveLength(callsBeforeEnable)
+      await inspectClosedShadowPage(page)
+      await expect(page.locator('[data-wt-root] .popover [role="status"]')).toHaveCount(0)
+
+      await options.bringToFront()
+      await enableRealtimeFeature(options, 'input')
+      expect(
+        await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({
+            type: 'wt:save-config',
+            patch: { floatingButtonEnabled: false },
+          })
+        }),
+      ).toMatchObject({
+        ok: true,
+        config: {
+          targetLanguage: 'zh-CN',
+          sourceLanguage: 'auto',
+          autoOrigins: [],
+          inputTranslationEnabled: true,
+        },
+      })
+      await waitForSiteScriptRegistration(options, { url: targetUrl })
+      await waitForSiteContentReady(options, page, { supported: true })
+      expect(navigations).toBe(1)
+      expect(await page.evaluate(() => (window as unknown as { __aliveMarker?: string }).__aliveMarker)).toBe('stay-on-page')
+
+      await page.bringToFront()
+      const callsBeforeDraft = api.calls.length
+      await draft.click()
+      await draft.fill('请检查这段代码')
+
+      const popover = page.locator('[data-wt-root] .popover')
+      const status = popover.locator('[role="status"]')
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await status.isVisible().catch(() => false)) ? await status.textContent() : ''
+        })
+        .toBe('Please review this code.')
+
+      await expect(draft).toHaveValue('请检查这段代码')
+      expect(await page.evaluate(() => (window as unknown as { __submittedCount: number }).__submittedCount)).toBe(0)
+
+      const draftCalls = api.calls.slice(callsBeforeDraft).filter((call) => call.kind === 'texts')
+      expect(draftCalls).toHaveLength(1)
+      const draftCall = draftCalls[0]!
+      expect(draftCall.payload).toEqual({ texts: ['请检查这段代码'] })
+      expect(JSON.stringify(draftCall.requestBody)).not.toContain('CHAT_HISTORY_SENTINEL')
+      const sysPrompt = (draftCall.requestBody.messages as Array<{ content: string }>)[0]?.content ?? ''
+      expect(sysPrompt).toContain('into natural, accurate English')
+
+      await popover.locator('button[data-action="replace"]').click()
+      await expect(draft).toHaveValue('Please review this code.')
+      expect(await page.evaluate(() => document.activeElement?.id)).toBe('draft')
+      expect(await page.evaluate(() => (window as unknown as { __submittedCount: number }).__submittedCount)).toBe(0)
+
+      await inspectClosedShadowPage(page)
+      await popover.locator('button[data-action="restore"]').click()
+      await expect(draft).toHaveValue('请检查这段代码')
+      expect(await page.evaluate(() => document.activeElement?.id)).toBe('draft')
+      expect(await page.evaluate(() => (window as unknown as { __submittedCount: number }).__submittedCount)).toBe(0)
+
+      const plain = page.locator('#plain')
+      await plain.click()
+      await page.evaluate(() => {
+        document.getElementById('plain')!.innerHTML = '<div>你好</div><div>世界</div>'
+      })
+      await page.keyboard.insertText('！')
+      await page.keyboard.press('Backspace')
+
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await status.isVisible().catch(() => false)) ? await status.textContent() : ''
+        })
+        .toBe('Hello\nworld')
+
+      await popover.locator('button[data-action="replace"]').click()
+      expect(await plain.evaluate((el) => el.innerHTML)).toBe('Hello<br>world')
+      expect(await page.evaluate(() => document.activeElement?.id)).toBe('plain')
+
+      await inspectClosedShadowPage(page)
+      await popover.locator('button[data-action="restore"]').click()
+      expect(await plain.evaluate((el) => el.innerHTML)).toBe('你好<br>世界')
+      expect(await page.evaluate(() => document.activeElement?.id)).toBe('plain')
+
+      const callsBeforePassword = api.calls.length
+      await page.locator('#pwd').click()
+      await page.locator('#pwd').fill('密码中文测试')
+      await page.waitForTimeout(800)
+      expect(api.calls).toHaveLength(callsBeforePassword)
+
+      await draft.click()
+      await draft.fill('请检查这段代码')
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await status.isVisible().catch(() => false)) ? await status.textContent() : ''
+        })
+        .toBe('Please review this code.')
+      await page.screenshot({ path: testInfo.outputPath('input-extension-preview.png') })
+
+      const heldDraft = '关闭功能前的草稿'
+      api.hold(heldDraft)
+      await draft.click()
+      await draft.fill(heldDraft)
+      await expect
+        .poll(() =>
+          api.calls.some(
+            (call) => call.kind === 'texts' && (call.payload.texts as string[] | undefined)?.includes(heldDraft),
+          ),
+        )
+        .toBe(true)
+      const heldCall = api.calls.findLast(
+        (call) => call.kind === 'texts' && (call.payload.texts as string[] | undefined)?.includes(heldDraft),
+      )!
+
+      expect(
+        await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({
+            type: 'wt:save-config',
+            patch: { inputTranslationEnabled: false },
+          })
+        }),
+      ).toMatchObject({ ok: true, config: { inputTranslationEnabled: false } })
+
+      await expect.poll(() => heldCall.aborted).toBe(true)
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(page)
+          return status.count()
+        })
+        .toBe(0)
+
+      api.release(heldDraft)
+      await page.waitForTimeout(200)
+      await inspectClosedShadowPage(page)
+      await expect(status).toHaveCount(0)
+
+      const callsAfterDisable = api.calls.length
+      await draft.click()
+      await draft.fill('禁用后的新中文草稿')
+      await page.waitForTimeout(800)
+      expect(api.calls).toHaveLength(callsAfterDisable)
+      await inspectClosedShadowPage(page)
+      await expect(status).toHaveCount(0)
+    } finally {
+      await context.close()
+    }
+  })
+
+  test('Discord Slate 输入预览替换与 CDP 合成边界', async () => {
+    const testInfo = test.info()
+    const bundle = await bundleDiscordSlateFixture()
+    const { context, extensionId } = await launch()
+    const targetUrl = 'https://discord.com/channels/@me/fixture'
+    const scriptUrl = 'https://discord.com/wt-slate-fixture.js'
+    await context.route('https://discord.com/**', async (route) => {
+      const url = route.request().url().split('?')[0] ?? ''
+      if (url === targetUrl) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'text/html; charset=utf-8',
+          body: `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:24px"><div id="root"></div><script src="${scriptUrl}"></script></body></html>`,
+        })
+        return
+      }
+      if (url === scriptUrl) {
+        await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: bundle })
+        return
+      }
+      await route.abort()
+    })
+    try {
+      const options = await saveAndConnect(context, extensionId)
+      api.setTextTranslator((text) => {
+        if (text === '水水水水水水') return 'water water water water water water'
+        if (text === '第一行\n\n第三行') return 'Line one\n\nLine three'
+        if (text === '提交的中文') return 'Committed Chinese'
+        return `EN:${text}`
+      })
+      await enableRealtimeFeature(options, 'input')
+      expect(
+        await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({
+            type: 'wt:save-config',
+            patch: { floatingButtonEnabled: false },
+          })
+        }),
+      ).toMatchObject({ ok: true, config: { inputTranslationEnabled: true } })
+
+      const page = await context.newPage()
+      await page.goto(targetUrl)
+      await waitForSiteScriptRegistration(options, { url: targetUrl })
+      await waitForSiteContentReady(options, page, { supported: true })
+      const editor = page.locator('#discord-editor')
+      await expect(editor).toHaveAttribute('data-slate-editor', 'true')
+      const readDraft = (): Promise<string> => page.evaluate(() => {
+        const root = document.querySelector('[data-slate-editor="true"]')
+        if (!(root instanceof HTMLElement)) return ''
+        const readNode = (node: Node): string => {
+          if (node instanceof Element && (node.hasAttribute('data-slate-zero-width') || node.hasAttribute('data-slate-placeholder'))) return ''
+          if (node instanceof Text) return node.data
+          if (node instanceof Element && node.tagName === 'BR') return '\n'
+          let text = ''
+          for (const child of node.childNodes) text += readNode(child)
+          return text
+        }
+        const blocks = [...root.children].filter((child) => child.getAttribute('data-slate-node') === 'element')
+        return blocks.length === 0 ? readNode(root) : blocks.map((block) => readNode(block)).join('\n')
+      })
+      const readModel = (): Promise<string> => page.evaluate(() => (window as unknown as { __discordModelText?: string }).__discordModelText ?? '')
+      const readSent = (): Promise<string[]> => page.evaluate(() => (window as unknown as { __sentDrafts?: string[] }).__sentDrafts ?? [])
+
+      const callsBeforeDraft = api.calls.length
+      await editor.click()
+      await page.keyboard.type('水水水水水水')
+      const popover = page.locator('[data-wt-root] .popover')
+      const status = popover.locator('[role="status"]')
+      await expect.poll(async () => {
+        await inspectClosedShadowPage(page)
+        return (await status.isVisible().catch(() => false)) ? await status.textContent() : ''
+      }).toBe('water water water water water water')
+      expect(await readDraft()).toBe('水水水水水水')
+      expect(await readModel()).toBe('水水水水水水')
+      const draftCalls = api.calls.slice(callsBeforeDraft).filter((call) => call.kind === 'texts')
+      expect(draftCalls).toHaveLength(1)
+      expect(draftCalls[0]?.payload).toEqual({ texts: ['水水水水水水'] })
+      expect(JSON.stringify(draftCalls[0]?.requestBody)).not.toContain('CHAT_HISTORY_SENTINEL')
+      await page.screenshot({ path: testInfo.outputPath('discord-input-preview.png') })
+
+      await page.evaluate(() => {
+        const target = window as unknown as { __uiEvents?: string[] }
+        target.__uiEvents = []
+        document.addEventListener('keydown', (event) => { target.__uiEvents?.push(`keydown:${event.key}`) }, true)
+        document.addEventListener('submit', () => { target.__uiEvents?.push('submit') }, true)
+      })
+      await popover.locator('button[data-action="replace"]').click()
+      await expect.poll(readModel).toBe('water water water water water water')
+      await expect.poll(readDraft).toBe('water water water water water water')
+      await page.waitForTimeout(200)
+      await page.locator('#outside').click()
+      await editor.click()
+      expect(await readModel()).toBe('water water water water water water')
+      expect(await readDraft()).toBe('water water water water water water')
+      expect(await readSent()).toEqual([])
+      const uiEvents = await page.evaluate(() => (window as unknown as { __uiEvents?: string[] }).__uiEvents ?? [])
+      expect(uiEvents.filter((item) => item.startsWith('keydown:') || item === 'submit')).toEqual([])
+
+      await inspectClosedShadowPage(page)
+      await popover.locator('button[data-action="restore"]').click()
+      await expect.poll(readModel).toBe('水水水水水水')
+      await expect.poll(readDraft).toBe('水水水水水水')
+      await inspectClosedShadowPage(page)
+      await popover.locator('button[data-action="replace"]').click()
+      await expect.poll(readModel).toBe('water water water water water water')
+      await page.locator('#fixture-send').click()
+      expect(await readSent()).toEqual(['water water water water water water'])
+
+      await editor.click()
+      await page.keyboard.press('Control+A')
+      await page.keyboard.press('Backspace')
+      await page.keyboard.type('第一行')
+      await page.keyboard.press('Enter')
+      await page.keyboard.press('Enter')
+      await page.keyboard.type('第三行')
+      await expect.poll(async () => {
+        await inspectClosedShadowPage(page)
+        return (await status.isVisible().catch(() => false)) ? await status.textContent() : ''
+      }).toBe('Line one\n\nLine three')
+      const multilineCall = api.calls.findLast((call) => {
+        const texts = call.payload.texts
+        return call.kind === 'texts' && Array.isArray(texts) && texts[0] === '第一行\n\n第三行'
+      })
+      expect(multilineCall?.payload).toEqual({ texts: ['第一行\n\n第三行'] })
+      await popover.locator('button[data-action="replace"]').click()
+      await expect.poll(readModel).toBe('Line one\n\nLine three')
+      await expect.poll(readDraft).toBe('Line one\n\nLine three')
+      await inspectClosedShadowPage(page)
+      await popover.locator('button[data-action="restore"]').click()
+      await expect.poll(readModel).toBe('第一行\n\n第三行')
+      await expect.poll(readDraft).toBe('第一行\n\n第三行')
+
+      await page.evaluate(() => {
+        const state = window as unknown as { __compositionEndTrusted?: boolean }
+        delete state.__compositionEndTrusted
+        document.addEventListener('compositionend', (event) => {
+          state.__compositionEndTrusted = event.isTrusted
+        }, { capture: true, once: true })
+      })
+      const callsBeforeIme = api.calls.length
+      await editor.click()
+      await page.keyboard.press('Control+A')
+      await page.keyboard.press('Backspace')
+      const client = await page.context().newCDPSession(page)
+      await client.send('Input.imeSetComposition', {
+        text: '预编辑中文',
+        selectionStart: 5,
+        selectionEnd: 5,
+      })
+      await page.waitForTimeout(800)
+      expect(api.calls.length).toBe(callsBeforeIme)
+      await client.send('Input.insertText', { text: '提交的中文' })
+      await expect.poll(readModel).toBe('提交的中文')
+      await expect.poll(readDraft).toBe('提交的中文')
+      let endTrusted: boolean | undefined
+      await expect.poll(async () => {
+        endTrusted = await page.evaluate(() => (window as unknown as { __compositionEndTrusted?: boolean }).__compositionEndTrusted)
+        return endTrusted
+      }).not.toBeUndefined()
+      await testInfo.attach('ime-end-trust', { body: JSON.stringify({ trusted: endTrusted, driver: 'CDP', nativeOsImeTested: false }), contentType: 'application/json' })
+      if (endTrusted === true) {
+        await expect.poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await status.isVisible().catch(() => false)) ? await status.textContent() : ''
+        }).toBe('Committed Chinese')
+        const imeCall = api.calls.findLast((call) => call.kind === 'texts')
+        expect(imeCall?.payload).toEqual({ texts: ['提交的中文'] })
+      } else if (endTrusted === false) {
+        expect(api.calls.length).toBe(callsBeforeIme)
+        await page.locator('#outside').click()
+        await editor.click()
+        await page.keyboard.type('继续')
+        await expect.poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await status.isVisible().catch(() => false)) ? await status.textContent() : ''
+        }).toBe('EN:提交的中文继续')
+        const recoveryCall = api.calls.findLast((call) => call.kind === 'texts')
+        expect(recoveryCall?.payload).toEqual({ texts: ['提交的中文继续'] })
+      } else {
+        throw new Error('compositionend was not observed')
+      }
+      await client.detach()
+    } finally {
+      await context.close()
+    }
+  })
+
+  for (const site of [
+    { title: '常用聊天编辑器：ChatGPT', pageUrl: 'https://chatgpt.com/c/fixture' },
+    { title: '常用聊天编辑器：Claude', pageUrl: 'https://claude.ai/chat/fixture' },
+    { title: '常用聊天编辑器：Telegram Web', pageUrl: 'https://web.telegram.org/a/' },
+  ]) {
+    test(site.title, async () => {
+      const testInfo = test.info()
+      const bundle = await bundleProseMirrorFixture()
+      const { context, extensionId } = await launch()
+      const targetUrl = site.pageUrl
+      const origin = new URL(targetUrl).origin
+      const scriptUrl = `${origin}/wt-chat-fixture.js`
+      await context.route(`${origin}/**`, async (route) => {
+        const url = route.request().url().split('?')[0] ?? ''
+        if (url === targetUrl) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'text/html; charset=utf-8',
+            body: `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:24px"><p id="history">CHAT_HISTORY_SENTINEL</p><div id="editor-mount"></div><div style="margin-top:200px"><button id="fixture-send" type="button">Send</button><button id="outside" type="button">Outside</button></div><script src="${scriptUrl}"></script></body></html>`,
+          })
+          return
+        }
+        if (url === scriptUrl) {
+          await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: bundle })
+          return
+        }
+        await route.abort()
+      })
+      try {
+        const options = await saveAndConnect(context, extensionId)
+        api.setTextTranslator((text) => {
+          if (text === '请检查这段代码') return 'Please review this code.'
+          if (text === '第一行\n\n第三行') return 'Line one\n\nLine three'
+          return `EN:${text}`
+        })
+        await enableRealtimeFeature(options, 'input')
+        expect(
+          await options.evaluate(async () => {
+            const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+            return chrome.runtime.sendMessage({
+              type: 'wt:save-config',
+              patch: { floatingButtonEnabled: false },
+            })
+          }),
+        ).toMatchObject({ ok: true, config: { inputTranslationEnabled: true } })
+
+        const page = await context.newPage()
+        await page.goto(targetUrl)
+        await waitForSiteScriptRegistration(options, { url: targetUrl })
+        await waitForSiteContentReady(options, page, { supported: true })
+        const editor = page.locator('#chat-editor')
+        await expect(editor).toHaveClass(/ProseMirror/)
+        const readDraft = (): Promise<string> => page.evaluate(() => {
+          const root = document.getElementById('chat-editor')
+          if (!(root instanceof HTMLElement)) return ''
+          const ignored = (node: Element): boolean => node.classList.contains('ProseMirror-trailingBreak') ||
+            node.hasAttribute('data-slate-zero-width') || node.hasAttribute('data-slate-placeholder')
+          const readBlock = (block: HTMLElement): string => {
+            const meaningful = [...block.childNodes].filter((child) => !(child instanceof Element && ignored(child)) && !(child instanceof Text && child.data === ''))
+            if (meaningful.length === 1 && meaningful[0] instanceof HTMLBRElement &&
+              block.querySelector('.ProseMirror-trailingBreak') === null) return ''
+            let text = ''
+            for (const child of block.childNodes) {
+              if (child instanceof Element && ignored(child)) continue
+              if (child instanceof Text) text += child.data
+              else if (child instanceof HTMLBRElement) text += '\n'
+              else if (child instanceof HTMLElement) text += readBlock(child)
+            }
+            return text
+          }
+          const blocks = [...root.children].filter((child): child is HTMLElement => child instanceof HTMLElement && (child.tagName === 'P' || child.tagName === 'DIV'))
+          return blocks.length === 0 ? readBlock(root) : blocks.map((block) => readBlock(block)).join('\n')
+        })
+        const readModel = (): Promise<string> => page.evaluate(() => {
+          const root = document.getElementById('chat-editor') as (HTMLElement & { editor?: { state: { doc: { content: { size: number }; textBetween(from: number, to: number, blockSeparator: string, leafText: string): string } } } }) | null
+          const current = root?.editor
+          if (current === undefined) return ''
+          return current.state.doc.textBetween(0, current.state.doc.content.size, '\n', '\n')
+        })
+        const readSent = (): Promise<string[]> => page.evaluate(() => (window as unknown as { __sentDrafts?: string[] }).__sentDrafts ?? [])
+
+        const callsBeforeDraft = api.calls.length
+        await editor.click()
+        await page.keyboard.type('请检查这段代码')
+        const popover = page.locator('[data-wt-root] .popover')
+        const status = popover.locator('[role="status"]')
+        await expect.poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await status.isVisible().catch(() => false)) ? await status.textContent() : ''
+        }).toBe('Please review this code.')
+        expect(await readDraft()).toBe('请检查这段代码')
+        expect(await readModel()).toBe('请检查这段代码')
+        const draftCalls = api.calls.slice(callsBeforeDraft).filter((call) => call.kind === 'texts')
+        expect(draftCalls).toHaveLength(1)
+        expect(draftCalls[0]?.payload).toEqual({ texts: ['请检查这段代码'] })
+        expect(JSON.stringify(draftCalls[0]?.requestBody)).not.toContain('CHAT_HISTORY_SENTINEL')
+        await page.screenshot({ path: testInfo.outputPath(`${site.title}-preview.png`) })
+
+        await page.evaluate(() => {
+          const target = window as unknown as { __uiEvents?: string[] }
+          target.__uiEvents = []
+          document.addEventListener('keydown', (event) => { target.__uiEvents?.push(`keydown:${event.key}`) }, true)
+          document.addEventListener('submit', () => { target.__uiEvents?.push('submit') }, true)
+        })
+        await popover.locator('button[data-action="replace"]').click()
+        await expect.poll(readModel).toBe('Please review this code.')
+        await expect.poll(readDraft).toBe('Please review this code.')
+        await page.waitForTimeout(200)
+        await page.locator('#outside').click()
+        await editor.click()
+        expect(await readModel()).toBe('Please review this code.')
+        expect(await readDraft()).toBe('Please review this code.')
+        expect(await readSent()).toEqual([])
+        const uiEvents = await page.evaluate(() => (window as unknown as { __uiEvents?: string[] }).__uiEvents ?? [])
+        expect(uiEvents.filter((item) => item.startsWith('keydown:') || item === 'submit')).toEqual([])
+
+        await inspectClosedShadowPage(page)
+        await popover.locator('button[data-action="restore"]').click()
+        await expect.poll(readModel).toBe('请检查这段代码')
+        await expect.poll(readDraft).toBe('请检查这段代码')
+        await inspectClosedShadowPage(page)
+        await popover.locator('button[data-action="replace"]').click()
+        await expect.poll(readModel).toBe('Please review this code.')
+        await page.locator('#fixture-send').click()
+        expect(await readSent()).toEqual(['Please review this code.'])
+
+        await editor.click()
+        await page.keyboard.press('Control+A')
+        await page.keyboard.press('Backspace')
+        await page.keyboard.type('第一行')
+        await page.keyboard.press('Enter')
+        await page.keyboard.press('Enter')
+        await page.keyboard.type('第三行')
+        await expect.poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await status.isVisible().catch(() => false)) ? await status.textContent() : ''
+        }).toBe('Line one\n\nLine three')
+        const multilineCall = api.calls.findLast((call) => {
+          const texts = call.payload.texts
+          return call.kind === 'texts' && Array.isArray(texts) && texts[0] === '第一行\n\n第三行'
+        })
+        expect(multilineCall?.payload).toEqual({ texts: ['第一行\n\n第三行'] })
+        await popover.locator('button[data-action="replace"]').click()
+        await expect.poll(readModel).toBe('Line one\n\nLine three')
+        await expect.poll(readDraft).toBe('Line one\n\nLine three')
+        await inspectClosedShadowPage(page)
+        await popover.locator('button[data-action="restore"]').click()
+        await expect.poll(readModel).toBe('第一行\n\n第三行')
+        await expect.poll(readDraft).toBe('第一行\n\n第三行')
+      } finally {
+        await context.close()
+      }
+    })
+  }
+
+  for (const site of [
+    {
+      title: '新增聊天编辑器：WhatsApp Lexical',
+      pageUrl: 'https://web.whatsapp.com/',
+      kind: 'lexical' as const,
+      pageTitle: 'WhatsApp Lexical Fixture',
+      multilineKeys: ['Shift+Enter', 'Shift+Enter', 'Shift+Enter'] as const,
+    },
+    {
+      title: '新增聊天编辑器：Slack Quill',
+      pageUrl: 'https://app.slack.com/client/T/C',
+      kind: 'quill' as const,
+      pageTitle: 'Slack Quill Fixture',
+      multilineKeys: ['Enter', 'Enter', 'Enter'] as const,
+    },
+    {
+      title: '新增聊天编辑器：Teams Rooster',
+      pageUrl: 'https://teams.microsoft.com/v2/',
+      kind: 'rooster' as const,
+      pageTitle: 'Teams Rooster Fixture',
+      multilineKeys: ['Enter', 'Enter', 'Enter'] as const,
+    },
+  ]) {
+    test(site.title, async () => {
+      const bundle = await bundleManagedChatFixture(site.kind)
+      const { context, extensionId } = await launch()
+      const targetUrl = site.pageUrl
+      const origin = new URL(targetUrl).origin
+      const scriptUrl = `${origin}/wt-chat-fixture.js`
+      await context.route(`${origin}/**`, async (route) => {
+        const url = route.request().url().split('?')[0] ?? ''
+        if (url === targetUrl) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'text/html; charset=utf-8',
+            body: `<!doctype html><html><head><meta charset="utf-8"><title>${site.pageTitle}</title></head><body style="margin:24px"><p id="history">CHAT_HISTORY_SENTINEL</p><div id="react-root"></div><div style="margin-top:200px"><button id="fixture-send" type="button">Send</button><button id="outside" type="button">Outside</button></div><script src="${scriptUrl}"></script></body></html>`,
+          })
+          return
+        }
+        if (url === scriptUrl) {
+          await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: bundle })
+          return
+        }
+        await route.abort()
+      })
+      try {
+        const options = await saveAndConnect(context, extensionId)
+        api.setTextTranslator((text) => {
+          if (text === '请检查这段代码') return 'Please review this code.'
+          if (text === '第一行\n\n第三行\n') return 'Line one\n\nLine three\n'
+          if (text === '<b>不是标签</b>') return '<b>不是标签</b>'
+          return `EN:${text}`
+        })
+        await enableRealtimeFeature(options, 'input')
+        expect(await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({
+            type: 'wt:save-config',
+            patch: { inputTargetLanguage: 'en', targetLanguage: 'ja', floatingButtonEnabled: false },
+          })
+        })).toMatchObject({ ok: true, config: { inputTranslationEnabled: true, inputTargetLanguage: 'en', targetLanguage: 'ja' } })
+        const page = await context.newPage()
+        await page.goto(targetUrl)
+        await waitForSiteScriptRegistration(options, { url: targetUrl })
+        await waitForSiteContentReady(options, page, { supported: true })
+        const editor = page.locator('#chat-editor')
+        await expect(editor).toHaveAttribute('role', 'textbox')
+        const readModel = (): Promise<string> => page.evaluate(() => (window as unknown as { __chatModelText?: string }).__chatModelText ?? '')
+        const readDraft = (): Promise<string> => page.evaluate(() => (window as unknown as { __chatDraftState?: string }).__chatDraftState ?? '')
+        const clearDraft = async (): Promise<void> => {
+          await editor.click()
+          if (site.kind === 'rooster') {
+            await editor.evaluate((root) => {
+              const probe = window as unknown as { __wtSelectionReady?: boolean }
+              probe.__wtSelectionReady = false
+              const onChange = (): void => {
+                const selection = getSelection()
+                if (selection !== null && !selection.isCollapsed && root.contains(selection.anchorNode) && root.contains(selection.focusNode)) {
+                  probe.__wtSelectionReady = true
+                  document.removeEventListener('selectionchange', onChange)
+                }
+              }
+              document.addEventListener('selectionchange', onChange)
+            })
+          }
+          await page.keyboard.press('Control+A')
+          if (site.kind === 'rooster') {
+            await page.waitForFunction(() => (window as unknown as { __wtSelectionReady?: boolean }).__wtSelectionReady === true, undefined, { timeout: 2000 })
+          }
+          await page.keyboard.press('Backspace')
+          await expect.poll(readModel).toBe('')
+          await expect.poll(readDraft).toBe('')
+        }
+        const readSent = (): Promise<string[]> => page.evaluate(() => (window as unknown as { __sentDrafts?: string[] }).__sentDrafts ?? [])
+        const readInjected = (): Promise<number> => page.evaluate(() => document.querySelectorAll('#chat-editor b, #chat-editor img, #chat-editor a').length)
+        await page.bringToFront()
+        await editor.click()
+        await expect(editor).toBeEditable()
+        await page.keyboard.type('请检查这段代码')
+        const popover = page.locator('[data-wt-root] .popover')
+        const status = popover.locator('[role="status"]')
+        await expect.poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await status.isVisible().catch(() => false)) ? await status.textContent() : ''
+        }).toBe('Please review this code.')
+        await expect.poll(readModel).toBe('请检查这段代码')
+        await expect.poll(readDraft).toBe('请检查这段代码')
+        expect(JSON.stringify(api.calls.findLast((call) => call.kind === 'texts')?.requestBody)).not.toContain('CHAT_HISTORY_SENTINEL')
+        await page.screenshot({ path: test.info().outputPath('managed-input-preview.png') })
+        const directReply = await context.serviceWorkers()[0]!.evaluate(async (url) => {
+          const { chrome } = globalThis as unknown as {
+            chrome: { tabs: {
+              query(query: { url: string }): Promise<Array<{ id?: number }>>
+              sendMessage(tabId: number, message: { type: 'wt:translate-input' }, options: { frameId: number }): Promise<unknown>
+            } }
+          }
+          const [tab] = await chrome.tabs.query({ url })
+          if (tab?.id === undefined) throw new Error('owned fixture tab unavailable')
+          return chrome.tabs.sendMessage(tab.id, { type: 'wt:translate-input' }, { frameId: 0 })
+        }, targetUrl)
+        expect(directReply).toMatchObject({ ok: true })
+        await expect.poll(readModel).toBe('Please review this code.')
+        await expect.poll(() => editor.innerText()).toBe('Please review this code.')
+        await expect.poll(readDraft).toBe('Please review this code.')
+        expect(await readSent()).toEqual([])
+        await page.locator('#outside').click()
+        await editor.click()
+        await inspectClosedShadowPage(page)
+        await popover.locator('button[data-action="restore"]').click()
+        await expect.poll(readModel).toBe('请检查这段代码')
+        await expect.poll(readDraft).toBe('请检查这段代码')
+        await clearDraft()
+        await page.keyboard.type('第一行')
+        for (const [index, key] of site.multilineKeys.entries()) {
+          await page.keyboard.press(key)
+          if (index === 1) await page.keyboard.type('第三行')
+        }
+        await expect.poll(readModel).toBe('第一行\n\n第三行\n')
+        await expect.poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await status.isVisible().catch(() => false)) ? await status.textContent() : ''
+        }).toBe('Line one\n\nLine three\n')
+        await popover.locator('button[data-action="replace"]').click()
+        await expect.poll(readModel).toBe('Line one\n\nLine three\n')
+        await expect.poll(readDraft).toBe('Line one\n\nLine three\n')
+        await popover.locator('button[data-action="restore"]').click()
+        await expect.poll(readModel).toBe('第一行\n\n第三行\n')
+        await clearDraft()
+        await page.keyboard.type('<b>不是标签</b>')
+        await expect.poll(readInjected).toBe(0)
+        await expect.poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await status.isVisible().catch(() => false)) ? await status.textContent() : ''
+        }).toBe('<b>不是标签</b>')
+        await popover.locator('button[data-action="replace"]').click()
+        await expect.poll(readModel).toBe('<b>不是标签</b>')
+        await expect.poll(readDraft).toBe('<b>不是标签</b>')
+        expect(await readInjected()).toBe(0)
+        expect(await readSent()).toEqual([])
+        await page.locator('#fixture-send').click()
+        expect(await readSent()).toEqual(['<b>不是标签</b>'])
+      } finally {
+        await context.close()
+      }
+    })
+  }
+
+  test.describe('视频站点输入', () => {
+    const VIDEO_SITES = [
+      {
+        title: 'YouTube 评论 #contenteditable-root',
+        pageUrl: 'https://www.youtube.com/watch?v=fixture',
+        pageTitle: 'YouTube Comment Fixture',
+        html: `<!doctype html><html><head><meta charset="utf-8"><title>YouTube Comment Fixture</title></head><body style="margin:24px"><p id="history">CHAT_HISTORY_SENTINEL</p><ytd-comment-simplebox-renderer><div id="contenteditable-root" style="min-height:72px;border:1px solid #888;padding:8px;display:block" contenteditable="true" role="textbox"><p><span class="style-scope yt-formatted-string"></span></p></div></ytd-comment-simplebox-renderer><div style="margin-top:200px"><button id="fixture-send" type="button">Send</button><button id="outside" type="button">Outside</button></div><script>window.__chatDraftState='';window.__sentDrafts=[];window.__trustedInputCount=0;const f=document.getElementById('contenteditable-root');f.addEventListener('input',(e)=>{if(e.isTrusted){window.__trustedInputCount++;window.__chatDraftState=f.innerText.replace(/\\r\\n?/g,'\\n')}});document.getElementById('fixture-send').addEventListener('click',()=>{window.__sentDrafts.push(window.__chatDraftState)});</script></body></html>`,
+        editor: '#contenteditable-root',
+        vue: false,
+        autoInteraction: true,
+      },
+      {
+        title: 'YouTube 直播聊天弹窗 #input',
+        pageUrl: 'https://www.youtube.com/live_chat?is_popout=1&v=fixture',
+        pageTitle: 'YouTube Live Chat Fixture',
+        html: `<!doctype html><html><head><meta charset="utf-8"><title>YouTube Live Chat Fixture</title></head><body style="margin:24px"><p id="history">CHAT_HISTORY_SENTINEL</p><yt-live-chat-text-input-field-renderer><div id="input" style="min-height:72px;border:1px solid #888;padding:8px;display:block" contenteditable="" class="style-scope yt-live-chat-text-input-field-renderer" role="textbox"><div></div></div></yt-live-chat-text-input-field-renderer><div style="margin-top:200px"><button id="fixture-send" type="button">Send</button><button id="outside" type="button">Outside</button></div><script>window.__chatDraftState='';window.__sentDrafts=[];window.__trustedInputCount=0;const f=document.getElementById('input');f.addEventListener('input',(e)=>{if(e.isTrusted){window.__trustedInputCount++;window.__chatDraftState=f.innerText.replace(/\\r\\n?/g,'\\n')}});document.getElementById('fixture-send').addEventListener('click',()=>{window.__sentDrafts.push(window.__chatDraftState)});</script></body></html>`,
+        editor: '#input',
+        vue: false,
+        autoInteraction: true,
+      },
+      {
+        title: 'Bilibili 评论 openShadow .brt-editor',
+        pageUrl: 'https://www.bilibili.com/video/BVfixture',
+        pageTitle: 'Bilibili Comment Fixture',
+        html: `<!doctype html><html><head><meta charset="utf-8"><title>Bilibili Comment Fixture</title></head><body style="margin:24px"><p id="history">CHAT_HISTORY_SENTINEL</p><style>bili-comments,bili-comment-box,bili-comment-rich-textarea{display:block}.brt-editor{min-height:72px;border:1px solid #888;padding:8px;display:block}</style><bili-comments></bili-comments><div style="margin-top:200px"><button id="fixture-send" type="button">Send</button><button id="outside" type="button">Outside</button></div><script>window.__chatDraftState='';window.__sentDrafts=[];window.__trustedInputCount=0;const c=document.querySelector('bili-comments').attachShadow({mode:'open'});c.innerHTML='<bili-comment-box></bili-comment-box>';const box=c.querySelector('bili-comment-box').attachShadow({mode:'open'});box.innerHTML='<bili-comment-rich-textarea></bili-comment-rich-textarea>';const ta=box.querySelector('bili-comment-rich-textarea').attachShadow({mode:'open'});ta.innerHTML='<div id="input" style="display:block"><div class="brt-root" style="display:block"><div class="brt-editor" contenteditable="true" role="textbox" style="min-height:72px;border:1px solid #888;padding:8px;display:block"><p><span class="brt-text"></span></p></div></div></div>';const f=ta.querySelector('.brt-editor');f.addEventListener('input',(e)=>{if(e.isTrusted){window.__trustedInputCount++;window.__chatDraftState=f.innerText.replace(/\\r\\n?/g,'\\n')}});document.getElementById('fixture-send').addEventListener('click',()=>{window.__sentDrafts.push(window.__chatDraftState)});</script></body></html>`,
+        editor: '.brt-editor',
+        vue: false,
+        autoInteraction: false,
+      },
+      {
+        title: 'Bilibili 直播弹幕 Vue3 input',
+        pageUrl: 'https://live.bilibili.com/fixture',
+        pageTitle: 'Bilibili Danmaku Fixture',
+        html: `<!doctype html><html><head><meta charset="utf-8"><title>Bilibili Danmaku Fixture</title></head><body style="margin:24px"><p id="history">CHAT_HISTORY_SENTINEL</p><div id="vue-root"></div><div style="margin-top:200px"><button id="outside" type="button">Outside</button></div><script src="/wt-video-fixture.js"></script></body></html>`,
+        editor: '.bpx-player-dm-input',
+        vue: true,
+        autoInteraction: true,
+      },
+    ] as const
+
+    for (const site of VIDEO_SITES) {
+      test(`视频站点输入：${site.title}`, async () => {
+        const bundle = site.vue === true ? await bundleDanmakuFixture() : ''
+        const { context, extensionId } = await launch()
+        const origin = new URL(site.pageUrl).origin
+        await context.route(`${origin}/**`, async (route) => {
+          const url = route.request().url().split('?')[0] ?? ''
+          if (site.vue === true && url === `${origin}/wt-video-fixture.js`) {
+            await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: bundle })
+            return
+          }
+          if (url === site.pageUrl.split('?')[0]) {
+            await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: site.html })
+            return
+          }
+          await route.abort()
+        })
+        try {
+          const options = await saveAndConnect(context, extensionId)
+          api.setTextTranslator((text) => {
+            if (text === '请检查这段代码') return 'このコードを確認してください。'
+            if (text === '请保留换行') return '改行を保持してください。\n'
+            if (text.includes('第一行') && text.includes('第三行')) return text.replace('第一行', '一行目').replace('第三行', '三行目')
+            if (text === '<b>不是标签</b>') return '<b>タグではありません</b>'
+            return `EN:${text}`
+          })
+          await enableRealtimeFeature(options, 'input')
+          expect(await options.evaluate(async (autoInteraction) => {
+            const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+            return chrome.runtime.sendMessage({
+              type: 'wt:save-config',
+              patch: {
+                inputTargetLanguage: 'ja',
+                targetLanguage: 'en',
+                floatingButtonEnabled: false,
+                autoInteractionEnabled: autoInteraction,
+              },
+            })
+          }, site.autoInteraction)).toMatchObject({ ok: true, config: { inputTranslationEnabled: true, inputTargetLanguage: 'ja' } })
+          const page = await context.newPage()
+          await page.goto(site.pageUrl)
+          await page.waitForLoadState('domcontentloaded')
+          await waitForSiteScriptRegistration(options, { url: site.pageUrl })
+          await waitForSiteContentReady(options, page, { supported: true })
+          const editor = page.locator(site.editor)
+          await expect(editor).toBeAttached()
+          const readDraft = (): Promise<string> => page.evaluate(() => (window as unknown as { __chatDraftState?: string }).__chatDraftState ?? '')
+          const readSent = (): Promise<string[]> => page.evaluate(() => (window as unknown as { __sentDrafts?: string[] }).__sentDrafts ?? [])
+          const readDom = async (): Promise<string> =>
+            site.vue === true ? await editor.inputValue() : await editor.innerText()
+          const readTrusted = (): Promise<number> => page.evaluate(() => (window as unknown as { __trustedInputCount?: number }).__trustedInputCount ?? 0)
+          const clearDraft = async (): Promise<void> => {
+            await editor.click()
+            await page.keyboard.press('Control+A')
+            await page.keyboard.press('Backspace')
+            await expect.poll(async () => (await readDom()).trim()).toBe('')
+            await expect.poll(async () => (await readDraft()).trim()).toBe('')
+          }
+          const popover = page.locator('[data-wt-root] .popover')
+          const directReplace = async (): Promise<void> => {
+            await editor.click()
+            const directReply = await context.serviceWorkers()[0]!.evaluate(async (url) => {
+              const { chrome } = globalThis as unknown as {
+                chrome: { tabs: { query(q: { url: string }): Promise<Array<{ id?: number }>>; sendMessage(id: number, m: { type: string }, o: { frameId: number }): Promise<unknown> } }
+              }
+              const [tab] = await chrome.tabs.query({ url })
+              if (tab?.id === undefined) throw new Error('fixture tab unavailable')
+              return chrome.tabs.sendMessage(tab.id, { type: 'wt:translate-input' }, { frameId: 0 })
+            }, site.pageUrl)
+            expect(directReply).toMatchObject({ ok: true })
+          }
+          const callsBefore = api.calls.length
+          const textCalls = () => api.calls.slice(callsBefore).filter((call) => call.kind === 'texts')
+          await editor.click()
+          await page.keyboard.type('请检查这段代码')
+          if (site.autoInteraction) {
+            const status = popover.locator('[role="status"]')
+            await expect.poll(async () => {
+              await inspectClosedShadowPage(page)
+              return (await status.isVisible().catch(() => false)) ? await status.textContent() : ''
+            }).toBe('このコードを確認してください。')
+          } else {
+            await page.waitForTimeout(650)
+            expect(textCalls()).toEqual([])
+          }
+          const trustedBefore = await readTrusted()
+          await directReplace()
+          await expect.poll(readDom).toBe('このコードを確認してください。')
+          await expect.poll(readDraft).toBe('このコードを確認してください。')
+          if (!site.vue) expect(await readTrusted()).toBeGreaterThan(trustedBefore)
+          const countAfterReplace = textCalls().length
+          await page.waitForTimeout(650)
+          expect(textCalls()).toHaveLength(countAfterReplace)
+          expect(textCalls()[0]?.payload.texts).toEqual(['请检查这段代码'])
+          expect(await readSent()).toEqual([])
+          await inspectClosedShadowPage(page)
+          await popover.locator('button[data-action="restore"]').click()
+          await expect.poll(readDom).toBe('请检查这段代码')
+          await expect.poll(readDraft).toBe('请检查这段代码')
+          if (!site.vue) {
+            await clearDraft()
+            await page.keyboard.type('第一行')
+            await page.keyboard.press('Shift+Enter')
+            await page.keyboard.press('Shift+Enter')
+            await page.keyboard.type('第三行')
+            await page.keyboard.press('Shift+Enter')
+            const multiline = await readDom()
+            expect(multiline).toContain('第一行\n\n第三行')
+            expect(multiline.endsWith('\n')).toBe(true)
+            await expect.poll(readDraft).toBe(multiline)
+            const translated = multiline.replace('第一行', '一行目').replace('第三行', '三行目')
+            await directReplace()
+            await expect.poll(readDom).toBe(translated)
+            await expect.poll(readDraft).toBe(translated)
+            expect(textCalls().findLast((call) => (call.payload.texts as string[] | undefined)?.[0] === multiline)?.payload.texts).toEqual([multiline])
+            await inspectClosedShadowPage(page)
+            await popover.locator('button[data-action="restore"]').click()
+            await expect.poll(readDom).toBe(multiline)
+            await expect.poll(readDraft).toBe(multiline)
+          }
+          if (site.editor === '#contenteditable-root') {
+            await clearDraft()
+            await page.keyboard.type('请保留换行')
+            await expect.poll(readDom).toBe('请保留换行')
+            await expect.poll(readDraft).toBe('请保留换行')
+            const trustedBeforeReject = await readTrusted()
+            await directReplace()
+            await expect.poll(async () => {
+              await inspectClosedShadowPage(page)
+              return await popover.locator('[role="status"].is-error').textContent().catch(() => '')
+            }).toBe(zhCN.wtInputReplaceFailed)
+            await inspectClosedShadowPage(page)
+            await expect(popover.locator('button[data-action="copy"]')).toBeVisible()
+            expect(await readDom()).toBe('请保留换行')
+            expect(await readDraft()).toBe('请保留换行')
+            expect(await readTrusted()).toBe(trustedBeforeReject)
+          }
+          await clearDraft()
+          await page.keyboard.type('<b>不是标签</b>')
+          await directReplace()
+          await expect.poll(readDom).toBe('<b>タグではありません</b>')
+          await expect.poll(readDraft).toBe('<b>タグではありません</b>')
+          expect(await editor.locator('b,img,a').count()).toBe(0)
+          expect(await readSent()).toEqual([])
+          expect(JSON.stringify(textCalls().map((call) => call.requestBody))).not.toContain('CHAT_HISTORY_SENTINEL')
+          await page.screenshot({ path: test.info().outputPath('video-input.png') })
+          await page.locator('#fixture-send').click()
+          expect(await readSent()).toEqual(['<b>タグではありません</b>'])
+        } finally {
+          await context.close()
+        }
+      })
+    }
+
+    async function waitForInputFrameContentReady(
+      options: Page,
+      targetPage: Page,
+      topUrl: string,
+      frameUrl: string,
+    ): Promise<void> {
+      await inspectClosedShadowPage(targetPage)
+      await expect
+        .poll(
+          async () =>
+            options.evaluate(
+              async ({ expectedTopUrl, expectedFrameUrl }) => {
+                const { chrome } = globalThis as unknown as {
+                  chrome: {
+                    tabs: {
+                      query(query: object): Promise<Array<{ id?: number; url?: string }>>
+                      sendMessage(
+                        id: number,
+                        message: unknown,
+                        sendOptions?: { frameId?: number; documentId?: string },
+                      ): Promise<unknown>
+                    }
+                    scripting: {
+                      executeScript(injection: {
+                        target: { tabId: number; allFrames?: boolean }
+                        func: () => string
+                      }): Promise<Array<{ frameId?: number; documentId?: string; result?: unknown }>>
+                    }
+                  }
+                }
+                const tabs = await chrome.tabs.query({})
+                const tab = tabs.find((item) => item.url === expectedTopUrl)
+                if (tab?.id === undefined) return { ok: false, reason: 'tab-not-found' }
+                const frames = await chrome.scripting
+                  .executeScript({
+                    target: { tabId: tab.id, allFrames: true },
+                    func: () => location.href,
+                  })
+                  .catch(() => [])
+                const frame = frames.find(
+                  (item) =>
+                    typeof item.frameId === 'number' && item.frameId > 0 && item.result === expectedFrameUrl,
+                )
+                if (frame?.frameId === undefined) return { ok: false, reason: 'frame-not-found' }
+                const reply = (await chrome.tabs
+                  .sendMessage(tab.id, { type: 'wt:status' }, { frameId: frame.frameId })
+                  .catch(() => undefined)) as
+                  | { ok?: boolean; status?: { supported?: boolean } }
+                  | undefined
+                if (!reply?.ok || reply.status === undefined) {
+                  return { ok: false, reason: 'status-no-reply', frameId: frame.frameId }
+                }
+                if (reply.status.supported !== true) {
+                  return { ok: false, reason: 'supported-mismatch', status: reply.status }
+                }
+                return { ok: true, status: reply.status }
+              },
+              { expectedTopUrl: topUrl, expectedFrameUrl: frameUrl },
+            ),
+          { timeout: 15_000, message: `等待子框架内容脚本就绪 (${frameUrl})` },
+        )
+        .toMatchObject({ ok: true })
+      await inspectClosedShadowPage(targetPage)
+    }
+
+    test('内嵌输入：YouTube 同源 live_chat 子框架 Alt+Y 直接替换', async () => {
+      const testInfo = test.info()
+      const { context, extensionId } = await launch()
+      const watchUrl = 'https://www.youtube.com/watch?v=input-frame'
+      const liveChatUrl = 'https://www.youtube.com/live_chat?v=input-frame'
+      const liveChatHtml = VIDEO_SITES[1].html
+      const watchHtml =
+        '<!doctype html><html><head><meta charset="utf-8"><title>YouTube Watch Input Frame Fixture</title></head>' +
+        '<body style="margin:24px">' +
+        '<textarea id="top-draft" rows="3" style="width:360px;height:64px">顶层草稿</textarea>' +
+        '<iframe id="chat-frame" src="/live_chat?v=input-frame" style="width:480px;height:320px;border:1px solid #ccc;display:block;margin-top:16px"></iframe>' +
+        '</body></html>'
+
+      await context.route('https://www.youtube.com/**', async (route) => {
+        const requestUrl = route.request().url()
+        if (requestUrl === watchUrl) {
+          await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: watchHtml })
+          return
+        }
+        if (requestUrl === liveChatUrl) {
+          await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: liveChatHtml })
+          return
+        }
+        await route.abort()
+      })
+
+      try {
+        const options = await saveAndConnect(context, extensionId)
+        api.setTextTranslator((text) => {
+          if (text === '请检查这段代码') return 'Revisa este código.'
+          if (text === '等待中的草稿') return 'Borrador en espera.'
+          return `ES:${text}`
+        })
+        expect(
+          await options.evaluate(async () => {
+            const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+            return chrome.runtime.sendMessage({
+              type: 'wt:save-config',
+              patch: {
+                inputTargetLanguage: 'es',
+                autoInteractionEnabled: false,
+                floatingButtonEnabled: false,
+              },
+            })
+          }),
+        ).toMatchObject({
+          ok: true,
+          config: {
+            inputTargetLanguage: 'es',
+            autoInteractionEnabled: false,
+            floatingButtonEnabled: false,
+          },
+        })
+
+        const page = await context.newPage()
+        let topNavigations = 0
+        page.on('framenavigated', (frame) => {
+          if (frame === page.mainFrame()) topNavigations += 1
+        })
+        await page.goto(watchUrl)
+        await page.waitForLoadState('domcontentloaded')
+        const chatFrame = page.frameLocator('#chat-frame')
+        const editor = chatFrame.locator('#input')
+        await expect(page.locator('#top-draft')).toHaveValue('顶层草稿')
+        await expect(editor).toBeAttached()
+        await editor.evaluate(() => {
+          ;(window as unknown as { __frameAliveMarker?: string }).__frameAliveMarker = 'stay-in-frame'
+        })
+        expect(topNavigations).toBe(1)
+
+        await options.bringToFront()
+        await enableRealtimeFeature(options, 'input')
+        await waitForSiteScriptRegistration(options, { url: watchUrl })
+        await waitForSiteContentReady(options, page, { supported: true })
+        await waitForInputFrameContentReady(options, page, watchUrl, liveChatUrl)
+        expect(topNavigations).toBe(1)
+        expect(
+          await editor.evaluate(() => (window as unknown as { __frameAliveMarker?: string }).__frameAliveMarker),
+        ).toBe('stay-in-frame')
+
+        await expect
+          .poll(() =>
+            context.serviceWorkers()[0]!.evaluate(async () => {
+              const { chrome } = globalThis as unknown as {
+                chrome: {
+                  scripting: {
+                    getRegisteredContentScripts(filter?: { ids?: string[] }): Promise<
+                      Array<{ id: string; allFrames?: boolean; matches?: string[] }>
+                    >
+                  }
+                }
+              }
+              const scripts = await chrome.scripting.getRegisteredContentScripts({ ids: ['wt-input-frames'] })
+              return scripts[0] ?? null
+            }),
+          )
+          .toMatchObject({
+            id: 'wt-input-frames',
+            allFrames: true,
+            matches: expect.arrayContaining(['https://www.youtube.com/live_chat*']),
+          })
+
+        const readDom = (): Promise<string> => editor.innerText()
+        const readDraft = (): Promise<string> =>
+          editor.evaluate(() => (window as unknown as { __chatDraftState?: string }).__chatDraftState ?? '')
+        const readSent = (): Promise<string[]> =>
+          editor.evaluate(() => (window as unknown as { __sentDrafts?: string[] }).__sentDrafts ?? [])
+        const readTrusted = (): Promise<number> =>
+          editor.evaluate(() => (window as unknown as { __trustedInputCount?: number }).__trustedInputCount ?? 0)
+
+        await page.bringToFront()
+        await editor.click()
+        const callsBeforeType = api.calls.length
+        const textCalls = () => api.calls.slice(callsBeforeType).filter((call) => call.kind === 'texts')
+        await page.keyboard.type('请检查这段代码')
+        await expect.poll(readDom).toBe('请检查这段代码')
+        await expect.poll(readDraft).toBe('请检查这段代码')
+        await page.waitForTimeout(650)
+        expect(textCalls()).toEqual([])
+
+        await context.serviceWorkers()[0]!.evaluate(() => {
+          const probe = globalThis as unknown as { chrome: FixtureChrome; __wtNativeCommands: string[] }
+          probe.__wtNativeCommands = []
+          probe.chrome.commands.onCommand.addListener((command) => {
+            probe.__wtNativeCommands.push(command)
+          })
+        })
+        const readNativeCommands = (): Promise<string[]> =>
+          context.serviceWorkers()[0]!.evaluate(() => {
+            const probe = globalThis as unknown as { __wtNativeCommands?: string[] }
+            return probe.__wtNativeCommands ?? []
+          })
+
+        const countTranslateInputCommands = async (): Promise<number> =>
+          (await readNativeCommands()).filter((name) => name === 'translate-input').length
+        const sendTargetedTranslateInput = async (): Promise<void> => {
+          await page.bringToFront()
+          await editor.click()
+          const targeted = await context.serviceWorkers()[0]!.evaluate(async (topUrl) => {
+            const { chrome } = globalThis as unknown as {
+              chrome: {
+                tabs: {
+                  query(query: object): Promise<Array<{ id?: number; url?: string }>>
+                  sendMessage(
+                    tabId: number,
+                    message: { type: 'wt:translate-input' },
+                    sendOptions: { frameId: number; documentId: string },
+                  ): Promise<unknown>
+                }
+                scripting: {
+                  executeScript(injection: {
+                    target: { tabId: number; allFrames?: boolean }
+                    func: () => string
+                  }): Promise<Array<{ frameId?: number; documentId?: string; result?: unknown }>>
+                }
+              }
+            }
+            const tabs = await chrome.tabs.query({})
+            const tab = tabs.find((item) => item.url === topUrl)
+            if (tab?.id === undefined) throw new Error('fixture tab unavailable')
+            const tabId = tab.id
+            const executed = await chrome.scripting.executeScript({
+              target: { tabId, allFrames: true },
+              func: () => location.href,
+            })
+            const frames = executed.map((item) => ({
+              frameId: item.frameId,
+              documentId: item.documentId,
+              url: typeof item.result === 'string' ? item.result : '',
+            }))
+            const liveChatFrames = frames.filter((item) =>
+              item.url.startsWith('https://www.youtube.com/live_chat'),
+            )
+            if (liveChatFrames.length !== 1) {
+              return { frames, liveChatFrames, reply: undefined }
+            }
+            const targetFrame = liveChatFrames[0]!
+            if (
+              typeof targetFrame.frameId !== 'number' ||
+              typeof targetFrame.documentId !== 'string' ||
+              targetFrame.documentId === ''
+            ) {
+              return { frames, liveChatFrames, reply: undefined }
+            }
+            const reply = await chrome.tabs.sendMessage(
+              tabId,
+              { type: 'wt:translate-input' },
+              { frameId: targetFrame.frameId, documentId: targetFrame.documentId },
+            )
+            return { frames, liveChatFrames, reply }
+          }, watchUrl)
+          expect(targeted.liveChatFrames, JSON.stringify(targeted.frames)).toHaveLength(1)
+          expect(targeted.reply).toEqual({ ok: true })
+        }
+
+        let triggerMode: 'native' | 'targeted' | undefined
+        const triggerTranslateInput = async (verifyEffect: () => Promise<boolean>): Promise<void> => {
+          if (triggerMode === undefined) {
+            const shortcut = await sendOwnedBrowserAltShortcut(page, 'Y', verifyEffect)
+            const commands = await readNativeCommands()
+            if (shortcut.sent || commands.includes('translate-input')) {
+              triggerMode = 'native'
+              expect(commands).toContain('translate-input')
+              return
+            }
+            const reason = shortcut.reason ?? 'unknown'
+            testInfo.annotations.push({
+              type: 'environment-gate',
+              description: `原生 Alt+Y 未触发（${reason}），改用定向消息验证子框架链路；原生快捷键路由未在本环境验证`,
+            })
+            triggerMode = 'targeted'
+          } else if (triggerMode === 'native') {
+            const commandsBefore = await countTranslateInputCommands()
+            const shortcut = await sendOwnedBrowserAltShortcut(page, 'Y', async () => {
+              const count = await countTranslateInputCommands()
+              return count > commandsBefore && (await verifyEffect())
+            })
+            expect(shortcut.sent, shortcut.reason).toBe(true)
+            expect(await countTranslateInputCommands()).toBe(commandsBefore + 1)
+            return
+          }
+          await sendTargetedTranslateInput()
+          await expect.poll(verifyEffect).toBe(true)
+        }
+
+        const trustedBefore = await readTrusted()
+        await triggerTranslateInput(async () => (await readDom()) === 'Revisa este código.')
+
+        await expect.poll(readDom).toBe('Revisa este código.')
+        await expect.poll(readDraft).toBe('Revisa este código.')
+        expect(await readTrusted()).toBeGreaterThan(trustedBefore)
+        await expect(page.locator('#top-draft')).toHaveValue('顶层草稿')
+        expect(await readSent()).toEqual([])
+        expect(textCalls()).toHaveLength(1)
+        expect(textCalls()[0]?.payload.texts).toEqual(['请检查这段代码'])
+        expect(JSON.stringify(textCalls()[0]?.requestBody)).not.toContain('CHAT_HISTORY_SENTINEL')
+        expect(JSON.stringify(textCalls()[0]?.requestBody)).toContain('Spanish')
+
+        const popover = chatFrame.locator('[data-wt-root] .popover')
+        const restoreButton = popover.locator('button[data-action="restore"]')
+        await expect
+          .poll(async () => {
+            await inspectClosedShadowPage(page)
+            return restoreButton.isVisible().catch(() => false)
+          })
+          .toBe(true)
+        await restoreButton.click()
+        await expect.poll(readDom).toBe('请检查这段代码')
+        await expect.poll(readDraft).toBe('请检查这段代码')
+        await expect(page.locator('#top-draft')).toHaveValue('顶层草稿')
+        expect(await readSent()).toEqual([])
+
+        const heldText = '等待中的草稿'
+        api.hold(heldText)
+        await page.bringToFront()
+        await editor.click()
+        await page.keyboard.press('Control+A')
+        await page.keyboard.press('Backspace')
+        await expect.poll(async () => (await readDom()).trim()).toBe('')
+        await expect.poll(async () => (await readDraft()).trim()).toBe('')
+        await page.keyboard.type(heldText)
+        await expect.poll(readDom).toBe(heldText)
+        await expect.poll(readDraft).toBe(heldText)
+
+        const heldCallsBefore = api.calls.length
+        await triggerTranslateInput(async () =>
+          api.calls.slice(heldCallsBefore).some((call) => {
+            const texts = call.payload.texts
+            return call.kind === 'texts' && Array.isArray(texts) && texts[0] === heldText
+          }),
+        )
+
+        expect(
+          await options.evaluate(async () => {
+            const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+            return chrome.runtime.sendMessage({
+              type: 'wt:save-config',
+              patch: { inputTranslationEnabled: false },
+            })
+          }),
+        ).toMatchObject({ ok: true, config: { inputTranslationEnabled: false } })
+
+        api.release(heldText)
+        await page.waitForTimeout(400)
+        expect(await readDom()).toBe(heldText)
+        expect(await readDraft()).toBe(heldText)
+        expect(await readSent()).toEqual([])
+        await inspectClosedShadowPage(page)
+        await expect(chatFrame.locator('[data-wt-root]')).toBeHidden()
+      } finally {
+        await context.close()
+      }
+    })
+
+    test('内嵌输入：跨源父页嵌入 YouTube live_chat 不启动子框架', async () => {
+      const { context, extensionId } = await launch()
+      const outerUrl = 'https://outer.fixture.test/player'
+      const foreignLiveChatUrl = 'https://www.youtube.com/live_chat?v=foreign'
+      const liveChatHtml = VIDEO_SITES[1].html
+      const outerHtml =
+        '<!doctype html><html><head><meta charset="utf-8"><title>Outer Player Fixture</title></head>' +
+        '<body style="margin:24px">' +
+        '<textarea id="top-draft" rows="3" style="width:360px;height:64px">外层草稿</textarea>' +
+        '<iframe id="chat-frame" src="https://www.youtube.com/live_chat?v=foreign" style="width:480px;height:320px;border:1px solid #ccc;display:block;margin-top:16px"></iframe>' +
+        '</body></html>'
+
+      await context.route(outerUrl, (route) =>
+        route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: outerHtml }),
+      )
+      await context.route('https://www.youtube.com/**', async (route) => {
+        if (route.request().url() === foreignLiveChatUrl) {
+          await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: liveChatHtml })
+          return
+        }
+        await route.abort()
+      })
+
+      try {
+        const options = await saveAndConnect(context, extensionId)
+        api.setTextTranslator((text) => `EN:${text}`)
+        await enableRealtimeFeature(options, 'input')
+        expect(
+          await options.evaluate(async () => {
+            const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+            return chrome.runtime.sendMessage({
+              type: 'wt:save-config',
+              patch: { floatingButtonEnabled: false },
+            })
+          }),
+        ).toMatchObject({ ok: true, config: { inputTranslationEnabled: true, floatingButtonEnabled: false } })
+
+        await waitForSiteScriptRegistration(options, { url: outerUrl })
+        const page = await context.newPage()
+        await page.goto(outerUrl)
+        await page.waitForLoadState('domcontentloaded')
+        await waitForSiteContentReady(options, page, { supported: true })
+
+        const chatFrame = page.frameLocator('#chat-frame')
+        const editor = chatFrame.locator('#input')
+        await expect(page.locator('#top-draft')).toHaveValue('外层草稿')
+        await expect(editor).toBeAttached()
+
+        const readDom = (): Promise<string> => editor.innerText()
+        const readDraft = (): Promise<string> =>
+          editor.evaluate(() => (window as unknown as { __chatDraftState?: string }).__chatDraftState ?? '')
+        const readSent = (): Promise<string[]> =>
+          editor.evaluate(() => (window as unknown as { __sentDrafts?: string[] }).__sentDrafts ?? [])
+
+        await page.bringToFront()
+        await editor.click()
+        const callsBefore = api.calls.length
+        const textCalls = () => api.calls.slice(callsBefore).filter((call) => call.kind === 'texts')
+        await page.keyboard.type('请检查这段代码')
+        await expect.poll(readDom).toBe('请检查这段代码')
+        await expect.poll(readDraft).toBe('请检查这段代码')
+        await page.waitForTimeout(650)
+        expect(textCalls()).toEqual([])
+
+        const topReply = await context.serviceWorkers()[0]!.evaluate(async (url) => {
+          const { chrome } = globalThis as unknown as {
+            chrome: {
+              tabs: {
+                query(query: { url: string }): Promise<Array<{ id?: number }>>
+                sendMessage(
+                  tabId: number,
+                  message: { type: 'wt:translate-input' },
+                  sendOptions: { frameId: number },
+                ): Promise<unknown>
+              }
+            }
+          }
+          const [tab] = await chrome.tabs.query({ url })
+          if (tab?.id === undefined) throw new Error('fixture tab unavailable')
+          return chrome.tabs.sendMessage(tab.id, { type: 'wt:translate-input' }, { frameId: 0 }).catch(() => undefined)
+        }, outerUrl)
+        if (topReply !== undefined) {
+          expect(topReply).toMatchObject({ ok: false })
+        }
+
+        await expect(page.locator('#top-draft')).toHaveValue('外层草稿')
+        expect(await readDom()).toBe('请检查这段代码')
+        expect(await readDraft()).toBe('请检查这段代码')
+        expect(textCalls()).toEqual([])
+        expect(await readSent()).toEqual([])
+        await inspectClosedShadowPage(page)
+        await expect(chatFrame.locator('[data-wt-root]')).toHaveCount(0)
+      } finally {
+        await context.close()
+      }
+    })
+  })
+
+  test('实时功能扩展链路：YouTube Netflix 与原生 TextTrack 字幕保持原文并固定译中文', async () => {
+    const testInfo = test.info()
+    const { context, extensionId } = await launch()
+    try {
+      api.setTextTranslator((t) => `测试译文：${t}`)
+      const options = await saveAndConnect(context, extensionId)
+      await enableRealtimeFeature(options, 'video')
+      expect(
+        await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({
+            type: 'wt:save-config',
+            patch: { targetLanguage: 'ja', floatingButtonEnabled: false },
+          })
+        }),
+      ).toMatchObject({
+        ok: true,
+        config: { targetLanguage: 'ja', videoSubtitlesEnabled: true, autoOrigins: [] },
+      })
+
+      const ytUrl = 'https://www.youtube.com/watch?v=fixture'
+      const nfUrl = 'https://www.netflix.com/watch/fixture'
+      const nativeUrl = 'https://video.fixture.test/player'
+
+      await context.route(ytUrl, (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'text/html; charset=utf-8',
+          body: `<!doctype html>
+            <html>
+              <body>
+                <p>NOT_SENT_SENTINEL</p>
+                <button id="fs-btn" type="button">Fullscreen</button>
+                <div id="movie_player" class="html5-video-player" style="position:relative;width:640px;height:360px;background:#111">
+                  <video id="yt-video" style="width:640px;height:360px;display:block"></video>
+                  <div class="ytp-caption-window-container">
+                    <span class="ytp-caption-segment">English subtitle fixture</span>
+                  </div>
+                </div>
+                <script>
+                  document.getElementById('fs-btn').addEventListener('click', () => {
+                    document.getElementById('movie_player').requestFullscreen();
+                  });
+                </script>
+              </body>
+            </html>`,
+        }),
+      )
+
+      await context.route(nfUrl, (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'text/html; charset=utf-8',
+          body: `<!doctype html>
+            <html>
+              <body>
+                <p>NOT_SENT_SENTINEL</p>
+                <button id="fs-btn" type="button">Fullscreen</button>
+                <div id="nf-player" class="watch-video--player-view" style="position:relative;width:640px;height:360px;background:#111">
+                  <video id="nf-video" style="width:640px;height:360px;display:block"></video>
+                  <div class="player-timedtext">
+                    <div class="player-timedtext-text-container">
+                      <span>日本語字幕のテストです</span>
+                    </div>
+                  </div>
+                </div>
+                <script>
+                  document.getElementById('fs-btn').addEventListener('click', () => {
+                    document.getElementById('nf-player').requestFullscreen();
+                  });
+                </script>
+              </body>
+            </html>`,
+        }),
+      )
+
+      await context.route(nativeUrl, (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'text/html; charset=utf-8',
+          body: `<!doctype html>
+            <html>
+              <body>
+                <p>NOT_SENT_SENTINEL</p>
+                <button id="fs-btn" type="button">Fullscreen</button>
+                <div id="native-player" style="position:relative;width:640px;height:360px;background:#111">
+                  <video id="native-video" muted playsinline style="width:640px;height:360px;display:block"></video>
+                </div>
+                <script>
+                  document.getElementById('fs-btn').addEventListener('click', () => {
+                    document.getElementById('native-player').requestFullscreen();
+                  });
+                </script>
+              </body>
+            </html>`,
+        }),
+      )
+
+      await waitForSiteScriptRegistration(options, { url: ytUrl })
+      const page = await context.newPage()
+
+      await page.goto(ytUrl)
+      await page.bringToFront()
+      await waitForSiteContentReady(options, page, { supported: true })
+
+      const bubble = page.locator('[data-wt-root] .bubble')
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await bubble.isVisible().catch(() => false)) ? await bubble.textContent() : ''
+        })
+        .toBe('测试译文：English subtitle fixture')
+      await expect(page.locator('.ytp-caption-segment')).toHaveText('English subtitle fixture')
+
+      const ytCall = api.calls.findLast(
+        (call) =>
+          call.kind === 'texts' &&
+          (call.payload.texts as string[] | undefined)?.includes('English subtitle fixture'),
+      )
+      expect(ytCall).toBeDefined()
+      expect(ytCall!.payload.texts).toEqual(['English subtitle fixture'])
+      expect(JSON.stringify(ytCall!.requestBody)).not.toContain('NOT_SENT_SENTINEL')
+      expect((ytCall!.requestBody.messages as Array<{ content: string }>)[0]?.content ?? '').toContain(
+        'into natural, accurate Simplified Chinese',
+      )
+      await page.screenshot({ path: testInfo.outputPath('subtitle-youtube-extension.png') })
+
+      api.hold('Slow subtitle fixture')
+      await page.evaluate(() => {
+        const seg = document.querySelector('.ytp-caption-segment')!
+        seg.textContent = 'Slow subtitle fixture'
+      })
+      await expect
+        .poll(() =>
+          api.calls.some(
+            (call) =>
+              call.kind === 'texts' &&
+              (call.payload.texts as string[] | undefined)?.includes('Slow subtitle fixture'),
+          ),
+        )
+        .toBe(true)
+
+      await page.evaluate(() => {
+        const seg = document.querySelector('.ytp-caption-segment')!
+        seg.textContent = 'Newest subtitle fixture'
+      })
+      api.release('Slow subtitle fixture')
+
+      const observedDuringTransition: string[] = []
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(page)
+          const text = (await bubble.isVisible().catch(() => false)) ? ((await bubble.textContent()) ?? '') : ''
+          if (text !== '') observedDuringTransition.push(text)
+          return text
+        })
+        .toBe('测试译文：Newest subtitle fixture')
+      expect(observedDuringTransition).not.toContain('测试译文：Slow subtitle fixture')
+
+      const callsBeforeHideCc = api.calls.length
+      await page.evaluate(() => {
+        const cc = document.querySelector<HTMLElement>('.ytp-caption-window-container')!
+        cc.hidden = true
+      })
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await bubble.isVisible().catch(() => false)) ? await bubble.textContent() : ''
+        })
+        .toBe(zhCN.wtSubtitleWaitingHint)
+      await page.waitForTimeout(1200)
+      expect(api.calls).toHaveLength(callsBeforeHideCc)
+
+      await waitForSiteScriptRegistration(options, { url: nfUrl })
+      await page.goto(nfUrl)
+      await page.bringToFront()
+      await waitForSiteContentReady(options, page, { supported: true })
+
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await bubble.isVisible().catch(() => false)) ? await bubble.textContent() : ''
+        })
+        .toBe('测试译文：日本語字幕のテストです')
+      await expect(page.locator('.player-timedtext-text-container span')).toHaveText('日本語字幕のテストです')
+
+      const nfCall = api.calls.findLast(
+        (call) =>
+          call.kind === 'texts' &&
+          (call.payload.texts as string[] | undefined)?.includes('日本語字幕のテストです'),
+      )
+      expect(nfCall).toBeDefined()
+      expect(nfCall!.payload.texts).toEqual(['日本語字幕のテストです'])
+      expect(JSON.stringify(nfCall!.requestBody)).not.toContain('NOT_SENT_SENTINEL')
+      expect((nfCall!.requestBody.messages as Array<{ content: string }>)[0]?.content ?? '').toContain(
+        'into natural, accurate Simplified Chinese',
+      )
+
+      await waitForSiteScriptRegistration(options, { url: nativeUrl })
+      await page.goto(nativeUrl)
+      await page.bringToFront()
+      await waitForSiteContentReady(options, page, { supported: true })
+
+      await page.evaluate(async () => {
+        const video = document.getElementById('native-video') as HTMLVideoElement
+        const canvas = document.createElement('canvas')
+        canvas.width = 160
+        canvas.height = 90
+        canvas.hidden = true
+        document.body.append(canvas)
+        const ctx = canvas.getContext('2d')!
+        let tick = 0
+        const draw = () => {
+          tick += 1
+          ctx.fillStyle = tick % 2 === 0 ? '#123' : '#234'
+          ctx.fillRect(0, 0, canvas.width, canvas.height)
+        }
+        draw()
+        ;(window as unknown as { __canvasTimer?: ReturnType<typeof setInterval> }).__canvasTimer = setInterval(draw, 80)
+        video.srcObject = canvas.captureStream(10)
+        video.muted = true
+        const track = video.addTextTrack('subtitles', 'Japanese', 'ja')
+        track.mode = 'showing'
+        track.addCue(new VTTCue(0, 120, 'こんにちは、字幕のテストです'))
+        await video.play()
+      })
+
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(page)
+          return (await bubble.isVisible().catch(() => false)) ? await bubble.textContent() : ''
+        })
+        .toBe('测试译文：こんにちは、字幕のテストです')
+
+      expect(
+        await page.evaluate(() => {
+          const video = document.getElementById('native-video') as HTMLVideoElement
+          const cue = video.textTracks[0]?.cues?.[0] as VTTCue | undefined
+          return cue?.text
+        }),
+      ).toBe('こんにちは、字幕のテストです')
+
+      const nativeCall = api.calls.findLast(
+        (call) =>
+          call.kind === 'texts' &&
+          (call.payload.texts as string[] | undefined)?.includes('こんにちは、字幕のテストです'),
+      )
+      expect(nativeCall).toBeDefined()
+      expect(nativeCall!.payload.texts).toContain('こんにちは、字幕のテストです')
+      expect(JSON.stringify(nativeCall!.requestBody)).not.toContain('NOT_SENT_SENTINEL')
+      expect((nativeCall!.requestBody.messages as Array<{ content: string }>)[0]?.content ?? '').toContain(
+        'into natural, accurate Simplified Chinese',
+      )
+
+      await page.locator('#fs-btn').click()
+      await expect.poll(() => page.evaluate(() => document.fullscreenElement?.id)).toBe('native-player')
+      await inspectClosedShadowPage(page)
+      await expect(bubble).toBeVisible()
+      await expect(bubble).toHaveText('测试译文：こんにちは、字幕のテストです')
+      expect(
+        await page.evaluate(() => {
+          const fs = document.fullscreenElement
+          const host = document.querySelector('[data-wt-root]')
+          return fs !== null && host !== null && fs.contains(host)
+        }),
+      ).toBe(true)
+
+      await page.evaluate(() => document.exitFullscreen())
+      await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull()
+      await page.evaluate(() => {
+        const w = window as unknown as { __canvasTimer?: ReturnType<typeof setInterval> }
+        if (w.__canvasTimer !== undefined) clearInterval(w.__canvasTimer)
+      })
+    } finally {
+      await context.close()
+    }
+  })
+
+  test('实时功能扩展链路：站点范围与撤权停止发送，标签页输入请求相互隔离', async () => {
+    const { context, extensionId } = await launch()
+    try {
+      const urlA = 'https://chat.fixture.test/a'
+      const urlB = 'https://chat.fixture.test/b'
+      await context.route(/^https:\/\/chat\.fixture\.test\/[ab]$/, (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'text/html; charset=utf-8',
+          body: `<!doctype html>
+            <html>
+              <body style="margin:24px">
+                <textarea id="draft" rows="4" style="width:360px;height:84px"></textarea>
+              </body>
+            </html>`,
+        }),
+      )
+
+      api.setTextTranslator((t) => `English: ${t}`)
+      const options = await saveAndConnect(context, extensionId)
+      await enableRealtimeFeature(options, 'input')
+      expect(
+        await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({
+            type: 'wt:save-config',
+            patch: { floatingButtonEnabled: false },
+          })
+        }),
+      ).toMatchObject({ ok: true, config: { inputTranslationEnabled: true } })
+
+      await waitForSiteScriptRegistration(options, { url: urlA })
+      const pageA = await context.newPage()
+      await pageA.goto(urlA)
+      await waitForSiteContentReady(options, pageA, { supported: true })
+
+      const pageB = await context.newPage()
+      await pageB.goto(urlB)
+      await waitForSiteContentReady(options, pageB, { supported: true })
+
+      api.hold('标签甲')
+      api.hold('标签乙')
+
+      await pageA.bringToFront()
+      await pageA.locator('#draft').click()
+      await pageA.locator('#draft').fill('标签甲')
+      await expect
+        .poll(() =>
+          api.calls.some(
+            (call) => call.kind === 'texts' && (call.payload.texts as string[] | undefined)?.includes('标签甲'),
+          ),
+        )
+        .toBe(true)
+      const callA1 = api.calls.findLast(
+        (call) => call.kind === 'texts' && (call.payload.texts as string[] | undefined)?.includes('标签甲'),
+      )!
+
+      await pageB.bringToFront()
+      await pageB.locator('#draft').click()
+      await pageB.locator('#draft').fill('标签乙')
+      await expect
+        .poll(() =>
+          api.calls.some(
+            (call) => call.kind === 'texts' && (call.payload.texts as string[] | undefined)?.includes('标签乙'),
+          ),
+        )
+        .toBe(true)
+      const callB1 = api.calls.findLast(
+        (call) => call.kind === 'texts' && (call.payload.texts as string[] | undefined)?.includes('标签乙'),
+      )!
+
+      expect(callA1.aborted).toBe(false)
+      expect(callB1.aborted).toBe(false)
+
+      await pageA.bringToFront()
+      await pageA.locator('#draft').click()
+      await pageA.locator('#draft').fill('标签甲更新')
+      await expect.poll(() => callA1.aborted).toBe(true)
+      expect(callB1.aborted).toBe(false)
+
+      const statusA = pageA.locator('[data-wt-root] .popover [role="status"]')
+      const statusB = pageB.locator('[data-wt-root] .popover [role="status"]')
+
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(pageA)
+          return (await statusA.isVisible().catch(() => false)) ? await statusA.textContent() : ''
+        })
+        .toBe('English: 标签甲更新')
+      expect(callB1.aborted).toBe(false)
+
+      api.release('标签乙')
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(pageB)
+          return (await statusB.isVisible().catch(() => false)) ? await statusB.textContent() : ''
+        })
+        .toBe('English: 标签乙')
+
+      api.release('标签甲')
+      await pageA.waitForTimeout(200)
+      await inspectClosedShadowPage(pageA)
+      await expect(statusA).toHaveText('English: 标签甲更新')
+
+      expect(
+        await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({
+            type: 'wt:set-site-scope-host',
+            host: 'other.fixture.test',
+            listed: true,
+          })
+        }),
+      ).toMatchObject({ ok: true })
+      expect(
+        await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({
+            type: 'wt:save-config',
+            patch: { siteScopeMode: 'include' },
+          })
+        }),
+      ).toMatchObject({
+        ok: true,
+        config: { siteScopeMode: 'include', siteScopeHosts: ['other.fixture.test'] },
+      })
+
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(pageA)
+          await inspectClosedShadowPage(pageB)
+          return (await statusA.count()) + (await statusB.count())
+        })
+        .toBe(0)
+
+      const callsInExcludedScope = api.calls.length
+      await pageA.bringToFront()
+      await pageA.locator('#draft').click()
+      await pageA.locator('#draft').fill('范围外不发送甲')
+      await pageB.bringToFront()
+      await pageB.locator('#draft').click()
+      await pageB.locator('#draft').fill('范围外不发送乙')
+      await pageA.waitForTimeout(800)
+      expect(api.calls).toHaveLength(callsInExcludedScope)
+
+      expect(
+        await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({
+            type: 'wt:set-site-scope-host',
+            host: 'other.fixture.test',
+            listed: false,
+          })
+        }),
+      ).toMatchObject({ ok: true })
+      expect(
+        await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({
+            type: 'wt:save-config',
+            patch: { siteScopeMode: 'all' },
+          })
+        }),
+      ).toMatchObject({
+        ok: true,
+        config: { siteScopeMode: 'all', siteScopeHosts: [] },
+      })
+
+      await waitForSiteScriptRegistration(options, { url: urlA })
+      await waitForSiteContentReady(options, pageA, { supported: true })
+      await waitForSiteContentReady(options, pageB, { supported: true })
+
+      await pageA.bringToFront()
+      await pageA.locator('#draft').click()
+      await pageA.locator('#draft').fill('恢复范围后的草稿')
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(pageA)
+          return (await statusA.isVisible().catch(() => false)) ? await statusA.textContent() : ''
+        })
+        .toBe('English: 恢复范围后的草稿')
+
+      const heldBeforeRevoke = '撤权前在途草稿'
+      api.hold(heldBeforeRevoke)
+      await pageA.locator('#draft').click()
+      await pageA.locator('#draft').fill(heldBeforeRevoke)
+      await expect
+        .poll(() =>
+          api.calls.some(
+            (call) =>
+              call.kind === 'texts' && (call.payload.texts as string[] | undefined)?.includes(heldBeforeRevoke),
+          ),
+        )
+        .toBe(true)
+      const revokeCall = api.calls.findLast(
+        (call) => call.kind === 'texts' && (call.payload.texts as string[] | undefined)?.includes(heldBeforeRevoke),
+      )!
+
+      const permissionState = await options.evaluate(async () => {
+        const { chrome } = globalThis as unknown as {
+          chrome: {
+            permissions: {
+              remove(query: { origins: string[] }): Promise<boolean>
+              contains(query: { origins: string[] }): Promise<boolean>
+            }
+          }
+        }
+        const removed = await chrome.permissions.remove({ origins: ['https://*/*'] })
+        const granted = await chrome.permissions.contains({ origins: ['https://chat.fixture.test/*'] })
+        return { removed, granted }
+      })
+      expect(permissionState).toEqual({ removed: true, granted: false })
+
+      await expect.poll(() => revokeCall.aborted).toBe(true)
+      await expect
+        .poll(async () => {
+          await inspectClosedShadowPage(pageA)
+          return statusA.count()
+        })
+        .toBe(0)
+
+      api.release(heldBeforeRevoke)
+      expect(await configFlag(options, 'inputTranslationEnabled')).toBe(true)
+
+      const callsAfterRevoke = api.calls.length
+      await pageA.bringToFront()
+      await pageA.locator('#draft').click()
+      await pageA.locator('#draft').fill('撤权后再次输入中文')
+      await pageA.waitForTimeout(800)
+      expect(api.calls).toHaveLength(callsAfterRevoke)
+      await inspectClosedShadowPage(pageA)
+      await expect(statusA).toHaveCount(0)
     } finally {
       await context.close()
     }

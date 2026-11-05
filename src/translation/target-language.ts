@@ -1,8 +1,8 @@
-export type TargetLanguage = 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko'
+export type TargetLanguage = 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko' | 'es' | 'fr' | 'de' | 'pt'
 
 export type SourceLanguage = 'auto' | TargetLanguage
 
-export const TARGET_LANGUAGES: readonly TargetLanguage[] = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']
+export const TARGET_LANGUAGES: readonly TargetLanguage[] = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt']
 
 export function isTargetLanguage(value: unknown): value is TargetLanguage {
   return typeof value === 'string' && (TARGET_LANGUAGES as readonly string[]).includes(value)
@@ -18,6 +18,10 @@ export const TARGET_LANGUAGE_NATIVE_LABEL: Readonly<Record<TargetLanguage, strin
   en: 'English',
   ja: '日本語',
   ko: '한국어',
+  es: 'Español',
+  fr: 'Français',
+  de: 'Deutsch',
+  pt: 'Português',
 }
 
 export const TARGET_LANGUAGE_PROMPT_NAME: Readonly<Record<TargetLanguage, string>> = {
@@ -26,6 +30,10 @@ export const TARGET_LANGUAGE_PROMPT_NAME: Readonly<Record<TargetLanguage, string
   en: 'English',
   ja: 'Japanese',
   ko: 'Korean',
+  es: 'Spanish',
+  fr: 'French',
+  de: 'German',
+  pt: 'Portuguese',
 }
 
 export function sourceLanguageInstruction(source: SourceLanguage = 'auto'): string {
@@ -52,6 +60,11 @@ export function looksLikeTargetLanguage(text: string, language: TargetLanguage):
       return HANGUL.test(trimmed)
     case 'en':
       return !NON_ASCII_LETTER.test(trimmed) && !HAN.test(trimmed) && !KANA.test(trimmed) && !HANGUL.test(trimmed)
+    case 'es':
+    case 'fr':
+    case 'de':
+    case 'pt':
+      return false
   }
 }
 

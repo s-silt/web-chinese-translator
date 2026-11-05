@@ -13,5 +13,8 @@
   },
   "cmdTranslateSelection": {
     "message": "Translate selected text"
+  },
+  "cmdTranslateInput": {
+    "message": "Translate and replace input"
   }
 }
