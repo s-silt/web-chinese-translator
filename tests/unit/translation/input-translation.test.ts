@@ -688,6 +688,25 @@ describe('Discord 纯文本草稿', () => {
     watcher.dispose()
   })
 
+  it('非 Discord 输入框不接受不可信 compositionend，合成状态保持到可信结束', async () => {
+    setPageUrl('https://discord.com/channels/@me/1')
+    const input = document.createElement('textarea')
+    document.body.append(input)
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
+    const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
+    trustedComposition(input, 'compositionstart')
+    trustedInput(input, '正在拼音', true)
+    input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, composed: true }))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(translate).not.toHaveBeenCalled()
+    trustedComposition(input, 'compositionend')
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+    expect(translate).toHaveBeenCalledTimes(1)
+    expect(translate.mock.calls[0]?.[0]).toEqual(['正在拼音'])
+    watcher.dispose()
+  })
+
   it('确认替换等待 DOM 落地后才显示还原，编辑、合成、超时和 dispose 会去掉标记且旧回复不改草稿', async () => {
     setPageUrl('https://canary.discord.com/channels/9')
     const field = mountSlate(['水水水水水水'])
