@@ -556,6 +556,70 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
     return text
   }
 
+  function readLexicalNodeMap(nodeMap: Map<unknown, unknown>): string | undefined {
+    const root = nodeMap.get('root')
+    if (!isDataRecord(root) || root.__type !== 'root') return undefined
+    const seen = new Set<string>(['root'])
+    let nodes = 1
+    let chars = 0
+    const parts: string[] = []
+    let blockKey: unknown = root.__first
+    while (blockKey !== null) {
+      if (typeof blockKey !== 'string' || seen.has(blockKey)) return undefined
+      seen.add(blockKey)
+      nodes += 1
+      if (nodes > 12000) return undefined
+      const block = nodeMap.get(blockKey)
+      if (!isDataRecord(block) || (block.__type !== 'paragraph' && block.__type !== 'bidi-paragraph')) {
+        return undefined
+      }
+      let text = ''
+      let childKey: unknown = block.__first
+      while (childKey !== null) {
+        if (typeof childKey !== 'string' || seen.has(childKey)) return undefined
+        seen.add(childKey)
+        nodes += 1
+        if (nodes > 12000) return undefined
+        const child = nodeMap.get(childKey)
+        if (!isDataRecord(child)) return undefined
+        if (child.__type === 'linebreak') {
+          text += '\n'
+        } else if (
+          child.__type === 'text' &&
+          child.__mode === 0 &&
+          typeof child.__text === 'string' &&
+          child.__text.length <= 6000
+        ) {
+          text += child.__text
+          chars += child.__text.length
+          if (chars > 6000) return undefined
+        } else {
+          return undefined
+        }
+        childKey = child.__next
+      }
+      parts.push(text)
+      blockKey = block.__next
+    }
+    const joined = parts.join('\n\n')
+    if (joined.length > 6000 || chars > 6000) return undefined
+    return joined
+  }
+
+  function readLexicalState(editor: LexicalEditorHandle): string | undefined {
+    try {
+      const editorState = editor.getEditorState()
+      if (!isDataRecord(editorState)) return undefined
+      if (editorState._nodeMap instanceof Map) {
+        return readLexicalNodeMap(editorState._nodeMap)
+      }
+      if (typeof editorState.toJSON !== 'function') return undefined
+      return readLexicalJson(editorState.toJSON())
+    } catch {
+      return undefined
+    }
+  }
+
   function readQuillModel(editor: QuillEditorHandle): string | undefined {
     const contents = editor.getContents()
     if (!isDataRecord(contents) || !Array.isArray(contents.ops) || contents.ops.length > 12000) return undefined
@@ -619,7 +683,7 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
   function readActual(view: ChatEditorHandle): string | undefined {
     try {
       if (view.kind === 'pm') return canonicalText(view.value.state.doc)
-      if (view.kind === 'lexical') return readLexicalJson(view.value.getEditorState().toJSON())
+      if (view.kind === 'lexical') return readLexicalState(view.value)
       if (view.kind === 'quill') return readQuillModel(view.value)
       return readRoosterModel(view.value.getContentModelCopy('clean'))
     } catch {
@@ -693,7 +757,7 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
     const next = editor.parseEditorState(JSON.stringify(serialized))
     editor.setEditorState(next, { tag: 'history-push' })
     editor.focus?.(undefined, { defaultSelection: 'rootEnd' })
-    return readLexicalJson(editor.getEditorState().toJSON())
+    return readLexicalState(editor)
   }
 
   function writeQuill(editor: QuillEditorHandle, normalized: string): string | undefined {
@@ -956,7 +1020,7 @@ interface EditorViewHandle {
 
 interface LexicalEditorHandle {
   getRootElement(): HTMLElement | null
-  getEditorState(): { toJSON(): unknown }
+  getEditorState(): { readonly _nodeMap?: unknown; toJSON?(): unknown }
   parseEditorState(state: string): unknown
   setEditorState(state: unknown, options?: { tag?: string }): void
   isEditable(): boolean

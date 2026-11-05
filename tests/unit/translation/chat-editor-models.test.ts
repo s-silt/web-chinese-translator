@@ -1,4 +1,13 @@
-import { $createLineBreakNode, $createParagraphNode, $createTextNode, $getRoot, createEditor } from 'lexical'
+import {
+  $createLineBreakNode,
+  $createParagraphNode,
+  $createTabNode,
+  $createTextNode,
+  $getRoot,
+  ParagraphNode,
+  createEditor,
+  type SerializedParagraphNode,
+} from 'lexical'
 import { registerRichText } from '@lexical/rich-text'
 import Quill from 'quill'
 import { createEditor as createRoosterEditor, exportContent } from 'roosterjs'
@@ -17,6 +26,27 @@ function bindFiber(host: HTMLElement, value: unknown): void {
   ;(host as unknown as Record<string, unknown>).__reactFiber$fixture = {
     memoizedState: { memoizedState: value, next: null },
     return: null,
+  }
+}
+
+class BidiParagraphNode extends ParagraphNode {
+  static override getType(): string {
+    return 'bidi-paragraph'
+  }
+
+  static override clone(node: BidiParagraphNode): BidiParagraphNode {
+    return new BidiParagraphNode(node.__key)
+  }
+
+  static override importJSON(serializedNode: SerializedParagraphNode): BidiParagraphNode {
+    return new BidiParagraphNode().updateFromJSON(serializedNode)
+  }
+
+  override exportJSON(): SerializedParagraphNode {
+    return {
+      ...super.exportJSON(),
+      type: 'paragraph',
+    }
   }
 }
 
@@ -62,6 +92,94 @@ describe('真实 Lexical Quill Rooster 模型', () => {
     })
     expect(model).toBe('Please review this code.')
     expect(readChatDraft(root)).toBe('Please review this code.')
+  })
+
+  it('WhatsApp bidi-paragraph 导致 toJSON 抛 #130 时仍能按 _nodeMap 替换单行与多行草稿，含 tab 节点返回 unsupported 且不改写草稿', () => {
+    setPageUrl('https://web.whatsapp.com/')
+    const parent = document.createElement('div')
+    const root = document.createElement('div')
+    root.setAttribute('contenteditable', 'true')
+    root.setAttribute('data-lexical-editor', 'true')
+    root.setAttribute('data-wt-chat-input', elementId)
+    parent.append(root)
+    document.body.append(parent)
+    const editor = createEditor({
+      namespace: 'whatsapp',
+      nodes: [BidiParagraphNode],
+      onError(error) {
+        throw error
+      },
+    })
+    registerRichText(editor)
+    editor.setRootElement(root)
+    editor.update(() => {
+      const paragraph = new BidiParagraphNode()
+      paragraph.append($createTextNode('需要翻译的中文草稿'))
+      $getRoot().clear()
+      $getRoot().append(paragraph)
+    }, { discrete: true })
+
+    expect(() => editor.getEditorState().toJSON()).toThrow()
+    expect(readChatDraft(root)).toBe('需要翻译的中文草稿')
+    delete (root as unknown as { __lexicalEditor?: unknown }).__lexicalEditor
+    bindFiber(parent, editor)
+
+    expect(replaceChatDraftInMainWorld({
+      elementId,
+      expectedText: '需要翻译的中文草稿',
+      text: 'First line\n\nThird line',
+    })).toBe('ok')
+    let model = ''
+    editor.getEditorState().read(() => {
+      model = $getRoot().getTextContent()
+    })
+    expect(model).toBe('First line\n\nThird line')
+    expect(readChatDraft(root)).toBe('First line\n\nThird line')
+
+    editor.update(() => {
+      const first = new BidiParagraphNode()
+      first.append($createTextNode('第一段'))
+      first.append($createLineBreakNode())
+      first.append($createTextNode('第二行'))
+      const second = new BidiParagraphNode()
+      second.append($createTextNode('第二段'))
+      $getRoot().clear()
+      $getRoot().append(first, second)
+    }, { discrete: true })
+    expect(() => editor.getEditorState().toJSON()).toThrow()
+    expect(readChatDraft(root)).toBe('第一段\n第二行\n\n第二段')
+    expect(replaceChatDraftInMainWorld({
+      elementId,
+      expectedText: '第一段\n第二行\n\n第二段',
+      text: 'Paragraph one\nLine two\n\nParagraph two',
+    })).toBe('ok')
+    editor.getEditorState().read(() => {
+      model = $getRoot().getTextContent()
+    })
+    expect(model).toBe('Paragraph one\nLine two\n\nParagraph two')
+    expect(readChatDraft(root)).toBe('Paragraph one\nLine two\n\nParagraph two')
+
+    editor.update(() => {
+      const paragraph = new BidiParagraphNode()
+      paragraph.append($createTextNode('前置中文'))
+      paragraph.append($createTabNode())
+      paragraph.append($createTextNode('后置中文'))
+      $getRoot().clear()
+      $getRoot().append(paragraph)
+    }, { discrete: true })
+    expect(() => editor.getEditorState().toJSON()).toThrow()
+    const draftWithTab = readChatDraft(root)
+    expect(draftWithTab).toBe('前置中文\t后置中文')
+    expect(replaceChatDraftInMainWorld({
+      elementId,
+      expectedText: draftWithTab,
+      text: 'Should not replace',
+    })).toBe('unsupported')
+    editor.getEditorState().read(() => {
+      model = $getRoot().getTextContent()
+    })
+    expect(model).toBe('前置中文\t后置中文')
+    expect(readChatDraft(root)).toBe('前置中文\t后置中文')
   })
 
   it('Quill 只去掉模型末尾一个换行，fiber 实例写入保留尾部空行', () => {
