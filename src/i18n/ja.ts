@@ -301,6 +301,7 @@ const messages: Messages = {
   wtCmdTranslateInput: '入力を翻訳して置き換え',
   wtInputUnavailable: '翻訳できる入力欄にフォーカスし、変換を確定してから使ってください。',
   wtInputReplace: '置換',
+  wtInputReplaceHint: 'Tab キーで置換',
   wtInputRestore: '元に戻す',
   wtInputCopyOriginal: '原文をコピー',
   wtInputTextChanged: '入力内容が変更されたため置換できませんでした',

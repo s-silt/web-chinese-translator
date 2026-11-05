@@ -313,6 +313,7 @@ export default {
   wtCmdTranslateInput: 'Translate and replace input',
   wtInputUnavailable: 'Focus a translatable field and finish the input-method composition first.',
   wtInputReplace: 'Replace',
+  wtInputReplaceHint: 'Press Tab to replace',
   wtInputRestore: 'Restore',
   wtInputCopyOriginal: 'Copy original',
   wtInputTextChanged: 'The input text changed before replacement',

@@ -2550,3 +2550,222 @@ describe('视频站点输入框 YouTube Bilibili', () => {
   })
 })
 
+describe('预览弹窗 Tab 快捷键替换', () => {
+  afterEach(() => {
+    setPageUrl('about:blank')
+  })
+
+  function dispatchTab(
+    target: EventTarget,
+    init: KeyboardEventInit & { keyCode?: number } = {},
+    trusted = true,
+  ): KeyboardEvent {
+    const event = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+      ...init,
+    })
+    if (init.keyCode !== undefined) {
+      Object.defineProperty(event, 'keyCode', { value: init.keyCode })
+    }
+    if (trusted) {
+      Object.defineProperty(event, 'isTrusted', { value: true, configurable: true })
+    }
+    target.dispatchEvent(event)
+    return event
+  }
+
+  it('普通 textarea 预览出现后可信 Tab 替换成译文、阻止默认行为并切换为还原状态，且替换按钮带快捷键提示', async () => {
+    const textarea = document.createElement('textarea')
+    document.body.append(textarea)
+    const translate = vi.fn(async (texts: string[]) => ({
+      ok: true as const,
+      texts: [`Translated: ${texts[0]}`],
+    }))
+    const watcher = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+    })
+
+    textarea.focus()
+    trustedInput(textarea, '需要替换的中文草稿')
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+
+    const replaceBtn = requirePopoverButton('replace')
+    expect(replaceBtn.getAttribute('aria-keyshortcuts')).toBe('Tab')
+    expect(replaceBtn.title).toBe(zhCN.wtInputReplaceHint)
+
+    const bubbleSpy = vi.fn()
+    textarea.addEventListener('keydown', bubbleSpy)
+
+    const tabEvent = dispatchTab(textarea)
+    expect(tabEvent.defaultPrevented).toBe(true)
+    expect(bubbleSpy).not.toHaveBeenCalled()
+    expect(textarea.value).toBe('Translated: 需要替换的中文草稿')
+    expect(popoverShadow()?.querySelector('button[data-action="replace"]')).toBeNull()
+    expect(requirePopoverButton('restore')).not.toBeNull()
+
+    watcher.dispose()
+  })
+
+  it('Discord 与 WhatsApp 托管编辑器预览出现后按 Tab 调用对应替换桥一次', async () => {
+    setPageUrl('https://discord.com/channels/@me/1')
+    const discordField = mountSlate(['需要翻译的中文'])
+    const translate = vi.fn(async () => ({ ok: true as const, texts: ['Hello Discord'] }))
+    const replaceDiscordInput = vi.fn(async (request: { text: string }) => {
+      writeSlateText(discordField, request.text)
+      return 'ok' as const
+    })
+    const discordWatcher = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+      replaceDiscordInput,
+    })
+
+    discordField.focus()
+    trustedInput(discordField)
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+
+    const discordTab = dispatchTab(discordField)
+    expect(discordTab.defaultPrevented).toBe(true)
+    expect(replaceDiscordInput).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(20)
+    await Promise.resolve()
+    expect(readDiscordDraft(discordField)).toBe('Hello Discord')
+    expect(requirePopoverButton('restore')).not.toBeNull()
+    discordWatcher.dispose()
+
+    setPageUrl('https://web.whatsapp.com/')
+    const waField = document.createElement('div')
+    waField.setAttribute('contenteditable', 'true')
+    waField.setAttribute('data-lexical-editor', 'true')
+    waField.innerHTML = '<p>需要翻译的中文</p>'
+    document.body.append(waField)
+    const waTranslate = vi.fn(async () => ({ ok: true as const, texts: ['Hello WhatsApp'] }))
+    const replaceChatInput = vi.fn(async (request: { text: string }) => {
+      waField.innerHTML = `<p>${request.text}</p>`
+      return 'ok' as const
+    })
+    const waWatcher = createInputTranslation({
+      translate: waTranslate,
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+      replaceChatInput,
+    })
+
+    waField.focus()
+    trustedInput(waField)
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+
+    const waTab = dispatchTab(waField)
+    expect(waTab.defaultPrevented).toBe(true)
+    expect(replaceChatInput).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(20)
+    await Promise.resolve()
+    expect(readChatDraft(waField)).toBe('Hello WhatsApp')
+    expect(requirePopoverButton('restore')).not.toBeNull()
+    waWatcher.dispose()
+  })
+
+  it('不满足条件时不拦截 Tab 且不替换：不可信、修饰键、加载中、已替换、报错、合成中、草稿已改、异框、repeat', async () => {
+    const textarea = document.createElement('textarea')
+    const other = document.createElement('textarea')
+    document.body.append(textarea, other)
+
+    let resolveTranslate: ((reply: { ok: true; texts: string[] } | { ok: false; error: string }) => void) | undefined
+    const translate = vi.fn(
+      () =>
+        new Promise<{ ok: true; texts: string[] } | { ok: false; error: string }>((resolve) => {
+          resolveTranslate = resolve
+        }),
+    )
+    const watcher = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+    })
+
+    textarea.focus()
+    trustedInput(textarea, '初始中文草稿')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtPanelLoading)
+
+    // 预览尚未出现（loading 中）
+    const loadingTab = dispatchTab(textarea)
+    expect(loadingTab.defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('初始中文草稿')
+
+    resolveTranslate?.({ ok: true, texts: ['Translated draft'] })
+    await Promise.resolve()
+    expect(requirePopoverButton('replace')).not.toBeNull()
+
+    // 不可信 Tab
+    const untrustedTab = dispatchTab(textarea, {}, false)
+    expect(untrustedTab.defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('初始中文草稿')
+
+    // Shift+Tab
+    const shiftTab = dispatchTab(textarea, { shiftKey: true })
+    expect(shiftTab.defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('初始中文草稿')
+
+    // Ctrl+Tab
+    const ctrlTab = dispatchTab(textarea, { ctrlKey: true })
+    expect(ctrlTab.defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('初始中文草稿')
+
+    // isComposing 的 Tab
+    const composingTab = dispatchTab(textarea, { isComposing: true })
+    expect(composingTab.defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('初始中文草稿')
+
+    // event.repeat
+    const repeatTab = dispatchTab(textarea, { repeat: true })
+    expect(repeatTab.defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('初始中文草稿')
+
+    // 焦点在另一个输入框（在另一个输入框上按 Tab，且不触发 focusin 清理预览前先验证 target 校验）
+    const otherTab = dispatchTab(other)
+    expect(otherTab.defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('初始中文草稿')
+
+    // 草稿在预览后被脚本静默改过
+    textarea.value = '预览后被改过的中文草稿'
+    const mutatedTab = dispatchTab(textarea)
+    expect(mutatedTab.defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('预览后被改过的中文草稿')
+
+    // 恢复草稿为快照并正常按 Tab 替换，进入还原状态
+    textarea.value = '初始中文草稿'
+    const okTab = dispatchTab(textarea)
+    expect(okTab.defaultPrevented).toBe(true)
+    expect(textarea.value).toBe('Translated draft')
+    expect(requirePopoverButton('restore')).not.toBeNull()
+
+    // 替换后（还原状态）再按 Tab
+    const afterReplaceTab = dispatchTab(textarea)
+    expect(afterReplaceTab.defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('Translated draft')
+
+    // 报错状态
+    trustedInput(textarea, '触发报错的中文草稿')
+    await vi.advanceTimersByTimeAsync(650)
+    resolveTranslate?.({ ok: false, error: '服务异常' })
+    await Promise.resolve()
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('服务异常')
+    const errorTab = dispatchTab(textarea)
+    expect(errorTab.defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('触发报错的中文草稿')
+
+    watcher.dispose()
+  })
+})
+
+

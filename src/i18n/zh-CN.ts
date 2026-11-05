@@ -308,6 +308,7 @@ const zhCN = {
   wtCmdTranslateInput: '翻译并替换输入',
   wtInputUnavailable: '请聚焦可翻译的输入框，并先完成输入法选字。',
   wtInputReplace: '替换',
+  wtInputReplaceHint: '按 Tab 替换',
   wtInputRestore: '还原原文',
   wtInputCopyOriginal: '复制原文',
   wtInputTextChanged: '输入框内容已变化，请确认后重试',

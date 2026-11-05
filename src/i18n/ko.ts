@@ -301,6 +301,7 @@ const messages: Messages = {
   wtCmdTranslateInput: '입력 번역 및 바꾸기',
   wtInputUnavailable: '번역할 수 있는 입력란에 포커스를 두고 입력기 글자 선택을 마친 뒤 사용하세요.',
   wtInputReplace: '바꾸기',
+  wtInputReplaceHint: 'Tab 키로 교체',
   wtInputRestore: '원문 복원',
   wtInputCopyOriginal: '원문 복사',
   wtInputTextChanged: '입력 내용이 변경되어 바꿀 수 없습니다',

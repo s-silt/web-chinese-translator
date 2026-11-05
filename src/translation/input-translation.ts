@@ -560,6 +560,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   let copyOriginalTimer: ReturnType<typeof setTimeout> | undefined
   let pointerInsidePopover = false
   let replacementBusy = false
+  let previewVisible = false
   let pendingManagedToken: { field: HTMLElement; token: string; attribute: 'data-wt-discord-input' | 'data-wt-chat-input' } | undefined
 
   const host = document.createElement('div')
@@ -615,6 +616,8 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     title.textContent = `${options.t('wtInputTranslation')} · ${TARGET_LANGUAGE_NATIVE_LABEL[target]}`
     closeButton.setAttribute('aria-label', options.t('wtPanelClose'))
     replaceButton.textContent = options.t('wtInputReplace')
+    replaceButton.title = options.t('wtInputReplaceHint')
+    replaceButton.setAttribute('aria-keyshortcuts', 'Tab')
     if (copyTimer === undefined) copyButton.textContent = options.t('wtToolbarCopy')
     if (copyOriginalTimer === undefined) copyOriginalButton.textContent = options.t('wtInputCopyOriginal')
     restoreButton.textContent = options.t('wtInputRestore')
@@ -703,6 +706,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
 
   function hidePopover(clearBackup = true): void {
     clearCopyTimer()
+    previewVisible = false
     previewTranslation = ''
     statusNode.textContent = ''
     statusNode.className = 'status'
@@ -756,6 +760,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   }
 
   function renderLoading(): void {
+    previewVisible = false
     statusNode.className = 'status'
     statusNode.textContent = options.t('wtPanelLoading')
     actions.textContent = ''
@@ -764,6 +769,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
 
   function renderPreview(translation: string): void {
     const normalized = translation.replace(/\r\n?/g, '\n')
+    previewVisible = true
     previewTranslation = normalized
     statusNode.className = 'status'
     statusNode.textContent = normalized
@@ -774,6 +780,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
 
   function renderReplaced(inserted: string): void {
     const normalized = inserted.replace(/\r\n?/g, '\n')
+    previewVisible = false
     previewTranslation = normalized
     statusNode.className = 'status'
     statusNode.textContent = normalized
@@ -783,6 +790,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   }
 
   function renderError(message: string): void {
+    previewVisible = false
     statusNode.className = 'status is-error'
     statusNode.textContent = message
     actions.textContent = ''
@@ -955,9 +963,33 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   }
 
   function onKeyDown(event: KeyboardEvent): void {
+    if (disposed || !event.isTrusted) return
+    if (
+      event.key === 'Tab' &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.isComposing &&
+      event.keyCode !== 229 &&
+      !event.repeat &&
+      previewVisible &&
+      host.style.display !== 'none' &&
+      !replacementBusy &&
+      previewTranslation !== '' &&
+      activeField !== undefined &&
+      resolveEditableField(eventTarget(event)) === activeField &&
+      composingField !== activeField &&
+      readFieldValue(activeField) === snapshotText
+    ) {
+      event.preventDefault()
+      event.stopPropagation()
+      replacePreview()
+      return
+    }
     // 原生 compositionend 被站点吞掉且未重发时的兜底：浏览器给出的可信 keydown 已不处于合成，
     // 且不是输入法开始合成时的 Process 键，就结束同一输入框的合成状态并重新取样。
-    if (disposed || !event.isTrusted || event.isComposing || composingField === undefined) return
+    if (event.isComposing || composingField === undefined) return
     if (event.key === 'Process' || event.keyCode === 229) return
     if (isEventInsidePopover(event)) return
     const field = resolveEditableField(eventTarget(event))

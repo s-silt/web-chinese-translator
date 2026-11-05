@@ -310,6 +310,7 @@ export default {
   wtCmdTranslateInput: '翻譯並取代輸入',
   wtInputUnavailable: '請聚焦可翻譯的輸入框，並先完成輸入法選字。',
   wtInputReplace: '取代',
+  wtInputReplaceHint: '按 Tab 替換',
   wtInputRestore: '還原原文',
   wtInputCopyOriginal: '複製原文',
   wtInputTextChanged: '輸入框內容已變更，請確認後重試',
