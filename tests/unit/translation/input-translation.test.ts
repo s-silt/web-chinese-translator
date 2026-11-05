@@ -865,6 +865,87 @@ describe('Discord 纯文本草稿', () => {
     watcher.dispose()
   })
 
+  it('桥已部分写入再报 failed/unsupported 或 DOM 未落地时提示替换未完成并可复制原文', async () => {
+    setPageUrl('https://discord.com/channels/@me/1')
+    const translate = vi.fn(async () => ({ ok: true as const, texts: ['Hello'] }))
+    const copy = vi.mocked(clipboard.copySelectionText)
+    for (const status of ['failed', 'unsupported', 'ok'] as const) {
+      copy.mockClear()
+      const field = mountSlate(['水水水水水水'])
+      const watcher = createInputTranslation({
+        translate,
+        cancel: () => undefined,
+        t: (k) => zhCN[k],
+        replaceDiscordInput: async () => {
+          writeSlateText(field, 'Hel')
+          return status
+        },
+      })
+      trustedInput(field)
+      await vi.advanceTimersByTimeAsync(650)
+      await Promise.resolve()
+      trustedClick(requirePopoverButton('replace'))
+      await vi.advanceTimersByTimeAsync(400)
+      await Promise.resolve()
+      expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplacePartial)
+      trustedClick(requirePopoverButton('copy-original'))
+      await Promise.resolve()
+      expect(copy).toHaveBeenCalledWith('水水水水水水')
+      watcher.dispose()
+    }
+
+    const untouched = mountSlate(['水水水水水水'])
+    const keep = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+      replaceDiscordInput: async () => 'failed',
+    })
+    trustedInput(untouched)
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+    trustedClick(requirePopoverButton('replace'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplaceFailed)
+    expect(popoverShadow()?.querySelector('button[data-action="copy-original"]')).toBeNull()
+    keep.dispose()
+
+    for (const status of ['failed', 'unsupported', 'ok'] as const) {
+      copy.mockClear()
+      const field = mountSlate(['水水水水水水'])
+      let phase: 'replace' | 'restore' = 'replace'
+      const watcher = createInputTranslation({
+        translate,
+        cancel: () => undefined,
+        t: (k) => zhCN[k],
+        replaceDiscordInput: async (request) => {
+          if (phase === 'replace') {
+            writeSlateText(field, request.text)
+            return 'ok'
+          }
+          writeSlateText(field, '水水')
+          return status
+        },
+      })
+      trustedInput(field)
+      await vi.advanceTimersByTimeAsync(650)
+      await Promise.resolve()
+      trustedClick(requirePopoverButton('replace'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(readDiscordDraft(field)).toBe('Hello')
+      phase = 'restore'
+      trustedClick(requirePopoverButton('restore'))
+      await vi.advanceTimersByTimeAsync(400)
+      await Promise.resolve()
+      expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplacePartial)
+      expect(popoverShadow()?.querySelector('button[data-action="restore"]')).toBeNull()
+      trustedClick(requirePopoverButton('copy-original'))
+      await Promise.resolve()
+      expect(copy).toHaveBeenCalledWith('水水水水水水')
+      watcher.dispose()
+    }
+  })
+
   it('原生 compositionend 被吞且未重发时，后续可信非合成 keydown 结束合成并重新取样', async () => {
     const input = document.createElement('textarea')
     document.body.append(input)

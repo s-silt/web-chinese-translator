@@ -1109,12 +1109,22 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
         renderError(options.t('wtInputTextChanged'))
         return
       }
+      const originalText = (mode === 'replace' ? expected : next).replace(/\r\n?/g, '\n')
+      const failWith = (key: 'wtInputEditorUnsupported' | 'wtInputReplaceFailed'): void => {
+        // 桥可能已写入一部分再报错；草稿不再等于写入前的内容时，给出复制原文。
+        if (readFieldValue(field) !== expected.replace(/\r\n?/g, '\n')) {
+          recoveryOriginalText = originalText
+          renderError(options.t('wtInputReplacePartial'))
+          return
+        }
+        renderError(options.t(key))
+      }
       if (status === 'unsupported') {
-        renderError(options.t('wtInputEditorUnsupported'))
+        failWith('wtInputEditorUnsupported')
         return
       }
       if (status !== 'ok') {
-        renderError(options.t('wtInputReplaceFailed'))
+        failWith('wtInputReplaceFailed')
         return
       }
       const settled = await waitForManagedDom(field, next)
@@ -1122,7 +1132,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
         return
       }
       if (!settled) {
-        renderError(options.t('wtInputReplaceFailed'))
+        failWith('wtInputReplaceFailed')
         return
       }
       try {
