@@ -865,6 +865,33 @@ describe('Discord 纯文本草稿', () => {
     watcher.dispose()
   })
 
+  it('原生 compositionend 被吞且未重发时，后续可信非合成 keydown 结束合成并重新取样', async () => {
+    const input = document.createElement('textarea')
+    document.body.append(input)
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
+    const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
+    const key = (init: KeyboardEventInit & { keyCode?: number }, trusted = true): void => {
+      const event = new KeyboardEvent('keydown', { bubbles: true, composed: true, ...init })
+      if (init.keyCode !== undefined) Object.defineProperty(event, 'keyCode', { value: init.keyCode })
+      if (trusted) Object.defineProperty(event, 'isTrusted', { value: true, configurable: true })
+      input.dispatchEvent(event)
+    }
+    trustedComposition(input, 'compositionstart')
+    trustedInput(input, '你好', true)
+    key({ key: 'Enter', isComposing: true, keyCode: 229 })
+    key({ key: 'Process', keyCode: 229 })
+    key({ key: 'a', isComposing: false, keyCode: 229 })
+    key({ key: 'a' }, false)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(translate).not.toHaveBeenCalled()
+    key({ key: 'ArrowRight' })
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+    expect(translate).toHaveBeenCalledTimes(1)
+    expect(translate.mock.calls[0]?.[0]).toEqual(['你好'])
+    watcher.dispose()
+  })
+
   it('序列化后的主世界函数不捕获模块绑定，只使用最近且模型匹配的 editor', () => {
     setPageUrl('https://discord.com/channels/@me/1')
     const source = replaceDiscordDraftInMainWorld.toString()

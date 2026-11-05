@@ -954,6 +954,19 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     else scheduleFieldCheck(field)
   }
 
+  function onKeyDown(event: KeyboardEvent): void {
+    // 原生 compositionend 被站点吞掉且未重发时的兜底：浏览器给出的可信 keydown 已不处于合成，
+    // 且不是输入法开始合成时的 Process 键，就结束同一输入框的合成状态并重新取样。
+    if (disposed || !event.isTrusted || event.isComposing || composingField === undefined) return
+    if (event.key === 'Process' || event.keyCode === 229) return
+    if (isEventInsidePopover(event)) return
+    const field = resolveEditableField(eventTarget(event))
+    if (field === undefined || field !== composingField) return
+    composingField = undefined
+    if (isManagedPlainEditor(field)) deferManagedFieldCheck(field)
+    else scheduleFieldCheck(field)
+  }
+
   function onInput(event: Event): void {
     if (disposed || !event.isTrusted) return
     if (isEventInsidePopover(event)) return
@@ -1312,6 +1325,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   document.addEventListener('compositionstart', onCompositionStart, true)
   document.addEventListener('compositionend', onCompositionEnd, true)
   document.addEventListener('input', onInput, true)
+  document.addEventListener('keydown', onKeyDown, true)
   document.addEventListener('focusin', onFocusIn, true)
   document.addEventListener('focusout', onFocusOut, true)
   window.addEventListener('scroll', onViewportChange, true)
@@ -1326,6 +1340,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       document.removeEventListener('compositionstart', onCompositionStart, true)
       document.removeEventListener('compositionend', onCompositionEnd, true)
       document.removeEventListener('input', onInput, true)
+      document.removeEventListener('keydown', onKeyDown, true)
       document.removeEventListener('focusin', onFocusIn, true)
       document.removeEventListener('focusout', onFocusOut, true)
       window.removeEventListener('scroll', onViewportChange, true)
