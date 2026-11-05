@@ -657,6 +657,7 @@ describe('Discord 纯文本草稿', () => {
   it('Discord 吞掉原生 compositionend 后派发的不可信副本可结束已开始的合成，但不能凭空触发请求', async () => {
     setPageUrl('https://discord.com/channels/@me/1')
     const field = mountSlate(['你好'])
+    field.focus()
     const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
     const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
 
@@ -688,22 +689,70 @@ describe('Discord 纯文本草稿', () => {
     watcher.dispose()
   })
 
-  it('非 Discord 输入框不接受不可信 compositionend，合成状态保持到可信结束', async () => {
-    setPageUrl('https://discord.com/channels/@me/1')
+  it('普通 textarea 在可信合成开始且有焦点时接受不可信 compositionend，无先行合成、异框或失焦时不放行', async () => {
     const input = document.createElement('textarea')
-    document.body.append(input)
+    const other = document.createElement('textarea')
+    document.body.append(input, other)
     const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
     const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
-    trustedComposition(input, 'compositionstart')
-    trustedInput(input, '正在拼音', true)
-    input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, composed: true }))
+
+    const untrustedEnd = (target: Element, data = '伪造事件数据'): void => {
+      target.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, composed: true, data }))
+    }
+
+    // (a) 没有先行可信 compositionstart 时不可信 compositionend 不触发请求
+    input.value = '未开始合成的中文'
+    input.focus()
+    untrustedEnd(input)
     await vi.advanceTimersByTimeAsync(1000)
     expect(translate).not.toHaveBeenCalled()
-    trustedComposition(input, 'compositionend')
+
+    // 开启可信合成
+    trustedComposition(input, 'compositionstart')
+    trustedInput(input, '正在拼音', true)
+
+    // (b) 在 A 输入框合成、对 B 输入框派发不可信 compositionend 不结束 A 的合成
+    other.value = '别的框里的中文'
+    untrustedEnd(other)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(translate).not.toHaveBeenCalled()
+
+    // (c) 输入框失去焦点时（焦点移到 other，此时 activeField 未建立，composingField 仍在 input）不放行
+    other.focus()
+    expect(document.activeElement).toBe(other)
+    untrustedEnd(input)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(translate).not.toHaveBeenCalled()
+
+    // 重新聚焦 A 输入框后，不可信 compositionend 结束合成并在 650ms 后按实时草稿请求一次
+    input.focus()
+    untrustedEnd(input)
     await vi.advanceTimersByTimeAsync(650)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
     expect(translate.mock.calls[0]?.[0]).toEqual(['正在拼音'])
+    watcher.dispose()
+  })
+
+  it('通用 contenteditable 在可信合成开启后遇到不可信 compositionend 时按实时草稿触发一次翻译', async () => {
+    setPageUrl('https://web.telegram.org/k/')
+    const editable = document.createElement('div')
+    editable.setAttribute('contenteditable', 'true')
+    document.body.append(editable)
+    editable.focus()
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
+    const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
+
+    trustedComposition(editable, 'compositionstart')
+    trustedInput(editable, '电报网页版实时草稿', true)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(translate).not.toHaveBeenCalled()
+
+    editable.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, composed: true, data: '被忽略的事件数据' }))
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+    expect(translate).toHaveBeenCalledTimes(1)
+    expect(translate.mock.calls[0]?.[0]).toEqual(['电报网页版实时草稿'])
     watcher.dispose()
   })
 
@@ -2087,6 +2136,34 @@ describe('WhatsApp Slack Teams 纯文本草稿', () => {
       if (previousQuill === undefined) delete (globalThis as unknown as { Quill?: unknown }).Quill
       else (globalThis as unknown as { Quill?: unknown }).Quill = previousQuill
     }
+  })
+
+  it('WhatsApp 托管编辑器吞掉原生 compositionend 后派发的不可信副本可结束已开始的合成，但不能凭空触发请求', async () => {
+    const field = mountManaged('https://web.whatsapp.com/', '<p>你好世界</p>', 'lexical')
+    field.focus()
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
+    const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
+
+    const untrustedEnd = (): void => {
+      field.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, composed: true }))
+    }
+
+    untrustedEnd()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(translate).not.toHaveBeenCalled()
+
+    trustedComposition(field, 'compositionstart')
+    trustedInput(field, undefined, true)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(translate).not.toHaveBeenCalled()
+
+    untrustedEnd()
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+    expect(translate).toHaveBeenCalledTimes(1)
+    expect(translate.mock.calls[0]?.[0]).toEqual(['你好世界'])
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('EN:你好世界')
+    watcher.dispose()
   })
 })
 

@@ -939,13 +939,13 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   function onCompositionEnd(event: CompositionEvent): void {
     if (disposed) return
     const field = resolveEditableField(eventTarget(event))
-    // Discord 会吞掉原生 compositionend，再派发一个 isTrusted=false 的副本。
-    // 仅 Discord 纯文本编辑器放行；不可信的结束事件只用来结束由可信 compositionstart 开启的同一输入框合成；
-    // 之后仍按实时 DOM 草稿取样，不采用事件里的任何数据。
-    if (
-      !event.isTrusted &&
-      (field === undefined || composingField !== field || !isDiscordPlainEditor(field))
-    ) return
+    // 多个站点或输入法环境下会出现原生 compositionend 被吞、只剩 isTrusted=false 副本的情况，所以不按站点放行；
+    // 不可信事件只能结束由用户可信合成开启、且当前有焦点的同一输入框的合成；之后仍按实时 DOM 取样，不使用事件数据。
+    if (!event.isTrusted) {
+      if (field === undefined || composingField !== field) return
+      const active = deepActiveElement(field.ownerDocument)
+      if (active !== field && (active === null || !field.contains(active))) return
+    }
     if (composingField !== undefined && (field === undefined || composingField === field)) {
       composingField = undefined
     }
