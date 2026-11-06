@@ -83,7 +83,7 @@ describe('悬浮入口选项', () => {
       await flushPromises()
       expect(saved).toHaveLength(0)
       expect(floatingSwitch(wrapper).attributes('aria-checked')).toBe('true')
-      expect(wrapper.get('[role="status"]').text()).toBe(en.wtPermissionDenied)
+      expect(wrapper.get('.wt-status').text()).toBe(en.wtPermissionDenied)
       expect(wrapper.get('[data-test="wt-floating-grant"]').attributes('disabled')).toBeUndefined()
     } finally {
       wrapper.unmount()
@@ -335,7 +335,7 @@ describe('视频字幕与输入翻译开关与权限', () => {
       expect(request).toHaveBeenCalledWith({ origins: ['http://*/*', 'https://*/*'] })
       expect(saved).toHaveLength(0)
       expect(subToggle.attributes('aria-checked')).toBe('false')
-      expect(wrapper.get('[role="status"]').text()).toBe(zhCN.wtPermissionDenied)
+      expect(wrapper.get('.wt-status').text()).toBe(zhCN.wtPermissionDenied)
 
       await subToggle.trigger('click')
       await flushPromises()

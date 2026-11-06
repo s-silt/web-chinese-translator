@@ -34,15 +34,15 @@ test.describe('界面风格', () => {
       })
     }
 
-    test(`弹出页 ${style} @300px 无横向溢出`, async ({ page, extension, extensionId }) => {
+    test(`弹出页 ${style} @320px 无横向溢出`, async ({ page, extension, extensionId }) => {
       await extension.setSettings({ uiStyle: style })
-      await page.setViewportSize({ width: 300, height: 600 })
+      await page.setViewportSize({ width: 320, height: 600 })
       await page.goto(`chrome-extension://${extensionId}/popup.html`)
       await page.waitForLoadState('domcontentloaded')
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
       ).toBe(true)
-      await page.screenshot({ path: join(SHOTS, `${style}-popup-300.png`), fullPage: true })
+      await page.screenshot({ path: join(SHOTS, `${style}-popup-320.png`), fullPage: true })
     })
   }
 })

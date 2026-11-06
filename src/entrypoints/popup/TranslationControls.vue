@@ -1,64 +1,150 @@
 <template>
-  <section aria-labelledby="wt-popup-title">
-    <h2 id="wt-popup-title" class="section-title">{{ t('wtPageTitle') }}</h2>
-    <UiSwitch
-      v-if="supported"
-      :checked="pageTranslationEnabled"
-      :disabled="busy || (!canTranslate && !pageTranslationEnabled)"
-      :label="t('wtTranslatePage')"
-      data-test="wt-translate-page"
-      @change="setPageTranslation"
-    />
-    <UiSwitch
-      v-if="supported"
-      :checked="autoEnabled"
-      :disabled="busy || !configurationReady || (!autoEnabled && !canTranslate)"
-      :label="t('wtSiteAuto')"
-      data-test="wt-auto"
-      @change="setAuto"
-    />
-    <UiSwitch
-      :checked="autoInteractionEnabled"
-      :disabled="busy || !configurationReady"
-      :label="t('wtAutomaticInteractions')"
-      :title="t('wtAutomaticInteractionsHint')"
-      data-test="wt-popup-auto-interaction"
-      @change="setAutoInteraction"
-    />
-    <UiSwitch
-      :checked="floatingEnabled"
-      :disabled="busy || !configurationReady"
-      :label="t('wtFloatingButton')"
-      data-test="wt-popup-floating"
-      @change="setFloating"
-    />
-    <UiSwitch
-      :checked="videoSubtitlesEnabled"
-      :disabled="busy || !configurationReady"
-      :label="t('wtVideoSubtitlesShort')"
-      data-test="wt-popup-video-subtitles"
-      @change="setVideoSubtitles"
-    />
-    <UiSwitch
-      :checked="inputTranslationEnabled"
-      :disabled="busy || !configurationReady"
-      :label="t('wtInputTranslation')"
-      data-test="wt-popup-input-translation"
-      @change="setInputTranslation"
-    />
+  <section class="popup-engines" aria-labelledby="wt-engines-title">
+    <h2 id="wt-engines-title" class="sr-only">{{ t('wtPageTitle') }}</h2>
+
+    <div class="popup-engine">
+      <span class="engine-tag engine-tag-dict">{{ t('wtEngineDict') }}</span>
+      <div class="popup-engine-body">
+        <div class="popup-engine-row">
+          <span class="popup-engine-name">{{ githubPage ? t('wtGithubDictionary') : t('wtDictionary') }}</span>
+          <span class="popup-row-end">
+            <UiBadge
+              v-if="showGithubState"
+              :tone="githubTone"
+              dot
+              live
+              v-bind="githubStateTest"
+            >
+              {{ t(PAGE_STATE_MESSAGE[githubState]) }}
+            </UiBadge>
+            <UiBadge v-else :tone="dictEnabled ? 'success' : 'neutral'" dot>
+              {{ dictEnabled ? t('wtDictOn') : t('wtDictOff') }}
+            </UiBadge>
+            <UiButton v-if="githubState === 'not-ready'" size="sm" @click="emit('reload')">{{ t('reload') }}</UiButton>
+            <UiButton v-else-if="githubState === 'unauthorized'" variant="primary" size="sm" @click="emit('authorize')">
+              {{ t('authorize') }}
+            </UiButton>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <template v-if="translationSupported">
+      <div class="popup-engine">
+        <span class="engine-tag engine-tag-model">{{ t('wtEngineModel') }}</span>
+        <div class="popup-engine-body">
+          <div class="popup-engine-row">
+            <span class="popup-engine-name">{{ modelName || t('wtModelUnset') }}</span>
+          </div>
+          <template v-if="modelConfigured">
+            <UiSwitch
+              :checked="autoEnabled"
+              :disabled="autoDisabled"
+              :label="t('wtSiteAuto')"
+              data-test="wt-auto"
+              @change="setAuto"
+            />
+            <p v-if="autoReason" class="popup-reason">
+              {{ t(autoReason) }}
+              <button
+                v-if="autoReason === 'wtNotConfigured'"
+                type="button"
+                class="popup-reason-link"
+                data-test="wt-go-configure"
+                @click="openOptionsAt('#wt-title')"
+              >
+                {{ t('wtGoConfigure') }}
+              </button>
+            </p>
+          </template>
+          <div v-else class="popup-model-guide">
+            <p class="popup-reason">{{ t('wtModelSetupHint') }}</p>
+            <UiButton size="sm" data-test="wt-configure-now" @click="openOptionsAt('#wt-title')">
+              {{ t('wtConfigureNow') }}
+            </UiButton>
+          </div>
+        </div>
+      </div>
+
+      <details class="popup-more" :open="moreOpen" @toggle="onMoreToggle">
+        <summary>{{ t('wtMoreFeatures') }}</summary>
+        <div class="popup-more-body">
+          <div class="popup-switch">
+            <UiSwitch
+              :checked="autoInteractionEnabled"
+              :disabled="moreDisabled"
+              :label="t('wtAutomaticInteractions')"
+              :title="t('wtAutomaticInteractionsHint')"
+              data-test="wt-popup-auto-interaction"
+              @change="setAutoInteraction"
+            />
+          </div>
+          <div class="popup-switch">
+            <UiSwitch
+              :checked="floatingEnabled"
+              :disabled="moreDisabled"
+              :label="t('wtFloatingButton')"
+              data-test="wt-popup-floating"
+              @change="setFloating"
+            />
+          </div>
+          <div class="popup-switch">
+            <UiSwitch
+              :checked="videoSubtitlesEnabled"
+              :disabled="moreDisabled"
+              :label="t('wtVideoSubtitlesShort')"
+              data-test="wt-popup-video-subtitles"
+              @change="setVideoSubtitles"
+            />
+          </div>
+          <div class="popup-switch">
+            <UiSwitch
+              :checked="inputTranslationEnabled"
+              :disabled="moreDisabled"
+              :label="t('wtInputTranslation')"
+              data-test="wt-popup-input-translation"
+              @change="setInputTranslation"
+            />
+          </div>
+          <p v-if="moreReason" class="popup-reason" data-test="wt-more-reason">{{ t(moreReason) }}</p>
+        </div>
+      </details>
+    </template>
+
     <p v-if="autoError" class="wt-page-error" role="alert" data-test="wt-auto-error">{{ t(autoError) }}</p>
     <p v-if="pageError" class="wt-page-error" role="alert" data-test="wt-page-error">{{ pageError }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
+import { computed, ref } from 'vue'
+import UiBadge from '../../components/ui/UiBadge.vue'
+import UiButton from '../../components/ui/UiButton.vue'
 import UiSwitch from '../../components/ui/UiSwitch.vue'
+import type { UiBadgeTone } from '../../components/ui/types'
 import { useI18n } from '../../components/ui-preferences'
-import { useTranslationControls } from './useTranslationControls'
+import { isFirefoxBuild } from '../../shared/extension'
+import { PAGE_STATE_MESSAGE, type PageState } from './usePopup'
+import { useProvidedTranslationControls } from './useTranslationControls'
+
+const POPUP_MORE_KEY = 'gcn:popup-more-open'
+const translationSupported = !isFirefoxBuild()
+
+const props = withDefaults(defineProps<{
+  githubState?: PageState
+  githubPage?: boolean
+}>(), {
+  githubState: 'loading',
+  githubPage: false,
+})
+
+const emit = defineEmits<{
+  authorize: []
+  reload: []
+}>()
 
 const { t } = useI18n()
 const {
-  supported,
   autoEnabled,
   canTranslate,
   floatingEnabled,
@@ -66,20 +152,193 @@ const {
   videoSubtitlesEnabled,
   inputTranslationEnabled,
   configurationReady,
+  masterEnabled,
+  modelConfigured,
+  modelName,
+  dictEnabled,
   pageError,
-  pageTranslationEnabled,
   autoError,
   busy,
   setFloating,
   setAutoInteraction,
   setAuto,
-  setPageTranslation,
   setVideoSubtitles,
   setInputTranslation,
-} = useTranslationControls()
+  openOptionsAt,
+} = useProvidedTranslationControls()
+
+function readMoreOpen(): boolean {
+  try {
+    const raw = localStorage.getItem(POPUP_MORE_KEY)
+    if (raw === null) return true
+    return raw === 'true'
+  } catch {
+    return true
+  }
+}
+
+function writeMoreOpen(open: boolean): void {
+  try {
+    localStorage.setItem(POPUP_MORE_KEY, String(open))
+  } catch {
+    // 存储不可用时只影响下次打开
+  }
+}
+
+const moreOpen = ref(readMoreOpen())
+
+function onMoreToggle(event: Event): void {
+  const details = event.currentTarget as HTMLDetailsElement
+  moreOpen.value = details.open
+  writeMoreOpen(details.open)
+}
+
+// 需要用户处理的 GitHub 状态（未授权、未就绪）及 Firefox 构建：保留原状态行的 data-test
+const githubNeedsAction = computed(
+  () => !translationSupported || props.githubState === 'unauthorized' || props.githubState === 'not-ready',
+)
+
+// GitHub 页面由独立的汉化引擎处理，词典行显示它的状态，而不是网页翻译引擎的 fixed
+const showGithubState = computed(() => props.githubPage || githubNeedsAction.value)
+
+const githubStateTest = computed(() => (githubNeedsAction.value ? { 'data-test': 'state' } : {}))
+
+const githubTone = computed<UiBadgeTone>(() => {
+  switch (props.githubState) {
+    case 'translated':
+      return 'success'
+    case 'not-ready':
+      return 'attention'
+    case 'unauthorized':
+      return 'danger'
+    default:
+      return 'neutral'
+  }
+})
+
+const moreDisabled = computed(() => busy.value || !configurationReady.value || !masterEnabled.value)
+
+const moreReason = computed(() => {
+  if (!configurationReady.value) return 'wtConfigUnreadable' as const
+  if (!masterEnabled.value) return 'wtMasterOff' as const
+  return ''
+})
+
+const autoDisabled = computed(
+  () =>
+    busy.value ||
+    !configurationReady.value ||
+    !masterEnabled.value ||
+    !modelConfigured.value ||
+    (!autoEnabled.value && !canTranslate.value),
+)
+
+const autoReason = computed(() => {
+  if (!autoDisabled.value) return ''
+  if (!configurationReady.value) return 'wtConfigUnreadable' as const
+  if (!masterEnabled.value) return 'wtMasterOff' as const
+  if (!modelConfigured.value) return 'wtNotConfigured' as const
+  return ''
+})
 </script>
 
 <style scoped>
+.popup-engines {
+  display: grid;
+  gap: 12px;
+}
+
+.popup-engine {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: start;
+}
+
+.engine-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+  border-radius: 999px;
+}
+
+.engine-tag-dict {
+  color: var(--gcn-engine-dict-fg);
+  background: var(--gcn-engine-dict-bg);
+}
+
+.engine-tag-model {
+  color: var(--gcn-engine-model-fg);
+  background: var(--gcn-engine-model-bg);
+}
+
+.popup-engine-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.popup-engine-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: var(--gcn-control-sm);
+}
+
+.popup-engine-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popup-row-end {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.popup-more > summary {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+}
+
+.popup-more-body {
+  display: grid;
+  gap: 6px;
+  padding-top: 10px;
+}
+
+.popup-reason {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--gcn-fg-muted);
+}
+
+.popup-reason-link {
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--gcn-accent);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.popup-model-guide {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
 .wt-page-error {
   margin: 0;
   padding: 8px 10px;
@@ -89,5 +348,11 @@ const {
   background: var(--gcn-bg-muted);
   border: 1px solid var(--gcn-border-muted);
   border-radius: var(--gcn-radius);
+}
+
+@media (forced-colors: active) {
+  .popup-reason-link {
+    text-decoration: underline;
+  }
 }
 </style>

@@ -48,6 +48,13 @@
   --gcn-surface-shadow: 0 8px 28px #02081480, 0 0 20px #1aa6d912;
   --gcn-radius-panel: 10px;
   --gcn-eyebrow: #55e5ff;
+  --gcn-engine-dict-fg: var(--gcn-success-fg);
+  --gcn-engine-dict-bg: var(--gcn-success-bg);
+  --gcn-engine-model-fg: var(--gcn-accent);
+  --gcn-engine-model-bg: #55e5ff26;
+  --gcn-card-bg: var(--gcn-surface);
+  --gcn-card-border: var(--gcn-surface-border);
+  --gcn-card-radius: var(--gcn-radius-lg);
 }
 
 :root[data-style='cyber'] body {
@@ -220,6 +227,45 @@
 :root[data-style='cyber'] .popup .popup-footer {
   background: var(--gcn-bg-muted);
   border-color: var(--gcn-border-muted);
+}
+
+:root[data-style='cyber'] .popup-card {
+  position: relative;
+  background: var(--gcn-surface);
+}
+
+:root[data-style='cyber'] .popup-card::before,
+:root[data-style='cyber'] .popup-card::after {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  pointer-events: none;
+}
+
+:root[data-style='cyber'] .popup-card::before {
+  top: -1px;
+  left: -1px;
+  border-top: 1.5px solid var(--gcn-accent);
+  border-left: 1.5px solid var(--gcn-accent);
+}
+
+:root[data-style='cyber'] .popup-card::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 1.5px solid var(--gcn-accent);
+  border-right: 1.5px solid var(--gcn-accent);
+}
+
+:root[data-style='cyber'] .popup-card .ui-button-primary {
+  box-shadow: 0 0 12px #55e5ff40;
+}
+
+:root[data-style='cyber'] .options-nav-group-title {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--gcn-eyebrow);
+  text-transform: uppercase;
 }
 
 @media (prefers-reduced-motion: reduce) {

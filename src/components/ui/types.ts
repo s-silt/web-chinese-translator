@@ -7,6 +7,9 @@ export type UiButtonSize = 'sm' | 'md'
 /** 提示条：成功（绿色勾）、失败（红色叉） */
 export type UiToastTone = 'success' | 'danger'
 
+/** 徽章色调：中性、成功、注意、危险、强调 */
+export type UiBadgeTone = 'neutral' | 'success' | 'attention' | 'danger' | 'accent'
+
 /** 下拉框选项 */
 export interface UiSelectOption {
   readonly value: string

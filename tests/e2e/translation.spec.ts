@@ -2285,7 +2285,7 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       const blank = await context.newPage()
       await blank.goto('about:blank')
       const popup = await context.newPage()
-      await popup.setViewportSize({ width: 300, height: 720 })
+      await popup.setViewportSize({ width: 320, height: 720 })
       await context.serviceWorkers()[0]!.evaluate(async () => {
         const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
         const stored = await chrome.storage.sync.get('settings')
@@ -2303,9 +2303,8 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await expect(popup.getByRole('button', { name: '规则' })).toHaveCount(0)
       await expect(popup.locator('[data-test="wt-settings"]')).toHaveCount(0)
       const footerButtons = popup.locator('footer button')
-      await expect(footerButtons).toHaveCount(1)
-      await expect(footerButtons).toHaveAttribute('data-test', 'settings')
-      await expect(footerButtons).toHaveAttribute('aria-label', '设置')
+      await expect(footerButtons).toHaveCount(3)
+      await expect(popup.locator('[data-test="settings"]')).toHaveAttribute('aria-label', '设置')
       await popup.evaluate(async () => {
         const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
         const stored = await chrome.storage.sync.get('settings')
