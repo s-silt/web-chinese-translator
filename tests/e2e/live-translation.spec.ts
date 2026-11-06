@@ -5,22 +5,9 @@ import ts from 'typescript'
 import zhCN from '../../src/i18n/zh-CN'
 import { inspectClosedShadowPage, installClosedShadowInspection } from './closed-shadow'
 
-interface ModuleEntry {
-  readonly spec: string
-  readonly file: string
-}
-
-const TRANSLATION_MODULES: readonly ModuleEntry[] = [
-  { spec: './id', file: 'id.ts' },
-  { spec: './target-language', file: 'target-language.ts' },
-  { spec: './sites', file: 'sites.ts' },
-  { spec: './clipboard', file: 'clipboard.ts' },
-  { spec: './subtitle-source', file: 'subtitle-source.ts' },
-  { spec: './discord-input', file: 'discord-input.ts' },
-  { spec: './chat-input', file: 'chat-input.ts' },
-  { spec: './input-translation', file: 'input-translation.ts' },
-  { spec: './subtitles', file: 'subtitles.ts' },
-]
+/** 组件入口；运行时依赖从源码的相对导入自动收集，入口新增依赖时不必手工维护清单 */
+const ENTRY_FILES = ['input-translation.ts', 'subtitles.ts'] as const
+const TRANSLATION_DIR = resolve(import.meta.dirname, '../../src/translation')
 
 interface LiveFixturePageWindow extends Window {
   __wtCalls: Array<{ readonly texts: string[]; readonly requestId: string }>
@@ -30,19 +17,31 @@ interface LiveFixturePageWindow extends Window {
   __wtWatcher?: { dispose(): void }
 }
 
+/** 转译后仍保留的相对导入（仅类型的导入已被擦除），依赖在前、入口在后 */
 async function transpileLiveModules(): Promise<Array<{ readonly spec: string; readonly code: string }>> {
   const compilerOptions: ts.CompilerOptions = {
     module: ts.ModuleKind.ESNext,
     target: ts.ScriptTarget.ES2022,
   }
-  const out: Array<{ readonly spec: string; readonly code: string }> = []
-  for (const mod of TRANSLATION_MODULES) {
-    const absPath = resolve(import.meta.dirname, '../../src/translation', mod.file)
-    const raw = await readFile(absPath, 'utf8')
-    const transpiled = ts.transpileModule(raw, { compilerOptions }).outputText
-    out.push({ spec: mod.spec, code: transpiled })
+  const ordered: Array<{ readonly spec: string; readonly code: string }> = []
+  const visited = new Set<string>()
+  async function visit(file: string, chain: readonly string[]): Promise<void> {
+    if (visited.has(file)) return
+    visited.add(file)
+    const raw = await readFile(resolve(TRANSLATION_DIR, file), 'utf8')
+    const code = ts.transpileModule(raw, { compilerOptions }).outputText
+    for (const match of code.matchAll(/\bfrom\s+['"](\.[^'"]+)['"]/g)) {
+      const spec = match[1]!
+      // 只支持同目录模块：越出 src/translation 的依赖说明组件不再适合在页面里单独挂载
+      if (!/^\.\/[\w-]+$/.test(spec)) {
+        throw new Error(`${[...chain, file].join(' → ')} 导入了 ${spec}，组件夹具只支持同目录模块`)
+      }
+      await visit(`${spec.slice(2)}.ts`, [...chain, file])
+    }
+    ordered.push({ spec: `./${file.replace(/\.ts$/, '')}`, code })
   }
-  return out
+  for (const entry of ENTRY_FILES) await visit(entry, [])
+  return ordered
 }
 
 async function mountLiveTranslationModule(
