@@ -163,9 +163,10 @@ type EditableElement = HTMLInputElement | HTMLTextAreaElement | HTMLElement
 function isTextControl(node: Element): node is HTMLInputElement | HTMLTextAreaElement {
   if (node instanceof HTMLTextAreaElement) return true
   if (node instanceof HTMLInputElement) {
+    // 网页里的搜索框按普通文本处理；网址、邮箱、数字等格式化字段译了反而不能用
     const rawAttr = (node.getAttribute('type') ?? '').trim().toLowerCase()
-    if (rawAttr !== '' && rawAttr !== 'text') return false
-    return node.type === 'text' || node.type === ''
+    if (rawAttr !== '' && rawAttr !== 'text' && rawAttr !== 'search') return false
+    return node.type === 'text' || node.type === 'search' || node.type === ''
   }
   return false
 }

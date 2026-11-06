@@ -253,6 +253,19 @@
         />
         <span id="wt-assist-mode-hint" class="wt-hint">{{ assistMode === 'toolbar' ? t('wtToolbarHint') : assistMode === 'smart' ? t('wtSmartInlineHint') : t('wtAssistModeHint') }}</span>
       </label>
+      <label class="wt-field">
+        <span id="wt-page-limit-label" class="wt-label">{{ t('wtPageLimit') }}</span>
+        <UiSelect
+          :model-value="String(pageCharLimit)"
+          :disabled="!ready || saving"
+          :options="pageLimitOptions"
+          aria-labelledby="wt-page-limit-label"
+          aria-describedby="wt-page-limit-hint"
+          data-test="wt-page-limit"
+          @update:model-value="changePageCharLimit(Number($event))"
+        />
+        <span id="wt-page-limit-hint" class="wt-hint">{{ t('wtPageLimitHint') }}</span>
+      </label>
     </div>
 
     <div v-show="props.view === 'all' || props.view === 'general'" class="wt-language-pair">
@@ -388,10 +401,13 @@ import { useI18n } from '../../components/ui-preferences'
 import type { MessageKey } from '../../i18n'
 import {
   completionUrl,
+  DEFAULT_PAGE_CHAR_LIMIT,
   DEFAULT_TRANSLATION_CONFIG,
   hostPermissionPattern,
+  isPageCharLimit,
   normalizeBaseUrl,
   normalizeOrigin,
+  PAGE_CHAR_LIMITS,
 } from '../../translation/config'
 import { createId } from '../../translation/id'
 import { validateApiKey } from '../../translation/secrets'
@@ -478,6 +494,7 @@ const autoInteractionEnabled = ref(true)
 const videoSubtitlesEnabled = ref(false)
 const inputTranslationEnabled = ref(false)
 const inputTargetLanguage = ref<TargetLanguage>('en')
+const pageCharLimit = ref<number>(DEFAULT_PAGE_CHAR_LIMIT)
 const shortcuts = ref<ShortcutItem[]>([])
 const newSite = ref('')
 const statusMessage = ref('')
@@ -535,6 +552,15 @@ const requestParamsPlaceholder = computed(() =>
     : '{\n  "reasoning_effort": "medium"\n}',
 )
 const customHeadersPlaceholder = '{\n  "X-Custom-Header": "value"\n}'
+// 按中文约 1 字对应 1 字符估算篇幅，方便判断档位
+const pageLimitOptions = computed(() =>
+  PAGE_CHAR_LIMITS.map((value) => ({
+    value: String(value),
+    label: value === 0
+      ? t('wtPageLimitUnlimited')
+      : t('wtPageLimitChars', { count: String(value / 10_000) }),
+  })),
+)
 const languageOptions = computed(() =>
   TARGET_LANGUAGES.map((value) => ({ value, label: TARGET_LANGUAGE_NATIVE_LABEL[value] })),
 )
@@ -639,6 +665,7 @@ function applyConfig(
   videoSubtitlesEnabled.value = config.videoSubtitlesEnabled
   inputTranslationEnabled.value = config.inputTranslationEnabled
   inputTargetLanguage.value = config.inputTargetLanguage
+  pageCharLimit.value = config.pageCharLimit
   assistMode.value = persistedMode()
   keyState.value = state
 }
@@ -1051,6 +1078,17 @@ async function changeVideoSubtitles(enabled: boolean): Promise<void> {
       allSitesGranted.value = true
     }
     await savePatch({ videoSubtitlesEnabled: enabled })
+  } finally {
+    saving.value = false
+  }
+}
+
+async function changePageCharLimit(value: number): Promise<void> {
+  if (!ready.value || saving.value || value === pageCharLimit.value || !isPageCharLimit(value)) return
+  saving.value = true
+  setStatus('', false)
+  try {
+    await savePatch({ pageCharLimit: value })
   } finally {
     saving.value = false
   }

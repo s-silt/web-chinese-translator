@@ -39,6 +39,12 @@
     <p v-if="sensitive" class="popup-card-note">{{ t('wtSensitivePage') }}</p>
     <p v-else-if="state === 'out-of-scope'" class="popup-card-note">{{ t('wtScopeBlocked') }}</p>
     <p v-else-if="state === 'master-off'" class="popup-card-note">{{ t('wtMasterOff') }}</p>
+    <p v-else-if="state === 'capped'" class="popup-card-note" data-test="wt-capped-note">
+      {{ t(canResume ? 'wtCappedNote' : 'wtCappedRecordsNote') }}
+      <button type="button" class="popup-card-link" data-test="wt-capped-settings" @click="openOptionsAt('#wt-general-title')">
+        {{ t('wtPageLimitAdjust') }}
+      </button>
+    </p>
   </section>
 </template>
 
@@ -73,6 +79,7 @@ const {
   resume,
   retryFailed,
   excludeSite,
+  openOptionsAt,
 } = useProvidedTranslationControls()
 
 // 敏感页禁止发送内容：不能翻译或继续，但右键手动翻译过的内容仍可恢复原文（恢复不发送任何内容）
@@ -141,6 +148,19 @@ function onPrimary(): void {
 .popup-card-failed-hint {
   color: var(--gcn-fg-muted);
   text-align: right;
+}
+
+.popup-card-link {
+  padding: 0;
+  font: inherit;
+  color: var(--gcn-accent);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.popup-card-link:hover {
+  text-decoration: underline;
 }
 
 .popup-card-note {

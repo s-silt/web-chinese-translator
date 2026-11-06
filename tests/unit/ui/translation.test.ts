@@ -1399,6 +1399,27 @@ describe('弹出页站点控制', () => {
     wrapper.unmount()
   })
 
+  it('单页翻译上限：默认约 5 万字，选择后写入 pageCharLimit', async () => {
+    const saved: Record<string, unknown>[] = []
+    replies({
+      'wt:get-config': () => ({ ok: true, config: CONFIG, hasKey: true, keyState: 'ready' }),
+      'wt:save-config': (message) => {
+        saved.push(message.patch as Record<string, unknown>)
+        return { ok: true, config: { ...CONFIG, ...(message.patch as object) }, hasKey: true, keyState: 'ready' }
+      },
+    })
+    const wrapper = mount(TranslationSection)
+    await flushPromises()
+    const select = wrapper.get('[data-test="wt-page-limit"]')
+    expect(select.text()).toContain(en.wtPageLimitChars.replace('{count}', '5'))
+    await select.trigger('click')
+    const unlimited = wrapper.findAll('[role="option"]').find((option) => option.text() === en.wtPageLimitUnlimited)
+    await unlimited?.trigger('click')
+    await flushPromises()
+    expect(saved).toEqual([{ pageCharLimit: 0 }])
+    wrapper.unmount()
+  })
+
   it('选择工具栏写入三布尔，确认智能陪读时显式关闭工具栏', async () => {
     const saved: Record<string, unknown>[] = []
     replies({
@@ -1601,6 +1622,27 @@ describe('弹出页站点控制', () => {
     expect(wrapper.get('[data-test="wt-exclude-site"]').text()).toBe(en.includePage)
     wrapper.unmount()
     clearToasts()
+  })
+
+  it('达到单页上限时说明原因，并可跳到设置调整上限', async () => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    tabAndStatus('https://example.com/', {
+      ok: true,
+      status: { supported: true, fixed: false, auto: false, paused: false, capped: true, budgetCapped: true, failed: 0, error: '' },
+    })
+    replies({ 'wt:get-config': () => ({ ok: true, config: CONFIG }) })
+    const create = vi.spyOn(fakeBrowser.tabs, 'create').mockResolvedValue({} as never)
+    const close = vi.spyOn(window, 'close').mockImplementation(() => undefined)
+    const wrapper = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.get('[data-test="wt-capped-note"]').text()).toContain(en.wtCappedNote)
+    expect(wrapper.get('[data-test="wt-translate-page"]').text()).toBe(en.wtResume)
+    await wrapper.get('[data-test="wt-capped-settings"]').trigger('click')
+    await flushPromises()
+    expect(create).toHaveBeenCalledWith({ url: expect.stringMatching(/options\.html#wt-general-title$/) })
+    expect(close).toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('敏感页面显示说明并禁用翻译本页', async () => {

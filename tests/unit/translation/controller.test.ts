@@ -68,6 +68,8 @@ const CONFIG = {
   disabledDictionaries: [],
   targetLanguage: 'zh-CN' as const,
   autoOrigins: ['https://app.devin.ai'],
+  // 额度相关用例按 20000 字符的档位构造（每段 1400 字符，14 段后超限）
+  pageCharLimit: 20_000,
 }
 
 function stubGeometry(): void {
@@ -279,6 +281,14 @@ describe('页面额度上限', () => {
     expect(await pageStatus()).toMatchObject({ capped: true })
     expect(translated(paragraphs)).toBe(PARAGRAPHS - 1)
     expect(await translateCalls()).toBe(PARAGRAPHS - 1)
+  })
+
+  it('调高单页上限后，已达上限的页面自动继续', async () => {
+    const paragraphs = await capPage()
+    await translationConfigItem.setValue({ ...CONFIG, pageCharLimit: 50_000 })
+    await settle(2000)
+    expect(await pageStatus()).toMatchObject({ capped: false })
+    expect(translated(paragraphs)).toBe(PARAGRAPHS)
   })
 
   it('达到上限显示常驻状态条，滚动不消失；继续翻译追加额度', async () => {

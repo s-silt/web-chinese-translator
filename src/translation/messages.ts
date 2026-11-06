@@ -1,5 +1,5 @@
 import { isGitHubPageState, type GitHubPageAction, type GitHubPageState } from '../shared/messages'
-import { isModelList, type TranslationConfig } from './config'
+import { isModelList, isPageCharLimit, type TranslationConfig } from './config'
 import { BUILTIN_DICTIONARY_META, MAX_FIXED_ENTRIES } from './dictionaries/index'
 import { isSiteScopeMode } from './site-scope'
 import { isSourceLanguage, isTargetLanguage } from './target-language'
@@ -254,6 +254,7 @@ const PATCH_KEYS = new Set([
   'videoSubtitlesEnabled',
   'inputTranslationEnabled',
   'inputTargetLanguage',
+  'pageCharLimit',
   'excludedHosts',
   'siteScopeMode',
 ])
@@ -271,6 +272,7 @@ function isSaveConfig(value: unknown): boolean {
     if (key === 'sourceLanguage' && !isSourceLanguage((patch as Record<string, unknown>)[key])) return false
     if (key === 'siteScopeMode' && !isSiteScopeMode((patch as Record<string, unknown>)[key])) return false
     if (key === 'apiType' && !isApiType((patch as Record<string, unknown>)[key])) return false
+    if (key === 'pageCharLimit' && !isPageCharLimit((patch as Record<string, unknown>)[key])) return false
     if (key === 'temperature' && !isTemperature((patch as Record<string, unknown>)[key])) return false
     if (key === 'requestParams' && !isValidRequestParams((patch as Record<string, unknown>)[key])) return false
   }
@@ -530,6 +532,7 @@ function isConfigShape(value: unknown): value is TranslationConfig {
     typeof value.videoSubtitlesEnabled === 'boolean' &&
     typeof value.inputTranslationEnabled === 'boolean' &&
     isTargetLanguage(value.inputTargetLanguage) &&
+    isPageCharLimit(value.pageCharLimit) &&
     isExcludedHosts(value.excludedHosts) &&
     isSiteScopeMode(value.siteScopeMode) &&
     isExcludedHosts(value.siteScopeHosts)

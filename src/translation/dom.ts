@@ -33,6 +33,8 @@ export interface DomEngine {
   isBudgetCapped(): boolean
   /** 用户要求继续：追加一份额度并释放字符上限；并非字符上限时返回 false。 */
   extendBudget(): boolean
+  /** 单页上限设置改变后重新判断：调高后已达上限的页面继续处理 */
+  budgetChanged(): void
   /** 连接变更时重新开始：取消在途批次并清零额度；普通刷新、恢复原文不得调用。 */
   resetBudget(): void
   /** 已放弃、仍保留原文的文本节点数。 */
@@ -63,7 +65,8 @@ export interface DomEngineOptions {
   onCapReleased?(): void
   onFailedChanged?(): void
   debounceMs?: number
-  autoBudget?: number
+  /** 单页字符预算；每次判定时读取，0 或 Infinity 为不限。不给时用 DEFAULT_BUDGET */
+  autoBudget?: number | (() => number)
   recordBudget?: number
   random?: () => number
 }
@@ -99,6 +102,14 @@ interface AutoEntry {
   chunk?: { long: LongText; index: number }
   /** 行内单元：nodes[0] 作为锚点 entry.node，request = template，source = '\u0000' 拼接的逐节点原文。 */
   unit?: InlineUnit
+  /** 网站在已译节点末尾追加了原文：request 只是新增部分，写回时保留已译前缀 */
+  append?: AppendedTail
+}
+
+/** 已译前缀与其原文；source 的开头就是 applied */
+interface AppendedTail {
+  readonly applied: string
+  readonly original: string
 }
 
 /** 同一原始批次拆分出的全部子请求共用：限制总请求数，并记录是否有过成功。 */
@@ -140,8 +151,14 @@ const ownership = textOwnership()
 
 export function createDomEngine(options: DomEngineOptions): DomEngine {
   const debounceMs = options.debounceMs ?? STABILIZE_MS
-  const baseBudget = options.autoBudget ?? DEFAULT_BUDGET
-  let budget = baseBudget
+  const budgetOption = options.autoBudget ?? DEFAULT_BUDGET
+  function baseBudgetNow(): number {
+    const value = typeof budgetOption === 'function' ? budgetOption() : budgetOption
+    return Number.isFinite(value) && value > 0 ? value : Infinity
+  }
+  /** 本页已追加的额度份数：「继续翻译」每次追加一份基础额度 */
+  let budgetShares = 1
+  const budgetNow = (): number => baseBudgetNow() * budgetShares
   const random = options.random ?? Math.random
   const requestedRecords = options.recordBudget ?? MAX_TRACKED_NODES
   const recordBudget = Number.isFinite(requestedRecords)
@@ -152,6 +169,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   const modifiedTexts = new Set<Text>()
   const modifiedElements = new Set<Element>()
   const pending = new Map<Text, AutoEntry>()
+  /** 网站在已译文本末尾追加原文时，记下已译前缀，只翻译新增部分 */
+  const appendedTails = new WeakMap<Text, AppendedTail>()
   /** 已属于某个 pending/在途行内单元的文本节点 → 其 AutoEntry；避免重复排队与逐节点抢译。 */
   let unitMembers = new WeakMap<Text, AutoEntry>()
   /** 单元译文解析失败过一次：这些节点退回到逐节点路径，不再尝试单元。 */
@@ -313,7 +332,18 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     const parent = node.parentElement
     if (parent === null || isExcludedElement(parent)) return false
     const source = textValue(node)
-    return !wasRejected(node, source) && failedItems.get(node) !== source && isModelCandidateText(source, options.targetLanguage(), options.sourceLanguage?.() ?? 'auto')
+    const tail = appendedTail(node, source)
+    const judged = tail === undefined ? source : source.slice(tail.applied.length)
+    return !wasRejected(node, source) && failedItems.get(node) !== source && isModelCandidateText(judged, options.targetLanguage(), options.sourceLanguage?.() ?? 'auto')
+  }
+
+  /** 节点当前值仍以记下的已译前缀开头时返回它；否则作废 */
+  function appendedTail(node: Text, source: string): AppendedTail | undefined {
+    const tail = appendedTails.get(node)
+    if (tail === undefined) return undefined
+    if (source.length > tail.applied.length && source.startsWith(tail.applied)) return tail
+    appendedTails.delete(node)
+    return undefined
   }
 
   function onscreenParent(parent: Element): boolean {
@@ -381,7 +411,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   function queueAuto(node: Text): void {
     if (!options.autoEnabled() || autoPaused || capped) return
     // 在途批次的预扣可能被缓存退回，只按已结算的字符判断
-    if (spent - reservedChars >= budget) {
+    if (spent - reservedChars >= budgetNow()) {
       markCapped('characters')
       return
     }
@@ -445,7 +475,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     if (prior !== undefined && prior.parent === parent) {
       if (prior.source !== textValue(node)) {
         prior.source = textValue(node)
-        prior.request = prior.source.trim()
+        prior.append = appendedTail(node, prior.source)
+        prior.request = requestFor(prior.source, prior.append)
         prior.readyAt = Date.now() + debounceMs
       }
       scheduleFlush()
@@ -457,8 +488,20 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       return
     }
     const source = textValue(node)
-    pending.set(node, { node, source, request: source.trim(), readyAt: Date.now() + debounceMs, parent })
+    const append = appendedTail(node, source)
+    pending.set(node, {
+      node,
+      source,
+      request: requestFor(source, append),
+      readyAt: Date.now() + debounceMs,
+      parent,
+      ...(append === undefined ? {} : { append }),
+    })
     scheduleFlush()
+  }
+
+  function requestFor(source: string, append: AppendedTail | undefined): string {
+    return (append === undefined ? source : source.slice(append.applied.length)).trim()
   }
 
   function scheduleFlush(): void {
@@ -530,7 +573,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   }
 
   function releaseCharacterCap(): void {
-    if (!capped || capReason !== 'characters' || spent >= budget) return
+    if (!capped || capReason !== 'characters' || spent >= budgetNow()) return
     capped = false
     capReason = undefined
     cappedNotified = false
@@ -634,12 +677,12 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       if (entry.request.length > MAX_MODEL_TEXT) {
         if (texts.length > 0) continue
         // 比整份额度还长：等它会卡住全页其余内容，直接计为失败
-        if (entry.request.length > budget) {
+        if (entry.request.length > budgetNow()) {
           recordFailures([entry])
           dropEntry(entry.node)
           continue
         }
-        if (spent + entry.request.length > budget) {
+        if (spent + entry.request.length > budgetNow()) {
           budgetBlocked = true
           continue
         }
@@ -653,7 +696,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
         if (texts.length >= MAX_BATCH_ITEMS) continue
         // 上限收缩后，单条长文本仍要能独立成批
         if (texts.length > 0 && chars + entry.request.length > batchCharLimit) continue
-        if (spent + chars + entry.request.length > budget) {
+        if (spent + chars + entry.request.length > budgetNow()) {
           budgetBlocked = true
           continue
         }
@@ -1015,9 +1058,21 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
           if (!entry.node.isConnected || textValue(entry.node) !== entry.source) continue
           const parent = entry.node.parentElement
           if (parent === null || isExcludedElement(parent) || !isVisible(parent)) continue
+          attempted += 1
+          const append = entry.append
+          if (append !== undefined) {
+            const added = entry.source.slice(append.applied.length)
+            const trail = added.slice(added.trimEnd().length)
+            // 恢复原文时还原整段：已译前缀的原文接上新增原文
+            if (writeNode(entry.node, entry.source, `${append.applied}${translated}${trail}`) > 0) {
+              const record = records.get(entry.node)
+              if (record !== undefined) record.original = `${append.original}${added}`
+              appendedTails.delete(entry.node)
+            }
+            continue
+          }
           const lead = entry.source.slice(0, entry.source.length - entry.source.trimStart().length)
           const trail = entry.source.slice(entry.source.trimEnd().length)
-          attempted += 1
           writeNode(entry.node, entry.source, `${lead}${translated}${trail}`)
         }
         if (cursor < work.length) {
@@ -1194,7 +1249,15 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       } else if (mutation.type === 'characterData' && mutation.target instanceof Text) {
         const node = mutation.target
         if (isOwnTextWrite(node)) continue
-        if (records.get(node) !== undefined) {
+        const record = records.get(node)
+        if (record !== undefined) {
+          // 诗歌逐句出现、聊天回复逐字输出：网站在译文后面接着写原文
+          const value = textValue(node)
+          if (value.length > record.applied.length && value.startsWith(record.applied)) {
+            appendedTails.set(node, { applied: record.applied, original: record.original })
+          } else {
+            appendedTails.delete(node)
+          }
           forgetNode(node)
         }
         if (!rootsContain(roots, node)) roots.add(node)
@@ -1307,7 +1370,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     lastLocation = pageIdentity(location.href)
     releaseBatchReservation()
     spent = 0
-    budget = baseBudget
+    budgetShares = 1
     capped = false
     capReason = undefined
     cappedNotified = false
@@ -1454,14 +1517,17 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     },
     extendBudget() {
       if (!capped || capReason !== 'characters') return false
-      budget += baseBudget
+      budgetShares += 1
       releaseCharacterCap()
       return true
+    },
+    budgetChanged() {
+      releaseCharacterCap()
     },
     resetBudget() {
       stopPending()
       spent = 0
-      budget = baseBudget
+      budgetShares = 1
       if (capReason === 'characters') {
         capped = false
         capReason = undefined

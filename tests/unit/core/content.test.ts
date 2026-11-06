@@ -92,6 +92,7 @@ function scopeConfig(mode: SiteScopeMode, hosts: readonly string[]): Translation
     autoInteractionEnabled: true,
     videoSubtitlesEnabled: false,
     inputTranslationEnabled: false,
+    pageCharLimit: 50_000,
     excludedHosts: [],
     siteScopeMode: mode,
     siteScopeHosts: hosts,
