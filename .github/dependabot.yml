@@ -4,3 +4,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # typescript-eslint 尚不支持 TypeScript 7；其发布支持后删除这条
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']

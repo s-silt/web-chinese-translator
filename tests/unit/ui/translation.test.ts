@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeBrowser } from 'wxt/testing/fake-browser'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
+import { defineComponent, h } from 'vue'
 import TranslationSection from '../../../src/entrypoints/options/TranslationSection.vue'
+import { connectionKindFromReply } from '../../../src/entrypoints/options/connection-status'
 import TranslationControls from '../../../src/entrypoints/popup/TranslationControls.vue'
-import { WT_STATE_MESSAGE } from '../../../src/entrypoints/popup/useTranslationControls'
+import PageStatusCard from '../../../src/entrypoints/popup/PageStatusCard.vue'
+import { provideTranslationControls, WT_STATE_MESSAGE } from '../../../src/entrypoints/popup/useTranslationControls'
 import en from '../../../src/i18n/en'
 import { settingsItem, DEFAULT_SETTINGS } from '../../../src/shared/settings'
 import { DEFAULT_TRANSLATION_CONFIG, type TranslationConfig } from '../../../src/translation/config'
@@ -34,6 +37,7 @@ async function availableModels(wrapper: VueWrapper): Promise<string[]> {
 
 beforeEach(() => {
   fakeBrowser.reset()
+  localStorage.removeItem('gcn:popup-more-open')
   document.body.textContent = ''
 })
 
@@ -268,8 +272,8 @@ describe('选项页真实挂载', () => {
     release({ ok: true })
     await flushPromises()
     expect(calls).toEqual([{ type: 'wt:clear-cache' }])
-    expect(wrapper.get('[role="status"]').text()).toBe(en.wtClearCacheDone)
-    expect(wrapper.get('[role="status"]').classes()).not.toContain('wt-status-error')
+    expect(wrapper.get('.wt-status').text()).toBe(en.wtClearCacheDone)
+    expect(wrapper.get('.wt-status').classes()).not.toContain('wt-status-error')
     expect(wrapper.get('[data-test="wt-clear-cache"]').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
@@ -283,8 +287,8 @@ describe('选项页真实挂载', () => {
     await flushPromises()
     await wrapper.get('[data-test="wt-clear-cache"]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('[role="status"]').text()).toBe(en.wtClearCacheFailed)
-    expect(wrapper.get('[role="status"]').classes()).toContain('wt-status-error')
+    expect(wrapper.get('.wt-status').text()).toBe(en.wtClearCacheFailed)
+    expect(wrapper.get('.wt-status').classes()).toContain('wt-status-error')
     wrapper.unmount()
   })
 
@@ -752,8 +756,8 @@ describe('选项页真实挂载', () => {
         expect(saves).toEqual([])
         expect(tested).toBe(false)
         expect(advanced.open).toBe(true)
-        expect(wrapper.get('[role="status"]').text()).toBe(expectedMessage)
-        expect(wrapper.get('[role="status"]').text()).not.toContain('RAW_HEADER_PARSE_MARKER')
+        expect(wrapper.get('.wt-status').text()).toBe(expectedMessage)
+        expect(wrapper.get('.wt-status').text()).not.toContain('RAW_HEADER_PARSE_MARKER')
         const targetSelector =
           field === 'temperature'
             ? '[data-test="wt-temperature"]'
@@ -803,7 +807,7 @@ describe('选项页真实挂载', () => {
       expect(saves).toEqual([])
       expect(tested).toBe(false)
       expect(advanced.open).toBe(true)
-      expect(wrapper.get('[role="status"]').text()).toBe(en.wtTemperatureInvalid)
+      expect(wrapper.get('.wt-status').text()).toBe(en.wtTemperatureInvalid)
       expect(wrapper.get('[data-test="wt-temperature"]').attributes('aria-invalid')).toBe('true')
     } finally {
       Reflect.deleteProperty(input, 'validity')
@@ -847,7 +851,7 @@ describe('选项页真实挂载', () => {
       await flushPromises()
       await wrapper.get('[data-test="wt-save"]').trigger('click')
       await flushPromises()
-      expect(wrapper.get('[role="status"]').text()).toBe(en.wtSavedOk)
+      expect(wrapper.get('.wt-status').text()).toBe(en.wtSavedOk)
       expect(tests).toBe(1)
       await wrapper.get('[data-test="wt-temperature"]').setValue('0.5')
       await wrapper.get('input[type="password"]').setValue('sk-fixture')
@@ -858,7 +862,7 @@ describe('选项页真实挂载', () => {
       expect(wrapper.get('[data-test="wt-save"]').attributes('disabled')).toBeDefined()
       release({ ok: true, config: committed, keyState: 'ready', hasKey: true, customHeadersState: 'ready', warning })
       await flushPromises()
-      expect(wrapper.get('[role="status"]').text()).toBe(warning)
+      expect(wrapper.get('.wt-status').text()).toBe(warning)
       expect(tests).toBe(1)
       expect((wrapper.get('input[type="password"]').element as HTMLInputElement).value).toBe('')
       expect((wrapper.get('[data-test="wt-custom-headers"]').element as HTMLTextAreaElement).value).toBe('')
@@ -868,7 +872,7 @@ describe('选项页真实挂载', () => {
       expect(saves[2]).not.toHaveProperty('apiKey')
       expect(saves[2]).not.toHaveProperty('customHeaders')
       expect(tests).toBe(2)
-      expect(wrapper.get('[role="status"]').text()).toBe(en.wtSavedOk)
+      expect(wrapper.get('.wt-status').text()).toBe(en.wtSavedOk)
     } finally {
       wrapper.unmount()
     }
@@ -901,7 +905,7 @@ describe('选项页真实挂载', () => {
       await wrapper.get('[data-test="wt-floating-toggle"] [role="switch"]').trigger('click')
       await flushPromises()
       expect(saves).toBe(2)
-      expect(wrapper.get('[role="status"]').text()).toBe(warning)
+      expect(wrapper.get('.wt-status').text()).toBe(warning)
       expect(useToasts().value).toEqual([])
     } finally {
       wrapper.unmount()
@@ -1328,7 +1332,7 @@ describe('选项页真实挂载', () => {
       await wrapper.get('[data-test="wt-floating-grant"]').trigger('click')
       await flushPromises()
       expect(request).toHaveBeenCalledWith({ origins: ['http://*/*', 'https://*/*'] })
-      expect(wrapper.get('[role="status"]').text()).toBe(en.wtPermissionDenied)
+      expect(wrapper.get('.wt-status').text()).toBe(en.wtPermissionDenied)
       expect(wrapper.get('[data-test="wt-floating-grant"]').attributes('disabled')).toBeUndefined()
       expect(patches).toHaveLength(1)
     } finally {
@@ -1554,5 +1558,294 @@ describe('弹出页站点控制', () => {
     expect(wrapper.get('[data-test="wt-popup-floating"] button').attributes('aria-checked')).toBe('true')
     expect(permission).not.toHaveBeenCalled()
     wrapper.unmount()
+  })
+
+  function mountStatusCard() {
+    const Host = defineComponent({
+      name: 'StatusHost',
+      setup() {
+        provideTranslationControls()
+        return () => h(PageStatusCard)
+      },
+    })
+    return mount(Host)
+  }
+
+  it('排除本站发送 wt:set-site-excluded 并提示成功', async () => {
+    clearToasts()
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    tabAndStatus('https://example.com/path', {
+      ok: true,
+      status: { supported: true, fixed: false, auto: false, paused: false, capped: false, failed: 0, error: '' },
+    })
+    let current = { ...CONFIG }
+    replies({
+      'wt:get-config': () => ({ ok: true, config: current }),
+      'wt:set-site-excluded': (message) => {
+        current = {
+          ...current,
+          excludedHosts: message.excluded === true ? [String(message.host)] : [],
+        }
+        return { ok: true, config: current }
+      },
+    })
+    const wrapper = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.get('[data-test="wt-exclude-site"]').text()).toBe(en.wtExcludeSite)
+    await wrapper.get('[data-test="wt-exclude-site"]').trigger('click')
+    await flushPromises()
+    expect(useToasts().value.map((toast) => ({ key: toast.key, params: toast.params }))).toEqual([
+      { key: 'wtSiteExcluded', params: { host: 'example.com' } },
+    ])
+    expect(wrapper.get('[data-test="wt-exclude-site"]').text()).toBe(en.includePage)
+    wrapper.unmount()
+    clearToasts()
+  })
+
+  it('敏感页面显示说明并禁用翻译本页', async () => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    tabAndStatus('https://accounts.google.com/', {
+      ok: true,
+      status: { supported: true, fixed: false, auto: false, paused: false, capped: false, failed: 0, error: '' },
+    })
+    replies({
+      'wt:get-config': () => ({ ok: true, config: CONFIG }),
+    })
+    const wrapper = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.text()).toContain(en.wtSensitivePage)
+    expect(wrapper.get('[data-test="wt-page-state"]').text()).toBe(en.wtSensitiveSkipped)
+    expect(wrapper.get('[data-test="wt-translate-page"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['翻译本页', { auto: false, paused: false }, 'wtTranslatePage', 'wt:translate-page'],
+    ['已翻译时恢复原文', { auto: true, paused: false }, 'wtRestore', 'restore'],
+    ['暂停时继续翻译（可恢复与可继续同时成立）', { auto: false, paused: true }, 'wtResume', 'resume'],
+  ] as const)('主按钮：%s', async (_name, flags, label, expected) => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    tabAndStatus('https://example.com/', {
+      ok: true,
+      status: { supported: true, fixed: false, capped: false, failed: 0, error: '', ...flags },
+    })
+    const sent: Record<string, unknown>[] = []
+    replies({
+      'wt:get-config': () => ({ ok: true, config: { ...CONFIG, autoOrigins: ['https://example.com'] } }),
+      'wt:page-action': (message) => {
+        sent.push(message)
+        return { ok: true }
+      },
+      'wt:translate-page': (message) => {
+        sent.push(message)
+        return { ok: true }
+      },
+    })
+    const wrapper = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    const primary = wrapper.get('[data-test="wt-translate-page"]')
+    expect(primary.text()).toBe(en[label])
+    await primary.trigger('click')
+    await flushPromises()
+    expect(sent.map((m) => (m.type === 'wt:page-action' ? m.action : m.type))).toEqual([expected])
+    wrapper.unmount()
+    clearToasts()
+  })
+
+  it('手动翻译本页（未开本站自动翻译）有失败段时可全部重试', async () => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    tabAndStatus('https://example.com/', {
+      ok: true,
+      status: { supported: true, fixed: false, auto: true, paused: false, capped: false, failed: 3, error: '' },
+    })
+    const sent: Record<string, unknown>[] = []
+    replies({
+      'wt:get-config': () => ({ ok: true, config: CONFIG }),
+      'wt:page-action': (message) => {
+        sent.push(message)
+        return { ok: true }
+      },
+    })
+    const wrapper = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.get('[data-test="wt-failed"]').text()).toBe(en.wtFailedCount.replace('{count}', '3'))
+    await wrapper.get('[data-test="wt-retry-failed"]').trigger('click')
+    await flushPromises()
+    expect(sent.map((m) => m.action)).toEqual(['retry-failed'])
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['暂停', { paused: true, capped: false, budgetCapped: false }, 'wtFailedRetryWithResume'],
+    ['额度上限', { paused: false, capped: true, budgetCapped: true }, 'wtFailedRetryWithResume'],
+    ['记录数上限', { paused: false, capped: true, budgetCapped: false }, 'wtFailedNoRetry'],
+  ] as const)('%s时仍显示失败段数并说明如何处理', async (_name, flags, hint) => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    tabAndStatus('https://example.com/', {
+      ok: true,
+      status: { supported: true, fixed: false, auto: false, failed: 2, error: '', ...flags },
+    })
+    replies({ 'wt:get-config': () => ({ ok: true, config: CONFIG }) })
+    const wrapper = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.find('[data-test="wt-failed"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="wt-retry-failed"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="wt-failed-hint"]').text()).toBe(en[hint])
+    wrapper.unmount()
+  })
+
+  it('总开关关闭时状态卡说明原因', async () => {
+    await settingsItem.setValue({ ...DEFAULT_SETTINGS, enabled: false })
+    tabAndStatus('https://example.com/', {
+      ok: true,
+      status: { supported: true, fixed: false, auto: false, paused: false, capped: false, failed: 0, error: '' },
+    })
+    replies({ 'wt:get-config': () => ({ ok: true, config: CONFIG }) })
+    const wrapper = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.get('.popup-card-note').text()).toBe(en.wtMasterOff)
+    expect(wrapper.get('[data-test="wt-translate-page"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('敏感页面已手动翻译时仍可恢复原文', async () => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    tabAndStatus('https://accounts.google.com/', {
+      ok: true,
+      status: { supported: true, fixed: false, auto: true, paused: false, capped: false, failed: 0, error: '' },
+    })
+    const sent: Record<string, unknown>[] = []
+    replies({
+      'wt:get-config': () => ({ ok: true, config: CONFIG }),
+      'wt:page-action': (message) => {
+        sent.push(message)
+        return { ok: true }
+      },
+    })
+    const wrapper = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    const primary = wrapper.get('[data-test="wt-translate-page"]')
+    expect(primary.text()).toBe(en.wtRestore)
+    expect(primary.attributes('disabled')).toBeUndefined()
+    await primary.trigger('click')
+    await flushPromises()
+    expect(sent.map((m) => m.action)).toEqual(['restore'])
+    wrapper.unmount()
+    clearToasts()
+  })
+
+  it('更多功能折叠状态写入 localStorage，无值时默认展开', async () => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    tabAndStatus('https://example.com/', {
+      ok: true,
+      status: { supported: true, fixed: false, auto: false, paused: false, capped: false, failed: 0, error: '' },
+    })
+    replies({
+      'wt:get-config': () => ({ ok: true, config: CONFIG }),
+    })
+    const first = mount(TranslationControls)
+    await flushPromises()
+    const details = first.get('.popup-more').element as HTMLDetailsElement
+    expect(details.open).toBe(true)
+    details.open = false
+    await first.get('.popup-more').trigger('toggle')
+    expect(localStorage.getItem('gcn:popup-more-open')).toBe('false')
+    first.unmount()
+    const second = mount(TranslationControls)
+    await flushPromises()
+    expect((second.get('.popup-more').element as HTMLDetailsElement).open).toBe(false)
+    second.unmount()
+  })
+
+  it('模型预设只填写 Base URL 与 chat-completions，自定义清空并聚焦', async () => {
+    replies({
+      'wt:get-config': () => ({ ok: true, config: CONFIG, hasKey: true, keyState: 'ready' }),
+    })
+    const wrapper = mount(TranslationSection, { attachTo: document.body })
+    try {
+      await flushPromises()
+      const base = wrapper.find('input').element as HTMLInputElement
+      expect(wrapper.get('[data-test="wt-preset-openai"]').attributes('aria-pressed')).toBe('false')
+      await wrapper.get('[data-test="wt-preset-deepseek"]').trigger('click')
+      await flushPromises()
+      expect(base.value).toBe('https://api.deepseek.com')
+      expect(wrapper.get('[data-test="wt-preset-deepseek"]').attributes('aria-pressed')).toBe('true')
+      expect((wrapper.findAll('input')[2]?.element as HTMLInputElement).value).toBe('m')
+      expect((wrapper.findAll('input')[1]?.element as HTMLInputElement).value).toBe('')
+      await wrapper.get('[data-test="wt-preset-custom"]').trigger('click')
+      await flushPromises()
+      expect(base.value).toBe('')
+      expect(wrapper.get('[data-test="wt-preset-custom"]').attributes('aria-pressed')).toBe('true')
+      expect(document.activeElement).toBe(base)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('连接状态映射 auth、timeout，成功时显示延迟', async () => {
+    expect(connectionKindFromReply({ ok: false, error: '密钥无效', code: 'auth' })).toBe('auth')
+    expect(connectionKindFromReply({ ok: false, error: '超时', code: 'timeout' })).toBe('timeout')
+    expect(connectionKindFromReply({ ok: false, error: '排队超时', code: 'queue_timeout' })).toBe('timeout')
+    expect(connectionKindFromReply({ ok: true, texts: ['ok'] })).toBe('ok')
+
+    replies({
+      'wt:get-config': () => ({ ok: true, config: CONFIG, hasKey: true, keyState: 'ready' }),
+      'wt:test': () => ({ ok: true, texts: ['ok'] }),
+    })
+    const wrapper = mount(TranslationSection)
+    try {
+      await flushPromises()
+      expect(wrapper.get('[data-test="wt-connection"]').text()).toBe(en.wtConnUntested)
+      await wrapper.get('[data-test="wt-test-connection"]').trigger('click')
+      await flushPromises()
+      const toast = useToasts().value.find((item) => item.key === 'wtConnectedMs')
+      expect(toast?.params?.ms).toEqual(expect.any(Number))
+      expect(wrapper.get('[data-test="wt-connection"]').text()).toBe(
+        en.wtConnOkMs.replace('{ms}', String(toast?.params?.ms)),
+      )
+    } finally {
+      wrapper.unmount()
+      clearToasts()
+    }
+  })
+})
+
+describe('连接测试按钮与未保存改动', () => {
+  it('保存并连接后「测试连接」可用', async () => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    let stored: TranslationConfig = { ...DEFAULT_TRANSLATION_CONFIG }
+    replies({
+      'wt:get-config': () => ({ ok: true, config: stored, hasKey: false, keyState: 'none' }),
+      'wt:save-config': (message) => {
+        stored = { ...stored, ...(message.patch as Partial<TranslationConfig>) }
+        return { ok: true, config: stored, hasKey: true, keyState: 'ready' }
+      },
+      'wt:test': () => ({ ok: true, texts: ['ok'] }),
+    })
+    vi.spyOn(fakeBrowser.permissions, 'request').mockImplementation(async () => true)
+    const wrapper = mount(TranslationSection)
+    try {
+      await flushPromises()
+      await wrapper.get('input[placeholder="https://api.example.com/v1"]').setValue('https://api.example.com/v1')
+      await wrapper.get('input[type="password"]').setValue('sk-fixture')
+      await wrapper.get('[data-test="wt-model-input"]').setValue('m')
+      await wrapper.get('[data-test="wt-save"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+      expect(wrapper.get('.wt-status').text()).toBe(en.wtSavedOk)
+      const button = wrapper.get('[data-test="wt-test-connection"]')
+      expect(button.attributes('title')).toBeUndefined()
+      expect(button.attributes('disabled')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+      clearToasts()
+    }
   })
 })

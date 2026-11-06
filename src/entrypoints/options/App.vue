@@ -11,16 +11,19 @@
       </header>
 
       <nav class="options-nav" aria-label="Sections">
-        <a
-          v-for="link in navLinks"
-          :key="link.target"
-          :href="`#${link.target}`"
-          :aria-current="currentNav === link.target ? 'page' : undefined"
-          :data-test="`nav-${link.target}`"
-          @click="scrollToSection(link.target, $event)"
-        >
-          {{ t(link.key) }}
-        </a>
+        <div v-for="group in navGroups" :key="group.key" class="options-nav-group">
+          <span class="options-nav-group-title">{{ t(group.key) }}</span>
+          <a
+            v-for="link in group.links"
+            :key="link.target"
+            :href="`#${link.target}`"
+            :aria-current="currentNav === link.target ? 'page' : undefined"
+            :data-test="`nav-${link.target}`"
+            @click="scrollToSection(link.target, $event)"
+          >
+            {{ t(link.key) }}
+          </a>
+        </div>
       </nav>
     </aside>
 
@@ -83,17 +86,28 @@ useUiPreferencesSync()
 const { t } = useI18n()
 const version = getExtensionVersion()
 
-const navLinks: readonly { target: string; key: MessageKey }[] = translationSupported ? [
-  { target: 'wt-general-title', key: 'navGeneral' },
-  { target: 'wt-title', key: 'navModel' },
-  { target: 'wt-dictionary-title', key: 'navSites' },
-  { target: 'github-title', key: 'navGithub' },
-  { target: 'appearance-title', key: 'navAppearance' },
-  { target: 'about-title', key: 'navAbout' },
+type NavGroupKey = 'navGroupGeneral' | 'navGroupTranslation' | 'navGroupDictionary' | 'navGroupAdvanced'
+
+const navLinks: readonly { target: string; key: MessageKey; group: NavGroupKey }[] = translationSupported ? [
+  { target: 'wt-general-title', key: 'navGeneral', group: 'navGroupGeneral' },
+  { target: 'appearance-title', key: 'navAppearance', group: 'navGroupGeneral' },
+  { target: 'wt-title', key: 'navModel', group: 'navGroupTranslation' },
+  { target: 'wt-dictionary-title', key: 'navSites', group: 'navGroupDictionary' },
+  { target: 'github-title', key: 'navGithub', group: 'navGroupDictionary' },
+  { target: 'about-title', key: 'navAbout', group: 'navGroupAdvanced' },
 ] : [
-  { target: 'github-title', key: 'navGithub' },
-  { target: 'about-title', key: 'navAbout' },
+  { target: 'github-title', key: 'navGithub', group: 'navGroupDictionary' },
+  { target: 'about-title', key: 'navAbout', group: 'navGroupAdvanced' },
 ]
+const navGroupOrder: readonly NavGroupKey[] = [
+  'navGroupGeneral',
+  'navGroupTranslation',
+  'navGroupDictionary',
+  'navGroupAdvanced',
+]
+const navGroups = navGroupOrder
+  .map((key) => ({ key, links: navLinks.filter((link) => link.group === key) }))
+  .filter((group) => group.links.length > 0)
 const defaultNav = translationSupported ? 'wt-general-title' : 'github-title'
 
 function resolveNav(hash: string): string {
@@ -261,8 +275,21 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange))
 .options-nav {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 8px 16px;
   margin: 0 0 24px;
+}
+
+.options-nav-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.options-nav-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gcn-fg-muted);
 }
 
 .options-nav a {

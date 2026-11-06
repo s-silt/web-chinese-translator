@@ -3,6 +3,23 @@
     <h2 :id="sectionTitle" class="section-title">{{ t(props.view === 'model' ? 'navModel' : props.view === 'sites' ? 'wtSiteSettings' : 'navGeneral') }}</h2>
     <p v-show="props.view === 'all' || props.view === 'general'" class="wt-hint">{{ t('wtGeneralHint') }}</p>
 
+    <ModelPresets
+      v-show="props.view === 'all' || props.view === 'model'"
+      :base-url="baseUrl"
+      :disabled="!ready || saving || testing"
+      @select="applyPreset"
+    />
+    <ConnectionStatus
+      v-show="props.view === 'all' || props.view === 'model'"
+      :kind="connection.kind"
+      :latency-ms="connection.latencyMs"
+      :error="connection.error"
+      :testing="testing"
+      :disabled="!ready || saving || testing || fetchingModels || connectionDirty"
+      :disabled-reason="connectionDirty ? t('wtTestSaveFirst') : undefined"
+      @test="testConnection"
+    />
+
     <label v-show="props.view === 'all' || props.view === 'model'" class="wt-field">
       <span id="wt-api-type-label" class="wt-label">{{ t('wtApiType') }}</span>
       <UiSelect
@@ -19,6 +36,7 @@
       <label class="wt-field">
         <span id="wt-base-url-label" class="wt-label">{{ t('wtBaseUrl') }}</span>
         <UiInput
+          ref="baseUrlInput"
           v-model="baseUrl"
           :disabled="!ready || saving || testing"
           placeholder="https://api.example.com/v1"
@@ -355,14 +373,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { browser } from 'wxt/browser'
 import { createToastSource } from '../../components/toast'
 import UiButton from '../../components/ui/UiButton.vue'
 import UiInput from '../../components/ui/UiInput.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
 import UiSwitch from '../../components/ui/UiSwitch.vue'
+import ConnectionStatus from './ConnectionStatus.vue'
+import { connectionKindFromReply, type ConnectionKind } from './connection-status'
 import ModelInput from './ModelInput.vue'
+import ModelPresets from './ModelPresets.vue'
 import { useI18n } from '../../components/ui-preferences'
 import type { MessageKey } from '../../i18n'
 import {
@@ -422,10 +443,15 @@ const toast = createToastSource()
 
 let persistedBase = ''
 let persistedModel = ''
+let persistedApiType: ApiType = 'chat-completions'
+let persistedTemperature = ''
+let persistedParams = ''
 let persistedOptionsKey = requestOptionsKey(DEFAULT_TRANSLATION_CONFIG)
 const ready = ref(false)
 const saving = ref(false)
 const testing = ref(false)
+const baseUrlInput = ref<{ focus(): void } | null>(null)
+const connection = ref<{ kind: ConnectionKind; latencyMs?: number; error?: string }>({ kind: 'unconfigured' })
 const baseUrl = ref('')
 const model = ref('')
 const apiType = ref<ApiType>('chat-completions')
@@ -489,6 +515,20 @@ const apiTypeOptions = computed(() => [
   { value: 'responses', label: t('wtApiResponses') },
 ])
 const endpointPreview = computed(() => completionUrl(baseUrl.value, apiType.value))
+// 已保存的连接字段快照：persisted* 是普通变量，保存后草稿值往往不变，computed 要靠这个版本号才会重新计算
+const persistedRevision = ref(0)
+const connectionDirty = computed(() => {
+  void persistedRevision.value
+  return (
+    baseUrl.value.trim() !== persistedBase ||
+    model.value.trim() !== persistedModel ||
+    apiType.value !== persistedApiType ||
+    apiKey.value !== '' ||
+    customHeadersDraft.value.trim() !== '' ||
+    temperatureDraft.value !== persistedTemperature ||
+    requestParamsDraft.value !== persistedParams
+  )
+})
 const requestParamsPlaceholder = computed(() =>
   apiType.value === 'responses'
     ? '{\n  "reasoning": {\n    "effort": "medium"\n  }\n}'
@@ -561,17 +601,24 @@ function applyConfig(
   headersState?: CustomHeadersState,
 ): void {
   if (replaceDrafts) {
+    persistedBase = config.baseUrl
+    persistedModel = config.model
+    persistedApiType = config.apiType
+    persistedTemperature = config.temperature === null ? '' : String(config.temperature)
+    persistedParams =
+      Object.keys(config.requestParams).length === 0 ? '' : JSON.stringify(config.requestParams, null, 2)
+    persistedOptionsKey = requestOptionsKey(config)
+    persistedRevision.value += 1
     baseUrl.value = config.baseUrl
     model.value = config.model
     apiType.value = config.apiType
-    temperatureDraft.value = config.temperature === null ? '' : String(config.temperature)
-    requestParamsDraft.value =
-      Object.keys(config.requestParams).length === 0 ? '' : JSON.stringify(config.requestParams, null, 2)
+    temperatureDraft.value = persistedTemperature
+    requestParamsDraft.value = persistedParams
     customHeadersDraft.value = ''
     invalidField.value = null
-    persistedBase = config.baseUrl
-    persistedModel = config.model
-    persistedOptionsKey = requestOptionsKey(config)
+    if (connection.value.kind !== 'testing' && connection.value.kind !== 'ok') {
+      connection.value = { kind: persistedBase !== '' && persistedModel !== '' ? 'untested' : 'unconfigured' }
+    }
   }
   if (headersState !== undefined) {
     customHeadersState.value = headersState
@@ -832,6 +879,36 @@ async function fetchModels(): Promise<void> {
   }
 }
 
+function applyConnectionReply(reply: TranslationReply<'wt:test'>, ms: number): void {
+  if (reply.ok) {
+    connection.value = { kind: 'ok', latencyMs: ms }
+    return
+  }
+  connection.value = { kind: connectionKindFromReply(reply), error: reply.error }
+}
+
+function applyPreset(url: string): void {
+  if (!ready.value || saving.value || testing.value) return
+  baseUrl.value = url
+  apiType.value = 'chat-completions'
+  if (url === '') void nextTick(() => baseUrlInput.value?.focus())
+}
+
+async function testConnection(): Promise<void> {
+  if (!ready.value || saving.value || testing.value || fetchingModels.value || connectionDirty.value) return
+  testing.value = true
+  connection.value = { kind: 'testing' }
+  const started = performance.now()
+  try {
+    const reply = await send({ type: 'wt:test' })
+    const ms = Math.round(performance.now() - started)
+    applyConnectionReply(reply, ms)
+    if (reply.ok) toast.show('success', 'wtConnectedMs', { ms })
+  } finally {
+    testing.value = false
+  }
+}
+
 async function saveAndConnect(): Promise<void> {
   if (!ready.value || saving.value || testing.value || fetchingModels.value) return
   setStatus('', false)
@@ -927,11 +1004,17 @@ async function saveAndConnect(): Promise<void> {
     if (saved.warning !== undefined) return
     if (trimmed === '' || model.value.trim() === '') {
       setStatus(t('saved'), false)
+      connection.value = { kind: 'unconfigured' }
       return
     }
     testing.value = true
+    connection.value = { kind: 'testing' }
+    const started = performance.now()
     try {
       const reply = await send({ type: 'wt:test' })
+      const ms = Math.round(performance.now() - started)
+      applyConnectionReply(reply, ms)
+      // 行内状态已说明结果，延迟显示在连接徽章上；这里不再弹提示，避免同一结果出现两次
       setStatus(reply.ok ? t('wtSavedOk') : t('wtSavedFail', { error: reply.error }), !reply.ok)
     } finally {
       testing.value = false

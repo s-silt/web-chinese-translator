@@ -119,6 +119,7 @@ async function choose(wrapper: VueWrapper, name: string, label: string): Promise
 describe.skipIf(!App)('弹出页组件', () => {
   beforeEach(async () => {
     fakeBrowser.reset()
+    localStorage.removeItem('gcn:popup-more-open')
     await seedChineseUi()
     mockVersion('1.2.3')
     mockPermission(true)
@@ -147,6 +148,17 @@ describe.skipIf(!App)('弹出页组件', () => {
     mockContent(contentWith())
     const wrapper = await render()
     expect(wrapper.find('[data-test="version"]').exists()).toBe(false)
+  })
+
+  it('GitHub 页面词典行显示 GitHub 汉化状态', async () => {
+    await openTab(REPO_URL)
+    mockContent(contentWith())
+    const wrapper = await render()
+    const row = wrapper.findAll('.popup-engine').find((item) => item.text().includes('GitHub'))
+    expect(row?.text()).toContain('已翻译')
+    expect(row?.text()).not.toContain('未启用')
+    // 一页只有一个读屏状态区：GitHub 页面由状态卡播报，词典行不重复
+    expect(wrapper.findAll('[role="status"]').filter((item) => item.classes('ui-badge'))).toHaveLength(1)
   })
 
   it('普通已翻译页面不展示 GitHub 状态行，总开关仍在', async () => {
@@ -295,25 +307,31 @@ describe.skipIf(!App)('弹出页组件', () => {
       expect(children[4]?.getAttribute('aria-live')).toBe('polite')
       expect(toastTexts(wrapper)).toEqual([])
       expect(wrapper.find('.popup-details').exists()).toBe(false)
-      expect(footer.findAll('button, a').map((item) => item.attributes('aria-label') ?? item.text())).toEqual(['设置'])
+      expect(footer.findAll('button, a').map((item) => item.attributes('aria-label') ?? item.text())).toEqual([
+        '本站设置',
+        '模型设置',
+        '设置',
+      ])
       expect(footer.get('[data-test="settings"] svg').attributes('aria-hidden')).toBe('true')
     })
 
-    it('页脚只有设置齿轮，没有外链', async () => {
+    it('页脚有本站设置、模型设置和设置齿轮，没有外链', async () => {
       mockContent(contentWith())
       const wrapper = await render()
       expect(wrapper.find('footer a').exists()).toBe(false)
       expect(wrapper.find('[data-test="repository"]').exists()).toBe(false)
+      expect(wrapper.get('[data-test="wt-open-site-settings"]').text()).toBe('本站设置')
+      expect(wrapper.get('[data-test="wt-open-model-settings"]').text()).toBe('模型设置')
       const gear = wrapper.get('[data-test="settings"]')
       expect(gear.attributes('aria-label')).toBe('设置')
       expect(gear.get('svg').attributes('viewBox')).toBe('0 0 24 24')
     })
 
-    it('宽度 300px，弹出页更宽时铺满（右侧不留空白）', async () => {
+    it('宽度 320px，弹出页更宽时铺满（右侧不留空白）', async () => {
       mockContent(contentWith())
       const wrapper = await render(true)
       const style = getComputedStyle(wrapper.get('main').element)
-      expect(style.width).toBe('300px')
+      expect(style.width).toBe('320px')
       expect(style.minWidth).toBe('100%')
     })
 
@@ -337,6 +355,7 @@ describe.skipIf(!App)('弹出页组件', () => {
       const wrapper = await render()
       expect(wrapper.findAll('label').filter((item) => item.text() === '启用')).toHaveLength(1)
       expect(wrapper.findAll('[role="switch"]')).toHaveLength(5)
+      expect(wrapper.get('[data-test="wt-translate-page"]').element.tagName).toBe('BUTTON')
       expect(wrapper.get('[data-test="wt-popup-floating"] [role="switch"]').attributes('disabled')).toBeDefined()
       expect(wrapper.findAll('[role="combobox"]')).toHaveLength(0)
       expect(wrapper.find('select').exists()).toBe(false)
@@ -351,7 +370,7 @@ describe.skipIf(!App)('弹出页组件', () => {
       const disabled = (): boolean[] =>
         wrapper
           .findAll('[role="switch"], [data-test="theme-toggle"], [role="combobox"]')
-          .filter((item) => item.element.closest('[aria-labelledby="wt-popup-title"]') === null)
+          .filter((item) => item.element.closest('.popup-more, .popup-engines') === null)
           .map((item) => (item.element as HTMLButtonElement).disabled)
       expect(disabled()).toEqual([true, true])
       expect((wrapper.get('[data-test="wt-popup-floating"] [role="switch"]').element as HTMLButtonElement).disabled).toBe(true)

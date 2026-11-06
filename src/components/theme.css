@@ -21,6 +21,7 @@
   --gcn-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --gcn-duration-fast: 80ms;
   --gcn-duration-base: 200ms;
+  --gcn-duration-theme: 160ms;
 
   /* 文字与背景 */
   --gcn-fg: light-dark(#1f2328, #f0f6fc);
@@ -254,4 +255,35 @@ p {
   --gcn-page-bg: var(--gcn-bg);
   --gcn-radius-panel: var(--gcn-radius-lg);
   --gcn-eyebrow: var(--gcn-fg-muted);
+  --gcn-engine-dict-fg: var(--gcn-success-fg);
+  --gcn-engine-dict-bg: var(--gcn-success-bg);
+  --gcn-engine-model-fg: var(--gcn-accent);
+  --gcn-engine-model-bg: var(--gcn-selection);
+  --gcn-card-bg: var(--gcn-bg-muted);
+  --gcn-card-border: var(--gcn-border-muted);
+  --gcn-card-radius: var(--gcn-radius-lg);
+}
+
+/* 主题切换只过渡底色、文字、边框；不要给 * 加过渡 */
+body,
+.popup,
+.popup-card,
+.popup-header,
+.popup-footer,
+.section {
+  transition:
+    background-color var(--gcn-duration-theme) var(--gcn-ease),
+    color var(--gcn-duration-theme) var(--gcn-ease),
+    border-color var(--gcn-duration-theme) var(--gcn-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body,
+  .popup,
+  .popup-card,
+  .popup-header,
+  .popup-footer,
+  .section {
+    transition: none;
+  }
 }

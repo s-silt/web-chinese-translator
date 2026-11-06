@@ -42,6 +42,13 @@
   --gcn-surface-shadow: 0 10px 32px light-dark(#24385c1a, #00000066);
   --gcn-surface-blur: 24px;
   --gcn-radius-panel: 18px;
+  --gcn-engine-dict-fg: var(--gcn-success-fg);
+  --gcn-engine-dict-bg: var(--gcn-success-bg);
+  --gcn-engine-model-fg: var(--gcn-accent);
+  --gcn-engine-model-bg: var(--gcn-selection);
+  --gcn-card-bg: var(--gcn-surface);
+  --gcn-card-border: var(--gcn-surface-border);
+  --gcn-card-radius: 14px;
 }
 
 :root[data-style='glass'] body {
@@ -68,7 +75,8 @@
     --gcn-surface-blur: 0;
   }
   :root[data-style='glass'] .section,
-  :root[data-style='glass'] .options-side {
+  :root[data-style='glass'] .options-side,
+  :root[data-style='glass'] .popup-card {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
@@ -209,6 +217,37 @@
   border-color: var(--gcn-surface-border);
   backdrop-filter: blur(var(--gcn-surface-blur));
   -webkit-backdrop-filter: blur(var(--gcn-surface-blur));
+}
+
+:root[data-style='glass'] .popup-card {
+  backdrop-filter: blur(var(--gcn-surface-blur));
+  -webkit-backdrop-filter: blur(var(--gcn-surface-blur));
+  border-radius: 14px;
+}
+
+:root[data-style='glass'] .popup-card-actions {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+:root[data-style='glass'] .popup-card-actions .ui-button-primary {
+  width: 100%;
+}
+
+@media (min-width: 900px) {
+  :root[data-style='glass'] .options-nav-group {
+    display: grid;
+    gap: 4px;
+    width: 100%;
+  }
+
+  :root[data-style='glass'] .options-nav-group-title {
+    display: block;
+    padding: 8px 12px 2px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--gcn-fg-muted);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
