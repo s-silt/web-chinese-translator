@@ -68,7 +68,7 @@
     "globals": "^17.14.0",
     "happy-dom": "^21.0.4",
     "lexical": "0.53.0",
-    "magic-string": "^1.4.3",
+    "magic-string": "^1.4.5",
     "prettier": "^3.9.10",
     "quill": "2.0.3",
     "react": "19.3.1",
