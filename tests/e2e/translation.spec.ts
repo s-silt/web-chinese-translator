@@ -1333,7 +1333,8 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         await expect(page.locator('#p2')).toHaveText('中文译文')
         const includes = (text: string): MockCall[] =>
           textCalls().filter((call) => (call.payload.texts as string[]).includes(text))
-        expect(textCalls()[0]?.payload.texts).toEqual([PHYSICS, ENTROPY, poison])
+        // 三段依次进入视口，各自的防抖可能落在不同批次：只要求都发出过，不要求同批
+        for (const text of [PHYSICS, ENTROPY, poison]) expect(includes(text).length).toBeGreaterThan(0)
         await expect.poll(() => includes(poison).at(-1)?.payload.texts).toEqual([poison])
         // 等失败状态真正显示，避免用固定延时猜测重试是否结束。
         const chip = page.locator('.pause-status')
@@ -1343,7 +1344,10 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         await expect(chip.locator('.notice-speech')).toHaveAttribute('title', '1 段翻译失败')
         await expect(retry).toBeVisible()
         await expect(retry).toBeEnabled()
-        expect(includes(poison)).toHaveLength(2)
+        // 单独一条最多试 2 次（MAX_BAD_OUTPUT_TRIES），若首批与其他段同发则再多 1 次；不得无限重发
+        const poisonCalls = includes(poison).length
+        expect(poisonCalls).toBeGreaterThanOrEqual(2)
+        expect(poisonCalls).toBeLessThanOrEqual(3)
         await expect(page.locator('#p3')).toHaveText(poison)
         // 失败提示不代表暂停：后来出现的正常内容仍应自动完成。
         await appendParagraph(page, 'late', 'A healthy paragraph added after a failed item.')
