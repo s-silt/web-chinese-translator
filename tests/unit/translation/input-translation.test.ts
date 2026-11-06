@@ -180,6 +180,28 @@ describe('输入翻译触发、防抖、IME 与过滤规则', () => {
 
     watcher.dispose()
   })
+
+  it('网页搜索框（type=search）同样出预览，网址、邮箱、数字等输入框不处理', async () => {
+    document.body.innerHTML = `
+      <input id="search" type="search" />
+      <input id="url" type="url" />
+      <input id="email" type="email" />
+      <input id="num" type="number" />
+    `
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: texts.map((t) => `EN:${t}`) }))
+    const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
+    for (const id of ['url', 'email', 'num']) {
+      trustedInput(document.getElementById(id)!, '需要翻译的中文内容')
+    }
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(translate).not.toHaveBeenCalled()
+    trustedInput(document.getElementById('search')!, '搜索开源翻译工具')
+    await vi.advanceTimersByTimeAsync(1000)
+    await Promise.resolve()
+    expect(translate.mock.calls.map((call) => call[0])).toEqual([['搜索开源翻译工具']])
+    expect(isPopoverOpen()).toBe(true)
+    watcher.dispose()
+  })
 })
 
 describe('预览替换、还原、复制与安全并发保护', () => {

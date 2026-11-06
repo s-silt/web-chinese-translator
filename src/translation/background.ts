@@ -1043,6 +1043,7 @@ async function saveConfig(
       videoSubtitlesEnabled: patch.videoSubtitlesEnabled ?? previous.videoSubtitlesEnabled,
       inputTranslationEnabled: patch.inputTranslationEnabled ?? previous.inputTranslationEnabled,
       inputTargetLanguage: patch.inputTargetLanguage ?? previous.inputTargetLanguage,
+      pageCharLimit: patch.pageCharLimit ?? previous.pageCharLimit,
       excludedHosts: nextExcluded,
       siteScopeMode: nextMode,
       siteScopeHosts: nextScopeHosts,

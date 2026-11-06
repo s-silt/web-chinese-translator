@@ -626,6 +626,50 @@ describe('自动翻译候选', () => {
     expect(engine.isCapped()).toBe(true)
   })
 
+  it('预算为 0 时不限字符', async () => {
+    document.body.innerHTML = '<p>English text here</p><p>Another sentence.</p>'
+    engine = createDomEngine({
+      targetLanguage: () => 'zh-CN',
+      fixedEnabled: () => false,
+      autoEnabled: () => true,
+      autoBudget: 0,
+      debounceMs: 10,
+      onAutoBatch(texts, apply) {
+        batches.push({ texts: [...texts], apply })
+      },
+    })
+    engine.start()
+    await settle()
+    batches[0]?.apply(batches[0].texts.map(() => '译文'))
+    await settle()
+    expect(engine.isCapped()).toBe(false)
+    expect(batches.flatMap((batch) => batch.texts)).toEqual(['English text here', 'Another sentence.'])
+  })
+
+  it('预算按函数实时读取：调高后已达上限的页面可继续', async () => {
+    document.body.innerHTML = '<p>English text here</p><p>Another sentence.</p>'
+    let limit = 20
+    engine = createDomEngine({
+      targetLanguage: () => 'zh-CN',
+      fixedEnabled: () => false,
+      autoEnabled: () => true,
+      autoBudget: () => limit,
+      debounceMs: 10,
+      onAutoBatch(texts, apply) {
+        batches.push({ texts: [...texts], apply })
+      },
+    })
+    engine.start()
+    await settle()
+    batches[0]?.apply(['译文'])
+    await settle()
+    expect(engine.isCapped()).toBe(true)
+    limit = 1000
+    expect(engine.extendBudget()).toBe(true)
+    await settle()
+    expect(batches.at(-1)?.texts).toEqual(['Another sentence.'])
+  })
+
   it('缓存提供的字符不计入预算：退还额度后继续发送', async () => {
     document.body.innerHTML = '<p>English text here</p><p>Another sentence.</p>'
     engine = createDomEngine({
@@ -743,6 +787,75 @@ describe('自动翻译候选', () => {
     await settle()
     expect(batches).toHaveLength(1)
     expect(batches[0]?.texts).toEqual(['Same text here again.'])
+  })
+})
+
+describe('已译文字被追加', () => {
+  function poemEngine(): DomEngine {
+    return createDomEngine({
+      targetLanguage: () => 'zh-CN',
+      fixedEnabled: () => false,
+      autoEnabled: () => true,
+      debounceMs: 10,
+      onAutoBatch(texts, apply) {
+        batches.push({ texts: [...texts], apply })
+      },
+    })
+  }
+
+  // 例如诗歌逐句出现、聊天回复逐字输出：网站在已替换为译文的同一文本节点末尾追加原文
+  it('在已译节点末尾追加的原文单独翻译，已译部分保留', async () => {
+    document.body.innerHTML = '<p id="p">The moon rises over the quiet sea</p>'
+    engine = poemEngine()
+    engine.start()
+    await settle()
+    batches[0]!.apply(['月亮升起在宁静的海面上'])
+    await settle()
+    const node = document.getElementById('p')!.firstChild as Text
+    node.appendData(' and the stars shine')
+    await settle(200)
+    expect(batches.map((batch) => batch.texts)).toEqual([['The moon rises over the quiet sea'], ['and the stars shine']])
+    batches[1]!.apply(['星光闪烁'])
+    await settle()
+    expect(node.data).toBe('月亮升起在宁静的海面上星光闪烁')
+    // 恢复原文时还原整段原文
+    engine.restore()
+    expect(node.data).toBe('The moon rises over the quiet sea and the stars shine')
+  })
+
+  it('再次追加时继续只译新增部分', async () => {
+    document.body.innerHTML = '<p id="p">The moon rises</p>'
+    engine = poemEngine()
+    engine.start()
+    await settle()
+    batches[0]!.apply(['月亮升起'])
+    await settle()
+    const node = document.getElementById('p')!.firstChild as Text
+    node.appendData(' over the sea')
+    await settle(200)
+    batches[1]!.apply(['在海面上'])
+    await settle()
+    node.appendData(' tonight')
+    await settle(200)
+    expect(batches.at(-1)?.texts).toEqual(['tonight'])
+    batches.at(-1)!.apply(['今夜'])
+    await settle()
+    expect(node.data).toBe('月亮升起在海面上今夜')
+    engine.restore()
+    expect(node.data).toBe('The moon rises over the sea tonight')
+  })
+
+  it('不是在末尾追加（中间被改写）时按整段原文重新处理', async () => {
+    document.body.innerHTML = '<p id="p">The moon rises</p>'
+    engine = poemEngine()
+    engine.start()
+    await settle()
+    batches[0]!.apply(['月亮升起'])
+    await settle()
+    const node = document.getElementById('p')!.firstChild as Text
+    node.data = 'The sun sets'
+    await settle(200)
+    expect(batches.at(-1)?.texts).toEqual(['The sun sets'])
   })
 })
 

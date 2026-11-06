@@ -6,6 +6,7 @@ import { languageEnvironment } from '../shared/language-env'
 import { resolveUiLanguage, type UiLanguage } from '../shared/locale'
 import { getSettings, watchSettings } from '../shared/settings'
 import {
+  DEFAULT_PAGE_CHAR_LIMIT,
   DEFAULT_TRANSLATION_CONFIG,
   getTranslationConfig,
   normalizeOrigin,
@@ -614,6 +615,7 @@ function createInstance(inputOnly = false): Instance {
       fixedEnabled: fixedOn,
       autoEnabled: autoOn,
       targetLanguage: () => config?.targetLanguage ?? 'zh-CN',
+      autoBudget: () => config?.pageCharLimit ?? DEFAULT_PAGE_CHAR_LIMIT,
       sourceLanguage: () => config?.sourceLanguage ?? 'auto',
       translateFixed: (text) =>
         modes.fixedEntries === undefined ? undefined : fixedTranslationWith(modes.fixedEntries, text),
@@ -895,6 +897,7 @@ function createInstance(inputOnly = false): Instance {
       }
       if (floatEpoch === floatingEpoch) floatingSuppressed = false
       applyModes(connectionChanged)
+      if (nextConfig.pageCharLimit !== previousConfig.pageCharLimit) engine?.budgetChanged()
       if (manualNotice !== undefined) panel.showNotice(t(manualNotice))
       syncPauseStatus()
       return true

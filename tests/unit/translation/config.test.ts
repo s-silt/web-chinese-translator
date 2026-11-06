@@ -433,3 +433,15 @@ describe('floatingButtonEnabled 保存', () => {
     })
   })
 })
+
+describe('单页字符上限', () => {
+  it('默认 50000；只接受预设档位，0 为不限', () => {
+    expect(DEFAULT_TRANSLATION_CONFIG.pageCharLimit).toBe(50_000)
+    expect(sanitizeTranslationConfig({ pageCharLimit: 0 }).pageCharLimit).toBe(0)
+    expect(sanitizeTranslationConfig({ pageCharLimit: 200_000 }).pageCharLimit).toBe(200_000)
+    // 旧版配置没有这个字段；任意数值、负数、字符串都回到默认
+    for (const value of [undefined, 12345, -1, '50000', Infinity]) {
+      expect(sanitizeTranslationConfig({ pageCharLimit: value }).pageCharLimit).toBe(50_000)
+    }
+  })
+})

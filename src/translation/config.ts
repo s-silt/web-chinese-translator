@@ -31,9 +31,19 @@ export interface TranslationConfig {
   readonly autoInteractionEnabled: boolean
   readonly videoSubtitlesEnabled: boolean
   readonly inputTranslationEnabled: boolean
+  /** 模型翻译单页字符上限；0 为不限 */
+  readonly pageCharLimit: number
   readonly excludedHosts: readonly string[]
   readonly siteScopeMode: SiteScopeMode
   readonly siteScopeHosts: readonly string[]
+}
+
+/** 单页字符上限的可选档位（0 为不限）。旧版固定 20000，长文常在中途停住 */
+export const PAGE_CHAR_LIMITS = [20_000, 50_000, 100_000, 200_000, 0] as const
+export const DEFAULT_PAGE_CHAR_LIMIT = 50_000
+
+export function isPageCharLimit(value: unknown): value is number {
+  return typeof value === 'number' && (PAGE_CHAR_LIMITS as readonly number[]).includes(value)
 }
 
 export const DEFAULT_TRANSLATION_CONFIG: TranslationConfig = {
@@ -55,6 +65,7 @@ export const DEFAULT_TRANSLATION_CONFIG: TranslationConfig = {
   autoInteractionEnabled: true,
   videoSubtitlesEnabled: false,
   inputTranslationEnabled: false,
+  pageCharLimit: DEFAULT_PAGE_CHAR_LIMIT,
   excludedHosts: [],
   siteScopeMode: 'all',
   siteScopeHosts: [],
@@ -231,6 +242,7 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
     autoInteractionEnabled: value.autoInteractionEnabled !== false,
     videoSubtitlesEnabled: value.videoSubtitlesEnabled === true,
     inputTranslationEnabled: value.inputTranslationEnabled === true,
+    pageCharLimit: isPageCharLimit(value.pageCharLimit) ? value.pageCharLimit : DEFAULT_PAGE_CHAR_LIMIT,
     excludedHosts: sanitizeExcludedHosts(value.excludedHosts),
     siteScopeMode: isSiteScopeMode(value.siteScopeMode) ? value.siteScopeMode : 'all',
     siteScopeHosts: sanitizeExcludedHosts(value.siteScopeHosts),
