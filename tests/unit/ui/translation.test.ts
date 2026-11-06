@@ -1714,6 +1714,33 @@ describe('弹出页站点控制', () => {
     wrapper.unmount()
   })
 
+  it('敏感页面已手动翻译时仍可恢复原文', async () => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    tabAndStatus('https://accounts.google.com/', {
+      ok: true,
+      status: { supported: true, fixed: false, auto: true, paused: false, capped: false, failed: 0, error: '' },
+    })
+    const sent: Record<string, unknown>[] = []
+    replies({
+      'wt:get-config': () => ({ ok: true, config: CONFIG }),
+      'wt:page-action': (message) => {
+        sent.push(message)
+        return { ok: true }
+      },
+    })
+    const wrapper = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    const primary = wrapper.get('[data-test="wt-translate-page"]')
+    expect(primary.text()).toBe(en.wtRestore)
+    expect(primary.attributes('disabled')).toBeUndefined()
+    await primary.trigger('click')
+    await flushPromises()
+    expect(sent.map((m) => m.action)).toEqual(['restore'])
+    wrapper.unmount()
+    clearToasts()
+  })
+
   it('更多功能折叠状态写入 localStorage，无值时默认展开', async () => {
     await settingsItem.setValue(DEFAULT_SETTINGS)
     tabAndStatus('https://example.com/', {

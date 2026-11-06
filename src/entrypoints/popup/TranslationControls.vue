@@ -12,7 +12,7 @@
               v-if="showGithubState"
               :tone="githubTone"
               dot
-              live
+              :live="githubLive"
               v-bind="githubStateTest"
             >
               {{ t(PAGE_STATE_MESSAGE[githubState]) }}
@@ -200,6 +200,9 @@ const githubNeedsAction = computed(
 
 // GitHub 页面由独立的汉化引擎处理，词典行显示它的状态，而不是网页翻译引擎的 fixed
 const showGithubState = computed(() => props.githubPage || githubNeedsAction.value)
+
+// 一页只留一个读屏状态区：有网页翻译状态卡时由它播报，词典行只在 Firefox 构建（没有状态卡）时播报
+const githubLive = computed(() => !translationSupported)
 
 const githubStateTest = computed(() => (githubNeedsAction.value ? { 'data-test': 'state' } : {}))
 

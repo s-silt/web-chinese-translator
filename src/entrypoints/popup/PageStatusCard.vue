@@ -75,22 +75,24 @@ const {
   excludeSite,
 } = useProvidedTranslationControls()
 
+// 敏感页禁止发送内容：不能翻译或继续，但右键手动翻译过的内容仍可恢复原文（恢复不发送任何内容）
+const restoreOnly = computed(() => canRestore.value && !canResume.value)
+
 const primaryLabel = computed(() => {
   if (busy.value) return t('wtProcessing')
-  if (canRestore.value && !canResume.value) return t('wtRestore')
+  if (restoreOnly.value) return t('wtRestore')
   if (canResume.value) return t('wtResume')
   return t('wtTranslatePage')
 })
 
-const primaryDisabled = computed(
-  () =>
-    busy.value ||
-    sensitive.value ||
-    (!canTranslate.value && !canRestore.value && !canResume.value),
-)
+const primaryDisabled = computed(() => {
+  if (busy.value) return true
+  if (sensitive.value) return !restoreOnly.value
+  return !canTranslate.value && !canRestore.value && !canResume.value
+})
 
 function onPrimary(): void {
-  if (canRestore.value && !canResume.value) void restore()
+  if (restoreOnly.value) void restore()
   else if (canResume.value) void resume()
   else void translatePage()
 }

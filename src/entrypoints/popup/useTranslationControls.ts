@@ -93,7 +93,6 @@ export interface UseTranslationControls {
   readonly autoInteractionEnabled: ComputedRef<boolean>
   readonly videoSubtitlesEnabled: ComputedRef<boolean>
   readonly inputTranslationEnabled: ComputedRef<boolean>
-  readonly pageTranslationEnabled: ComputedRef<boolean>
   readonly configurationReady: ComputedRef<boolean>
   readonly masterEnabled: ComputedRef<boolean>
   readonly modelConfigured: ComputedRef<boolean>
@@ -113,7 +112,6 @@ export interface UseTranslationControls {
   setFloating(enabled: boolean): Promise<void>
   setAutoInteraction(enabled: boolean): Promise<void>
   setAuto(enabled: boolean): Promise<void>
-  setPageTranslation(enabled: boolean): Promise<void>
   setVideoSubtitles(enabled: boolean): Promise<void>
   setInputTranslation(enabled: boolean): Promise<void>
   restore(): Promise<void>
@@ -209,7 +207,6 @@ export function useTranslationControls(): UseTranslationControls {
   const autoInteractionEnabled = computed(() => config.value?.autoInteractionEnabled !== false)
   const videoSubtitlesEnabled = computed(() => config.value?.videoSubtitlesEnabled === true)
   const inputTranslationEnabled = computed(() => config.value?.inputTranslationEnabled === true)
-  const pageTranslationEnabled = computed(() => canRestore.value && !canResume.value)
   const canTranslate = computed(() =>
     supported.value && masterEnabled.value && configurationReady.value && !outOfScope.value,
   )
@@ -405,15 +402,6 @@ export function useTranslationControls(): UseTranslationControls {
     await (enabled ? enableAuto() : disableAuto())
   }
 
-  async function setPageTranslation(enabled: boolean): Promise<void> {
-    if (enabled) {
-      if (canResume.value) await pageAction('resume')
-      else await translatePage()
-      return
-    }
-    await pageAction('restore')
-  }
-
   async function setRealtimeFeature(
     key: 'videoSubtitlesEnabled' | 'inputTranslationEnabled',
     enabled: boolean,
@@ -541,7 +529,6 @@ export function useTranslationControls(): UseTranslationControls {
     autoInteractionEnabled,
     videoSubtitlesEnabled,
     inputTranslationEnabled,
-    pageTranslationEnabled,
     configurationReady,
     masterEnabled: masterOn,
     modelConfigured,
@@ -561,7 +548,6 @@ export function useTranslationControls(): UseTranslationControls {
     setFloating,
     setAutoInteraction,
     setAuto,
-    setPageTranslation,
     setVideoSubtitles: (enabled: boolean) => setRealtimeFeature('videoSubtitlesEnabled', enabled),
     setInputTranslation: (enabled: boolean) => setRealtimeFeature('inputTranslationEnabled', enabled),
     restore: () => pageAction('restore'),

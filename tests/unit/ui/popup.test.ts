@@ -157,6 +157,8 @@ describe.skipIf(!App)('弹出页组件', () => {
     const row = wrapper.findAll('.popup-engine').find((item) => item.text().includes('GitHub'))
     expect(row?.text()).toContain('已翻译')
     expect(row?.text()).not.toContain('未启用')
+    // 一页只有一个读屏状态区：GitHub 页面由状态卡播报，词典行不重复
+    expect(wrapper.findAll('[role="status"]').filter((item) => item.classes('ui-badge'))).toHaveLength(1)
   })
 
   it('普通已翻译页面不展示 GitHub 状态行，总开关仍在', async () => {
