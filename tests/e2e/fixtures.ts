@@ -778,7 +778,8 @@ while time.monotonic() < deadline:
 raise RuntimeError(f'No native permission button in owned browser {pid}; buttons={sorted(buttons)}')
 `
     execFileSync('/usr/bin/python3', ['-c', script, String(ownedPid)], { encoding: 'utf8', timeout: 12_000 })
-    await expect.poll(hasPermission, { timeout: 5_000 }).toBe(true)
+    // 点下「允许」到 permissions.contains 生效之间，CI 机器上偶尔超过 5 秒
+    await expect.poll(hasPermission, { timeout: 15_000 }).toBe(true)
     return
   }
   const script = `
