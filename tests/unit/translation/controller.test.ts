@@ -2250,4 +2250,148 @@ describe('字幕与输入翻译生命周期联动', () => {
       if (topDescriptor !== undefined) Object.defineProperty(window, 'top', topDescriptor)
     }
   })
+
+  describe('扩展上下文失效清理', () => {
+    const BACKGROUND_LOST_ERROR = '无法连接扩展后台，请重试或刷新页面'
+    const originalRuntimeId = fakeBrowser.runtime.id
+
+    afterEach(() => {
+      ;(fakeBrowser.runtime as { id: string | undefined }).id = originalRuntimeId
+    })
+
+    function allRootShadowTexts(): string {
+      return Array.from(document.documentElement.querySelectorAll('[data-wt-root]'))
+        .map((host) => getCapturedShadowRoot(host)?.textContent ?? '')
+        .join('\n')
+    }
+
+    it('runtime.id 置为 undefined 后推进 3000ms 自动 dispose，输入翻译监听不再响应且不抛错', async () => {
+      const { sendTranslationMessage } = await import('../../../src/translation/client')
+      vi.mocked(sendTranslationMessage).mockImplementation((async (message: {
+        type: string
+        mode?: string
+        texts?: string[]
+      }) => {
+        if (message.type === 'wt:page-modes') {
+          return {
+            ok: true,
+            modes: { enabled: true, fixed: false, auto: false, selection: false, smart: false, input: true },
+          }
+        }
+        if (message.type === 'wt:translate') {
+          return { ok: true, texts: (message.texts ?? []).map((t) => `EN:${t}`) }
+        }
+        return { ok: true }
+      }) as never)
+
+      await translationConfigItem.setValue({
+        ...CONFIG,
+        inputTranslationEnabled: true,
+        autoInteractionEnabled: true,
+      })
+
+      const input = document.createElement('input')
+      input.type = 'text'
+      document.body.append(input)
+
+      await startPageTranslation()
+      await settle(100)
+      expect((globalThis as Record<symbol, unknown>)[SINGLETON_KEY]).toBeDefined()
+
+      ;(fakeBrowser.runtime as { id: string | undefined }).id = undefined
+      await settle(3000)
+
+      expect((globalThis as Record<symbol, unknown>)[SINGLETON_KEY]).toBeUndefined()
+      vi.mocked(sendTranslationMessage).mockClear()
+
+      input.value = '失效后输入中文'
+      input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+      await settle(650)
+
+      expect(
+        vi.mocked(sendTranslationMessage).mock.calls.some(([m]) => m.type === 'wt:translate'),
+      ).toBe(false)
+    })
+
+    it('输入翻译返回 disconnected 且 runtime.id 为 undefined 时不显示 BACKGROUND_LOST_ERROR 并立即 dispose', async () => {
+      const { sendTranslationMessage } = await import('../../../src/translation/client')
+      vi.mocked(sendTranslationMessage).mockImplementation((async (message: { type: string }) => {
+        if (message.type === 'wt:page-modes') {
+          return {
+            ok: true,
+            modes: { enabled: true, fixed: false, auto: false, selection: false, smart: false, input: true },
+          }
+        }
+        if (message.type === 'wt:translate') {
+          ;(fakeBrowser.runtime as { id: string | undefined }).id = undefined
+          return { ok: false, error: BACKGROUND_LOST_ERROR, code: 'disconnected' }
+        }
+        return { ok: true }
+      }) as never)
+
+      await translationConfigItem.setValue({
+        ...CONFIG,
+        inputTranslationEnabled: true,
+        autoInteractionEnabled: true,
+      })
+
+      const input = document.createElement('input')
+      input.type = 'text'
+      document.body.append(input)
+
+      await startPageTranslation()
+      await settle(100)
+
+      input.value = '你好世界'
+      input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+      await settle(650)
+
+      expect((globalThis as Record<symbol, unknown>)[SINGLETON_KEY]).toBeUndefined()
+      expect(allRootShadowTexts()).not.toContain(BACKGROUND_LOST_ERROR)
+
+      vi.mocked(sendTranslationMessage).mockClear()
+      input.value = '继续输入中文'
+      input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+      await settle(650)
+      expect(
+        vi.mocked(sendTranslationMessage).mock.calls.some(([m]) => m.type === 'wt:translate'),
+      ).toBe(false)
+    })
+
+    it('输入翻译返回 disconnected 但 runtime.id 仍正常时保留实例并显示原错误文案', async () => {
+      const { sendTranslationMessage } = await import('../../../src/translation/client')
+      vi.mocked(sendTranslationMessage).mockImplementation((async (message: { type: string }) => {
+        if (message.type === 'wt:page-modes') {
+          return {
+            ok: true,
+            modes: { enabled: true, fixed: false, auto: false, selection: false, smart: false, input: true },
+          }
+        }
+        if (message.type === 'wt:translate') {
+          return { ok: false, error: BACKGROUND_LOST_ERROR, code: 'disconnected' }
+        }
+        return { ok: true }
+      }) as never)
+
+      await translationConfigItem.setValue({
+        ...CONFIG,
+        inputTranslationEnabled: true,
+        autoInteractionEnabled: true,
+      })
+
+      const input = document.createElement('input')
+      input.type = 'text'
+      document.body.append(input)
+
+      await startPageTranslation()
+      await settle(100)
+
+      input.value = '你好世界'
+      input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+      await settle(650)
+
+      expect((globalThis as Record<symbol, unknown>)[SINGLETON_KEY]).toBeDefined()
+      expect(allRootShadowTexts()).toContain(BACKGROUND_LOST_ERROR)
+    })
+  })
 })

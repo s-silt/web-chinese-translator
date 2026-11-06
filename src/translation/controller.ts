@@ -26,6 +26,8 @@ import {
   type PageAction,
   type PageModes,
   type PageTranslationStatus,
+  type TranslationMessage,
+  type TranslationReply,
 } from './messages'
 import { pageIdentity, watchPageLifecycle } from './page-lifecycle'
 import { createPageContextTracker } from './page-context-tracker'
@@ -53,9 +55,18 @@ import { currentYouTubeInputFrameTopUrl } from './input-frame'
 const SINGLETON_KEY = Symbol.for('webTranslate.instance')
 const MODES_RETRY_MS = 1000
 const MAX_MODES_RETRIES = 5
+const INVALIDATION_CHECK_MS = 3000
 const floatingPositionItem = storage.defineItem<FloatingPosition>('local:translationFloatingPosition', {
   fallback: { side: 'right', ratio: 0.5, collapsed: false },
 })
+
+function isExtensionContextValid(): boolean {
+  try {
+    return browser.runtime.id !== undefined
+  } catch {
+    return false
+  }
+}
 
 export interface Instance {
   dispose(): void
@@ -111,6 +122,22 @@ function createInstance(inputOnly = false): Instance {
   })
 
   const panel: TranslationPanel = createTranslationPanel()
+
+  function disposeIfInvalidated(): boolean {
+    if (isExtensionContextValid()) return false
+    dispose()
+    return true
+  }
+
+  async function sendMessage<M extends TranslationMessage>(
+    message: M,
+  ): Promise<TranslationReply<M['type']>> {
+    const reply = await sendTranslationMessage(message)
+    if (!reply.ok && reply.code === 'disconnected' && disposeIfInvalidated()) {
+      return { ok: false, error: '', code: 'cancelled' }
+    }
+    return reply
+  }
 
   function modelConfigured(): boolean {
     return config !== undefined && config.baseUrl !== '' && config.model !== ''
@@ -282,7 +309,7 @@ function createInstance(inputOnly = false): Instance {
     }
     floatingChecking = true
     syncFloating()
-    void sendTranslationMessage({ type: 'wt:current-page-controls', action: 'status' })
+    void sendMessage({ type: 'wt:current-page-controls', action: 'status' })
       .then((reply) => {
         if (!floatingLive(token, page, identity)) return
         if (reply.ok) legacy = reply.legacy
@@ -319,7 +346,7 @@ function createInstance(inputOnly = false): Instance {
       syncFloating()
     }
     if (action === 'translate-page') {
-      void sendTranslationMessage(view.configured
+      void sendMessage(view.configured
         ? { type: 'wt:translate-page' }
         : { type: 'wt:open-options', section: 'model' })
         .then((reply) => {
@@ -334,7 +361,7 @@ function createInstance(inputOnly = false): Instance {
       return
     }
     if (action === 'settings') {
-      void sendTranslationMessage({ type: 'wt:open-options' })
+      void sendMessage({ type: 'wt:open-options' })
         .then((reply) => {
           if (!floatingLive(token, page, identity)) return
           if (!reply.ok) floatingError = reply.error || t('wtFloatingActionFailed')
@@ -347,7 +374,7 @@ function createInstance(inputOnly = false): Instance {
       return
     }
     if (action === 'toggle-auto') {
-      void sendTranslationMessage({
+      void sendMessage({
         type: 'wt:current-site-auto',
         enabled: !(config?.autoOrigins.includes(origin) ?? false),
       })
@@ -366,7 +393,7 @@ function createInstance(inputOnly = false): Instance {
         .finally(finish)
       return
     }
-    void sendTranslationMessage({
+    void sendMessage({
       type: 'wt:current-page-controls',
       action,
     })
@@ -430,7 +457,7 @@ function createInstance(inputOnly = false): Instance {
 
   const assist = createAssistance({
     panel,
-    enabled: () => modes.enabled && !suspended && !disposed,
+    enabled: () => modes.enabled && !suspended && !disposed && !disposeIfInvalidated(),
     configured: modelConfigured,
     smart: proactiveOn,
     pageId: () => pageId,
@@ -450,6 +477,7 @@ function createInstance(inputOnly = false): Instance {
   }
 
   function literalTranslate(source: string, manualSelectionId?: string): void {
+    if (disposeIfInvalidated()) return
     assist.literal(source, undefined, undefined, manualSelectionId)
   }
 
@@ -463,13 +491,14 @@ function createInstance(inputOnly = false): Instance {
         panel.close()
       },
       onSelect: (text, anchor, method, stillValid) => {
+        if (disposeIfInvalidated()) return
         cancelAssist()
         if (config?.selectionToolbarEnabled === true) {
           const selected: ToolbarSelection = { text, anchor, method, stillValid }
           toolbarSelection = selected
           panel.showToolbar(anchor, modelConfigured(), (action) => {
             if (toolbarSelection !== selected) return
-            if (!selectionOn() || disposed || !stillValid()) {
+            if (disposeIfInvalidated() || !selectionOn() || disposed || !stillValid()) {
               panel.close()
               return
             }
@@ -507,7 +536,10 @@ function createInstance(inputOnly = false): Instance {
         return selection !== null && !selection.isCollapsed
       },
       isInsidePanel: (event) => panel.containsEvent(event),
-      onCandidate: (candidate: ReadingCandidate) => assist.revisit(candidate),
+      onCandidate: (candidate: ReadingCandidate) => {
+        if (disposeIfInvalidated()) return
+        assist.revisit(candidate)
+      },
       onInvalidate: () => {
         cancelAssist()
       },
@@ -519,7 +551,7 @@ function createInstance(inputOnly = false): Instance {
     if (subtitles !== undefined) return
     subtitles = createSubtitleTranslation({
       translate: (texts, requestId) =>
-        sendTranslationMessage({
+        sendMessage({
           type: 'wt:translate',
           mode: 'subtitle',
           texts,
@@ -541,7 +573,7 @@ function createInstance(inputOnly = false): Instance {
         if (!inputTranslationOn()) {
           return { ok: false, error: t('wtInputUnavailable') }
         }
-        return sendTranslationMessage({
+        return sendMessage({
           type: 'wt:translate',
           mode: 'input',
           texts,
@@ -557,11 +589,11 @@ function createInstance(inputOnly = false): Instance {
         ? {}
         : {
             replaceDiscordInput: async (request) => {
-              const reply = await sendTranslationMessage({ type: 'wt:replace-discord-input', ...request })
+              const reply = await sendMessage({ type: 'wt:replace-discord-input', ...request })
               return reply.ok ? reply.inputReplacement : 'failed'
             },
             replaceChatInput: async (request) => {
-              const reply = await sendTranslationMessage({ type: 'wt:replace-chat-input', ...request })
+              const reply = await sendMessage({ type: 'wt:replace-chat-input', ...request })
               return reply.ok ? reply.inputReplacement : 'failed'
             },
           }),
@@ -633,7 +665,7 @@ function createInstance(inputOnly = false): Instance {
         const doc = pageId
         const href = pageIdentity(location.href)
         autoRequests.add(id)
-        void sendTranslationMessage({
+        void sendMessage({
           type: 'wt:translate',
           mode: 'auto',
           texts,
@@ -694,7 +726,7 @@ function createInstance(inputOnly = false): Instance {
     enabled: () => smartOn() && !disposed && !suspended,
     pageId: () => pageId,
     send: async () => {
-      const reply = await sendTranslationMessage({ type: 'wt:page-context', page: collectPageContext(), pageId })
+      const reply = await sendMessage({ type: 'wt:page-context', page: collectPageContext(), pageId })
       return reply.ok
     },
   })
@@ -792,7 +824,7 @@ function createInstance(inputOnly = false): Instance {
       const [nextConfig, nextSettings, modesReply] = await Promise.all([
         getTranslationConfig(),
         getSettings(),
-        sendTranslationMessage({ type: 'wt:page-modes' }),
+        sendMessage({ type: 'wt:page-modes' }),
       ])
       if (disposed || suspended || epoch !== reloadEpoch) return false
       const previousUiLanguage = uiLanguage
@@ -902,7 +934,7 @@ function createInstance(inputOnly = false): Instance {
       syncPauseStatus()
       return true
     } catch {
-      if (disposed || suspended || epoch !== reloadEpoch) return false
+      if (disposed || suspended || epoch !== reloadEpoch || disposeIfInvalidated()) return false
       cancelAll()
       modes = { enabled: false, fixed: false, auto: false, selection: false, smart: false }
       fixedActive = false
@@ -939,7 +971,7 @@ function createInstance(inputOnly = false): Instance {
     sendResponse: (reply?: unknown) => void,
   ): true | undefined => {
     if (!isContentTranslationMessage(message)) return undefined
-    if (sender.id !== browser.runtime.id || sender.tab !== undefined) return undefined
+    if (disposeIfInvalidated() || sender.id !== browser.runtime.id || sender.tab !== undefined) return undefined
     if (message.type === 'wt:refresh-input-frame' || message.type === 'wt:stop-input-frame') {
       if (!inputOnly) return undefined
       if (message.type === 'wt:stop-input-frame') {
@@ -1015,9 +1047,11 @@ function createInstance(inputOnly = false): Instance {
     }
   })
   panel.setOnLiteral(() => {
+    if (disposeIfInvalidated()) return
     assist.repeatLiteral()
   })
   panel.setOnRetry(() => {
+    if (disposeIfInvalidated()) return
     assist.repeatRequest()
   })
   panel.setOnDismissProactive(() => {
@@ -1091,17 +1125,30 @@ function createInstance(inputOnly = false): Instance {
     void reload()
   })
 
+  const invalidationTimer = setInterval(() => {
+    disposeIfInvalidated()
+  }, INVALIDATION_CHECK_MS)
+
   function dispose(): void {
     if (disposed) return
+    disposed = true
     resetFloating()
     cancelAll()
     closePageSession()
-    disposed = true
     clearTimeout(modesRetryTimer)
+    clearInterval(invalidationTimer)
     reloadEpoch += 1
     domEpoch += 1
-    unwatchConfig()
-    unwatchSettings()
+    try {
+      unwatchConfig()
+    } catch {
+      void 0
+    }
+    try {
+      unwatchSettings()
+    } catch {
+      void 0
+    }
     disposeWatchers()
     tracker.dispose()
     lifecycleDispose()
@@ -1123,17 +1170,11 @@ function createInstance(inputOnly = false): Instance {
   return {
     dispose,
     refresh() {
-      if (disposed) return
+      if (disposed || disposeIfInvalidated()) return
       void reload()
     },
     healthy() {
-      if (disposed) return false
-      try {
-        browser.runtime.getManifest()
-        return true
-      } catch {
-        return false
-      }
+      return !disposed && isExtensionContextValid()
     },
   }
 }
