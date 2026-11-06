@@ -122,13 +122,13 @@ class PageClosedShadowInspector {
     const session = await this.page.context().newCDPSession(this.page)
     this.session = session
 
+    // 页面关闭时会话随目标一起失效，不再主动 detach：关闭上下文期间目标已在拆除，detach 可能一直挂起并拖住 context.close()
     this.page.once('close', () => {
       this.detached = true
       this.utilityContexts.clear()
       this.closedRootBackendIds.clear()
       this.boundPairs.clear()
       this.hostNodeIds.clear()
-      void session.detach().catch(() => undefined)
     })
 
     session.on('Runtime.executionContextCreated', (event: { context: ExecutionContextDescription }) => {
