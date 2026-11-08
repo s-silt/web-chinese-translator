@@ -228,6 +228,39 @@ describe('useExcludedPaths', () => {
     await settle()
     expect(text.value).toBe('/settings\n/vuejs/core/issues')
   })
+
+  it('probeResult：按文本框当前规则（含未保存）实时判定测试网址', async () => {
+    const { text, probe, probeResult } = scoped(useExcludedPaths)
+    await settle()
+    probe.value = 'https://github.com/vuejs/core/wiki'
+    await settle()
+    expect(probeResult.value).toEqual({ kind: 'included', path: '/vuejs/core/wiki' })
+
+    // 未保存的修改立即生效
+    text.value = '/*/*/wiki'
+    await settle()
+    expect(probeResult.value).toEqual({ kind: 'excluded', path: '/vuejs/core/wiki', pattern: '/*/*/wiki' })
+
+    // 路径输入去查询与片段
+    probe.value = '/vuejs/core/settings?tab=x#frag'
+    await settle()
+    expect(probeResult.value).toEqual({ kind: 'included', path: '/vuejs/core/settings' })
+  })
+
+  it('probeResult：空输入提示、无法识别标为无效', async () => {
+    const { probe, probeResult } = scoped(useExcludedPaths)
+    await settle()
+    expect(probeResult.value).toEqual({ kind: 'empty' })
+    probe.value = '   '
+    await settle()
+    expect(probeResult.value).toEqual({ kind: 'empty' })
+    probe.value = 'example.com/x'
+    await settle()
+    expect(probeResult.value).toEqual({ kind: 'invalid' })
+    probe.value = 'http://github.com/x'
+    await settle()
+    expect(probeResult.value).toEqual({ kind: 'invalid' })
+  })
 })
 
 describe('useCustomEntries', () => {

@@ -1,4 +1,5 @@
 import { storage } from 'wxt/utils/storage'
+import { parseGitHubUrl } from './github'
 import {
   isPageLocalePreference,
   isUiLanguagePreference,
@@ -142,12 +143,27 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${source}(?:/.*)?$`, 'i')
 }
 
-/** 路径是否被排除规则命中 */
-export function isPathExcluded(pathname: string, patterns: readonly string[]): boolean {
+/** 第一条命中路径的排除规则（去首尾空白后的原文）；未命中返回 undefined */
+export function matchExcludedPath(pathname: string, patterns: readonly string[]): string | undefined {
   return patterns
     .map((pattern) => pattern.trim())
     .filter((pattern) => pattern.startsWith('/'))
-    .some((pattern) => globToRegExp(pattern).test(pathname))
+    .find((pattern) => globToRegExp(pattern).test(pathname))
+}
+
+/** 路径是否被排除规则命中 */
+export function isPathExcluded(pathname: string, patterns: readonly string[]): boolean {
+  return matchExcludedPath(pathname, patterns) !== undefined
+}
+
+/** 排除规则测试框的输入 → 待判断的路径（不含查询与片段）；无法识别返回 undefined */
+export function excludedPathProbe(input: string): string | undefined {
+  const trimmed = input.trim()
+  if (trimmed === '') return undefined
+  // 以 / 开头按路径处理：//x 仍是路径，查询、片段去掉，空格等按浏览器规则编码，与 location.pathname 一致
+  if (trimmed.startsWith('/')) return new URL(`https://github.com${trimmed}`).pathname
+  if (/^https?:\/\//i.test(trimmed)) return parseGitHubUrl(trimmed)?.pathname
+  return undefined
 }
 
 /** 值为布尔的设置项 */

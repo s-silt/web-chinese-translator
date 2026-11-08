@@ -62,6 +62,11 @@ export default {
   languageKo: '韓文',
 
   excludedPaths: '排除路徑（GitHub）',
+  excludedPathTest: '測試網址',
+  excludedProbeHint: '輸入 GitHub 網址或以 / 開頭的路徑，依上方規則（含未儲存的修改）判斷',
+  excludedProbeInvalid: '請輸入 GitHub 網址或以 / 開頭的路徑',
+  excludedProbeExcluded: '{path} 符合規則 {pattern}，不漢化',
+  excludedProbeIncluded: '{path} 不符合任何規則，正常漢化',
   save: '儲存',
   saved: '已儲存',
   invalidFormat: '格式錯誤',

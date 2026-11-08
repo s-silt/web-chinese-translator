@@ -34,7 +34,7 @@ function section(wrapper: VueWrapper, title: string): DOMWrapper<Element> {
 /** 页面顶部的提示文字（读屏朗读的区域内），先显示的在前 */
 function toastTexts(wrapper: VueWrapper): string[] {
   return wrapper
-    .get('[aria-live="polite"]')
+    .get('.toast-host')
     .findAll('.ui-toast')
     .map((toast) => toast.text())
 }
@@ -268,6 +268,26 @@ describe.skipIf(!App)('设置页组件', () => {
       await updateSettings({ excludedPaths: ['/vuejs/core/issues'] })
       await settle()
       expect(textareaValue(wrapper)).toBe('/draft')
+    })
+
+    it('测试网址：结果行随规则与输入实时更新', async () => {
+      const wrapper = await render()
+      const excluded = section(wrapper, '排除路径')
+      const result = excluded.get('[data-test="excluded-probe-result"]')
+      expect(result.text()).toBe('输入 GitHub 网址或以 / 开头的路径，按上方规则（含未保存的修改）判断')
+
+      await excluded.get('[data-test="excluded-probe"]').setValue('https://github.com/vuejs/core/wiki')
+      await settle()
+      expect(result.text()).toBe('/vuejs/core/wiki 未命中任何规则，正常汉化')
+
+      // 未保存的规则修改立即参与判定
+      await excluded.get('textarea').setValue('/*/*/wiki')
+      await settle()
+      expect(result.text()).toBe('/vuejs/core/wiki 命中规则 /*/*/wiki，不汉化')
+
+      await excluded.get('[data-test="excluded-probe"]').setValue('example.com/x')
+      await settle()
+      expect(result.text()).toBe('请输入 GitHub 网址或以 / 开头的路径')
     })
   })
 
