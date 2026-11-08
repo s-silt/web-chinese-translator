@@ -6,7 +6,9 @@ import {
   customEntriesItem,
   getCustomEntries,
   getSettings,
+  excludedPathProbe,
   isPathExcluded,
+  matchExcludedPath,
   mergeSettings,
   parseExcludedPaths,
   removeExcludedPath,
@@ -100,6 +102,50 @@ describe('isPathExcluded', () => {
     ['/anything', [], false],
   ])('%s 对 %j → %s', (pathname, patterns, expected) => {
     expect(isPathExcluded(pathname, patterns)).toBe(expected)
+  })
+})
+
+describe('matchExcludedPath', () => {
+  it.each([
+    // 第一条命中规则；规则按顺序判断
+    ['/settings/profile', ['/settings', '/settings/profile'], '/settings'],
+    ['/a/b', ['/a/**', '/a/b'], '/a/**'],
+    // * 单段、** 任意层级、大小写不敏感、命中规则及下级路径
+    ['/vuejs/core/wiki/Home', ['/*/*/wiki'], '/*/*/wiki'],
+    ['/a/b/c/wiki', ['/**/wiki'], '/**/wiki'],
+    ['/Settings', ['  /settings  '], '/settings'],
+    ['/anything', ['/**'], '/**'],
+    // 不以 / 开头的规则忽略
+    ['/a', ['a', '/a'], '/a'],
+  ])('%s 对 %j → %s', (pathname, patterns, expected) => {
+    expect(matchExcludedPath(pathname, patterns)).toBe(expected)
+  })
+
+  it('未命中返回 undefined', () => {
+    expect(matchExcludedPath('/y', ['/x'])).toBeUndefined()
+    expect(matchExcludedPath('/anything', [])).toBeUndefined()
+    expect(matchExcludedPath('/anything', ['settings'])).toBeUndefined()
+  })
+})
+
+describe('excludedPathProbe', () => {
+  it.each([
+    // / 开头：按路径处理，去查询与片段，空格按浏览器规则编码
+    ['/a/b?x=1#y', '/a/b'],
+    ['//x', '//x'],
+    ['/foo bar', '/foo%20bar'],
+    ['  /a/b?x=1#y  ', '/a/b'],
+    // GitHub 网址（https、主机大小写不敏感）
+    ['https://github.com/o/r/wiki', '/o/r/wiki'],
+    ['HTTPS://GIST.GITHUB.COM/u/1', '/u/1'],
+    // 非 GitHub 站点、http 协议、无法识别的输入
+    ['http://github.com/x', undefined],
+    ['https://example.com/x', undefined],
+    ['foo', undefined],
+    ['', undefined],
+    ['   ', undefined],
+  ])('%s → %s', (input, expected) => {
+    expect(excludedPathProbe(input)).toBe(expected)
   })
 })
 

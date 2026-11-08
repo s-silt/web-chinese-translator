@@ -60,6 +60,11 @@ const zhCN = {
   languageKo: '韩语',
 
   excludedPaths: '排除路径（GitHub）',
+  excludedPathTest: '测试网址',
+  excludedProbeHint: '输入 GitHub 网址或以 / 开头的路径，按上方规则（含未保存的修改）判断',
+  excludedProbeInvalid: '请输入 GitHub 网址或以 / 开头的路径',
+  excludedProbeExcluded: '{path} 命中规则 {pattern}，不汉化',
+  excludedProbeIncluded: '{path} 未命中任何规则，正常汉化',
   save: '保存',
   saved: '已保存',
   invalidFormat: '格式错误',

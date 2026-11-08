@@ -63,6 +63,11 @@ export default {
   languageKo: 'Korean',
 
   excludedPaths: 'Excluded paths (GitHub)',
+  excludedPathTest: 'Test a URL',
+  excludedProbeHint: 'Enter a GitHub URL or a path starting with /; checked against the rules above, saved or not',
+  excludedProbeInvalid: 'Enter a GitHub URL or a path starting with /',
+  excludedProbeExcluded: '{path} matches {pattern} and is not localized',
+  excludedProbeIncluded: '{path} matches no rule and is localized',
   save: 'Save',
   saved: 'Saved',
   invalidFormat: 'Invalid format',
