@@ -208,6 +208,7 @@ function createInstance(inputOnly = false): Instance {
       budgetCapped: engine?.isBudgetCapped() ?? false,
       failed: engine?.failedCount() ?? 0,
       error: lastError,
+      ...(engine === undefined ? {} : { progress: engine.progress() }),
     }
   }
 

@@ -17,6 +17,7 @@ import {
   splitLongText,
 } from './sites'
 import { inlineUnitFor, isInlineUnitCurrent, parseInlineResult, type InlineUnit } from './inline-units'
+import type { PageTranslationProgress } from './messages'
 import type { SourceLanguage, TargetLanguage } from './target-language'
 
 export interface DomEngine {
@@ -39,6 +40,8 @@ export interface DomEngine {
   resetBudget(): void
   /** 已放弃、仍保留原文的文本节点数。 */
   failedCount(): number
+  /** 模型翻译进度：已计额度字符、当前额度、已译段数、排队与在途段数。 */
+  progress(): PageTranslationProgress
   /** 只重新排队已放弃的文本，不动额度；页面未在自动翻译时返回 false。 */
   retryFailed(): boolean
 }
@@ -167,6 +170,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   const records = new WeakMap<Text, NodeRecord>()
   const attrRecords = new WeakMap<Element, Map<string, AttrRecord>>()
   const modifiedTexts = new Set<Text>()
+  /** 只含模型译文写入的节点：固定词典写入也进 modifiedTexts，不计入翻译进度。 */
+  const modelTexts = new Set<Text>()
   const modifiedElements = new Set<Element>()
   const pending = new Map<Text, AutoEntry>()
   /** 网站在已译文本末尾追加原文时，记下已译前缀，只翻译新增部分 */
@@ -195,6 +200,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   let disposed = false
   let cappedNotified = false
   let activeBatch: symbol | undefined
+  /** 在途批次的条目数：随 activeBatch 一起失效，progress 只在 activeBatch 存在时读取。 */
+  let activeBatchNodes = 0
   let notBefore = 0
   let retryFailures = 0
   let busyRetries = 0
@@ -221,6 +228,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   function forgetNode(node: Text): void {
     records.delete(node)
     modifiedTexts.delete(node)
+    modelTexts.delete(node)
     ownership.release(node, 'web')
   }
 
@@ -232,6 +240,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     }
     if (!tryReplaceText(node, source, translated)) return 0
     rememberWrite({ node, source, translated })
+    modelTexts.add(node)
     return 1
   }
 
@@ -917,6 +926,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       for (const entry of grouped.get(request) ?? []) pending.delete(entry.node)
     }
     const chars = texts.reduce((sum, request) => sum + request.length, 0)
+    activeBatchNodes = texts.reduce((sum, request) => sum + (grouped.get(request) ?? []).length, 0)
     const ticket = Symbol('batch')
     activeBatch = ticket
     const gen = generation
@@ -1040,7 +1050,10 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
             })
             const flags = tryReplaceTexts(changes)
             if (flags.every(Boolean)) {
-              changes.forEach((change) => rememberWrite({ node: change.node, source: change.source, translated: change.translated }))
+              changes.forEach((change) => {
+                rememberWrite({ node: change.node, source: change.source, translated: change.translated })
+                modelTexts.add(change.node)
+              })
             } else {
               // 任一成员写回失败：整单元回滚；不写 failedItems，成员退到逐节点路径
               changes.forEach((change, i) => {
@@ -1433,6 +1446,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       attrRecords.delete(element)
     }
     modifiedTexts.clear()
+    modelTexts.clear()
     modifiedElements.clear()
     releaseRecordCap()
   }
@@ -1484,6 +1498,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       document.removeEventListener('focusin', onHint, true)
       if (resizeTimer !== undefined) clearTimeout(resizeTimer)
       modifiedTexts.clear()
+      modelTexts.clear()
       modifiedElements.clear()
     },
     invalidate() {
@@ -1537,6 +1552,20 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     failedCount() {
       pruneFailed()
       return failedItems.size
+    },
+    progress() {
+      const limit = budgetNow()
+      let queued = pending.size
+      for (const batch of splitQueue) {
+        for (const entries of batch.grouped.values()) queued += entries.length
+      }
+      if (activeBatch !== undefined) queued += activeBatchNodes
+      return {
+        spent: Math.max(0, Math.trunc(spent)),
+        budget: Number.isFinite(limit) ? Math.trunc(limit) : 0,
+        translated: modelTexts.size,
+        queued,
+      }
     },
     retryFailed() {
       if (!autoActive()) return false

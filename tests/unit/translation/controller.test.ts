@@ -528,6 +528,16 @@ describe('controller 生命周期', () => {
     expect(reply.ok).toBe(true)
     expect(reply.status.supported).toBe(true)
   })
+
+  it('wt:status 附带模型翻译进度，数值来自引擎', async () => {
+    document.body.innerHTML = '<p>English text here.</p>'
+    await startPageTranslation()
+    await settle(2000)
+    const reply = (await triggerMessage({ type: 'wt:status' })) as {
+      status: { progress?: { spent: number; budget: number; translated: number; queued: number } }
+    }
+    expect(reply.status.progress).toEqual({ spent: 18, budget: 20_000, translated: 1, queued: 0 })
+  })
 })
 
 describe('controller 自动翻译失败处理', () => {

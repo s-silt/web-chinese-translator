@@ -23,8 +23,10 @@ import {
   isContentTranslationReply,
   type ContentTranslationMessage,
   type PageAction,
+  type PageTranslationProgress,
   type PageTranslationStatus,
 } from '../../translation/messages'
+import { STATUS_POLL_MS } from './usePopup'
 
 export type WtState =
   | 'loading'
@@ -106,6 +108,8 @@ export interface UseTranslationControls {
   readonly canResume: ComputedRef<boolean>
   readonly failedCount: ComputedRef<number>
   readonly canRetryFailed: ComputedRef<boolean>
+  /** 模型翻译进度；无活动、敏感页、范围外或总开关关闭时为 undefined */
+  readonly progress: ComputedRef<PageTranslationProgress | undefined>
   readonly autoError: Readonly<Ref<MessageKey | ''>>
   readonly busy: Readonly<Ref<boolean>>
   translatePage(): Promise<void>
@@ -228,6 +232,13 @@ export function useTranslationControls(): UseTranslationControls {
   const canRetryFailed = computed(() =>
     failedCount.value > 0 && status.value?.auto === true && !outOfScope.value,
   )
+  const progress = computed<PageTranslationProgress | undefined>(() => {
+    const page = status.value
+    if (!masterEnabled.value || outOfScope.value || sensitive.value || page === undefined) return undefined
+    const value = page.progress
+    if (value === undefined || !(page.auto || page.paused || page.capped)) return undefined
+    return value.spent > 0 || value.translated > 0 || value.queued > 0 ? value : undefined
+  })
 
   const state = computed<WtState>(() => {
     if (!loaded.value) return 'loading'
@@ -508,12 +519,29 @@ export function useTranslationControls(): UseTranslationControls {
     void load()
   })
 
+  // 弹出页打开期间定时刷新页面状态：大页面翻译进度随之更新；上一次未返回不重叠发起
+  let pollTimer: ReturnType<typeof setInterval> | undefined
+  let polling = false
+  async function pollStatus(): Promise<void> {
+    const current = tab.value
+    if (disposed || polling || busy.value || current === undefined) return
+    polling = true
+    const epoch = loadEpoch
+    const next = await queryStatus(current.id)
+    polling = false
+    // 轮询未取到状态（页面繁忙超时）时保留上次结果，避免进度和徽章闪断；load 与操作后的查询仍以 undefined 为真实状态
+    if (disposed || epoch !== loadEpoch || next === undefined) return
+    status.value = next
+  }
+
   onMounted(() => {
     void load()
+    pollTimer = setInterval(() => void pollStatus(), STATUS_POLL_MS)
   })
   onUnmounted(() => {
     disposed = true
     loadEpoch += 1
+    if (pollTimer !== undefined) clearInterval(pollTimer)
     unwatchSettings()
     unwatchConfig()
   })
@@ -542,6 +570,7 @@ export function useTranslationControls(): UseTranslationControls {
     canResume,
     failedCount,
     canRetryFailed,
+    progress,
     autoError,
     busy,
     translatePage,

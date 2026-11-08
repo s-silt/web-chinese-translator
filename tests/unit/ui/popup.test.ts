@@ -60,7 +60,7 @@ function section(wrapper: VueWrapper, title: string): DOMWrapper<Element> {
 /** 页面顶部的提示文字（读屏朗读的区域内），先显示的在前 */
 function toastTexts(wrapper: VueWrapper): string[] {
   return wrapper
-    .get('[aria-live="polite"]')
+    .get('.toast-host')
     .findAll('.ui-toast')
     .map((toast) => toast.text())
 }

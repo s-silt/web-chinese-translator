@@ -1840,6 +1840,9 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         ),
       ).toEqual({ ok: true })
       await expect(page.locator('#p1')).toHaveText('中文译文')
+      const progress = popup.locator('[data-test="wt-progress"]')
+      await expect(progress).toBeVisible()
+      await expect(progress).toContainText('已用')
       expect((await entryConfig(options)).autoOrigins).toEqual([])
       expect(
         await popup.evaluate(
