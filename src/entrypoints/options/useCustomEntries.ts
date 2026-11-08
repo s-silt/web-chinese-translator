@@ -145,6 +145,8 @@ export function useCustomEntries(): UseCustomEntries {
 
   /** 解析导入文件：全部与现有相同时直接提示，否则进入待确认预览，不写存储 */
   async function importText(text: string): Promise<boolean> {
+    // 开始处理新文件即作废上一轮预览
+    pending.value = undefined
     const imported = parseCustomEntriesJson(text)
     if (!imported) {
       toast.show('danger', 'invalidFormat')
@@ -179,6 +181,7 @@ export function useCustomEntries(): UseCustomEntries {
   }
 
   async function importFile(file: Blob): Promise<boolean> {
+    pending.value = undefined
     let text: string
     try {
       text = await file.text()

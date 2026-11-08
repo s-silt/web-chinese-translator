@@ -424,6 +424,42 @@ describe('useCustomEntries', () => {
     expect(shownToasts()).toEqual([{ tone: 'danger', key: 'readFailed' }])
   })
 
+  it('已有预览时再次导入：坏 JSON、读取失败与全同都作废旧预览，新文件确认只写新词条', async () => {
+    await customEntriesItem.setValue({ Code: '代码' })
+    const { importText, importFile, importPreview, confirmImport } = scoped(useCustomEntries)
+    await settle()
+
+    expect(await importText('{"Code": "源码"}')).toBe(true)
+    expect(importPreview.value?.changed).toEqual([{ source: 'Code', from: '代码', to: '源码' }])
+
+    expect(await importText('not json')).toBe(false)
+    expect(importPreview.value).toBeUndefined()
+    expect(await confirmImport(true)).toBe(false)
+    expect(await getCustomEntries()).toEqual({ Code: '代码' })
+
+    expect(await importText('{"Code": "源码"}')).toBe(true)
+    const broken = new Blob([])
+    vi.spyOn(broken, 'text').mockRejectedValue(new Error('无法读取'))
+    expect(await importFile(broken)).toBe(false)
+    expect(importPreview.value).toBeUndefined()
+    expect(await confirmImport(true)).toBe(false)
+    expect(await getCustomEntries()).toEqual({ Code: '代码' })
+
+    expect(await importText('{"Code": "源码"}')).toBe(true)
+    expect(await importText('{"Code": "代码"}')).toBe(true)
+    expect(importPreview.value).toBeUndefined()
+    expect(shownToasts()).toEqual([{ tone: 'success', key: 'importNothing', params: { count: 1 } }])
+    expect(await confirmImport(true)).toBe(false)
+    expect(await getCustomEntries()).toEqual({ Code: '代码' })
+
+    expect(await importText('{"Code": "源码"}')).toBe(true)
+    expect(await importFile(new File(['{"Wiki": "维基"}'], 'b.json'))).toBe(true)
+    expect(importPreview.value?.added).toEqual([['Wiki', '维基']])
+    expect(importPreview.value?.changed).toEqual([])
+    expect(await confirmImport(true)).toBe(true)
+    expect(await getCustomEntries()).toEqual({ Code: '代码', Wiki: '维基' })
+  })
+
   it('导出为 JSON 文件', async () => {
     await customEntriesItem.setValue({ Code: '代码' })
     const download = captureDownload()
