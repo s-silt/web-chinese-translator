@@ -144,9 +144,13 @@ Firefox 构建只有 GitHub 规则与关于，分组标题照常显示，空组�
 - 敏感页面徽章显示「已跳过」。
 - GitHub 页面的词典行始终显示 GitHub 汉化引擎的状态（已翻译、已排除等）。
 
+## 0.3.0 补齐
+
+- 自定义词条导入预览：`useCustomEntries.importText` 只解析并生成 `previewImport` 结果（新增 / 覆盖 / 相同，随词条变化实时重算），`confirmImport(overwrite)` 才写入；可只导入新增。
+- 排除规则预览匹配：「GitHub 规则 → 排除路径」下的测试网址框，按文本框当前内容（含未保存）用 `matchExcludedPath` 实时显示命中的规则。
+- 大页面实时进度：`PageTranslationStatus.progress`（`spent` / `budget` / `translated` / `queued`）由引擎 `progress()` 提供；弹出页每 `STATUS_POLL_MS` 轮询一次页面状态，超时保留上次结果。视口外尚未排队的文字不计入，因此不显示总数或百分比完成度，进度条表示单页额度用量。
+
 ## 不在本轮实现（后续）
 
-- 自定义词条批量编辑与导入预览（需要改 `useCustomEntries` 的导入流程，先解析成 diff 再确认）。
-- 排除规则输入后预览匹配（需要一个当前标签页 URL 输入框 + `isPathExcluded` 实时计算）。
-- 大页面实时进度（内容脚本的 `PageTranslationStatus` 没有已完成/总数字段，需扩展协议）。
+- 自定义词条批量编辑（多选删除、批量改写）。
 - 浮动入口已有位置记忆（`FloatingPosition`），自定义外观留待后续。
