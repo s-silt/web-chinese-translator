@@ -26,6 +26,20 @@
         {{ siteExcluded ? t('includePage') : t('wtExcludeSite') }}
       </UiButton>
     </div>
+    <div v-if="progress" class="popup-card-progress" data-test="wt-progress">
+      <div
+        v-if="progress.budget > 0"
+        class="popup-card-meter"
+        role="progressbar"
+        :aria-label="t('wtProgressLabel')"
+        aria-valuemin="0"
+        :aria-valuemax="progress.budget"
+        :aria-valuenow="Math.min(progress.spent, progress.budget)"
+      >
+        <span :style="{ width: `${percent}%` }"></span>
+      </div>
+      <span data-test="wt-progress-text">{{ progressText }}</span>
+    </div>
     <div v-if="failedCount > 0 && !outOfScope" class="popup-card-failed">
       <span data-test="wt-failed">{{ t('wtFailedCount', { count: failedCount }) }}</span>
       <UiButton v-if="canRetryFailed" size="sm" data-test="wt-retry-failed" :disabled="busy" @click="retryFailed">
@@ -59,7 +73,7 @@ import {
   WT_STATE_MESSAGE,
 } from './useTranslationControls'
 
-const { t } = useI18n()
+const { t, language } = useI18n()
 const {
   origin,
   host,
@@ -69,6 +83,7 @@ const {
   canResume,
   failedCount,
   canRetryFailed,
+  progress,
   outOfScope,
   busy,
   configurationReady,
@@ -103,6 +118,26 @@ function onPrimary(): void {
   else if (canResume.value) void resume()
   else void translatePage()
 }
+
+const percent = computed(() => {
+  const value = progress.value
+  if (value === undefined || value.budget <= 0) return 0
+  return Math.min(100, Math.round((value.spent / value.budget) * 100))
+})
+
+const progressText = computed(() => {
+  const value = progress.value
+  if (value === undefined) return ''
+  const format = new Intl.NumberFormat(language.value, { notation: 'compact', maximumFractionDigits: 1 })
+  const parts: string[] = [
+    value.budget > 0
+      ? t('wtProgressUsed', { used: format.format(value.spent), limit: format.format(value.budget) })
+      : t('wtProgressUsedUnlimited', { used: format.format(value.spent) }),
+  ]
+  if (value.translated > 0) parts.push(t('wtProgressTranslated', { count: value.translated }))
+  if (value.queued > 0) parts.push(t('wtProgressQueued', { count: value.queued }))
+  return parts.join(' · ')
+})
 </script>
 
 <style scoped>
@@ -134,6 +169,32 @@ function onPrimary(): void {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+}
+
+.popup-card-progress {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--gcn-fg-muted);
+}
+
+.popup-card-progress > span:last-child {
+  overflow-wrap: anywhere;
+}
+
+.popup-card-meter {
+  height: 4px;
+  overflow: hidden;
+  background: var(--gcn-bg-muted);
+  border-radius: 999px;
+}
+
+.popup-card-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--gcn-accent);
+  border-radius: inherit;
 }
 
 .popup-card-failed {

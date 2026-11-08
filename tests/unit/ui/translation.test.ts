@@ -7,6 +7,7 @@ import { connectionKindFromReply } from '../../../src/entrypoints/options/connec
 import TranslationControls from '../../../src/entrypoints/popup/TranslationControls.vue'
 import PageStatusCard from '../../../src/entrypoints/popup/PageStatusCard.vue'
 import { provideTranslationControls, WT_STATE_MESSAGE } from '../../../src/entrypoints/popup/useTranslationControls'
+import { STATUS_POLL_MS } from '../../../src/entrypoints/popup/usePopup'
 import en from '../../../src/i18n/en'
 import { settingsItem, DEFAULT_SETTINGS } from '../../../src/shared/settings'
 import { DEFAULT_TRANSLATION_CONFIG, type TranslationConfig } from '../../../src/translation/config'
@@ -1855,6 +1856,202 @@ describe('弹出页站点控制', () => {
     } finally {
       wrapper.unmount()
       clearToasts()
+    }
+  })
+
+  const ACTIVE_STATUS = {
+    supported: true,
+    fixed: false,
+    auto: true,
+    paused: false,
+    capped: false,
+    failed: 0,
+    error: '',
+  }
+
+  function progressStatus(progress: unknown, flags: Record<string, unknown> = {}): unknown {
+    return { ok: true, status: { ...ACTIVE_STATUS, ...flags, progress } }
+  }
+
+  it('模型翻译进度：额度进度条与已用/已译/在途文字', async () => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    tabAndStatus('https://example.com/', progressStatus({ spent: 12000, budget: 20000, translated: 3, queued: 2 }))
+    replies({ 'wt:get-config': () => ({ ok: true, config: CONFIG }) })
+    const wrapper = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    const meter = wrapper.get('[data-test="wt-progress"] .popup-card-meter')
+    expect(meter.attributes('role')).toBe('progressbar')
+    expect(meter.attributes('aria-label')).toBe(en.wtProgressLabel)
+    expect(meter.attributes('aria-valuemin')).toBe('0')
+    expect(meter.attributes('aria-valuemax')).toBe('20000')
+    expect(meter.attributes('aria-valuenow')).toBe('12000')
+    expect(wrapper.get('[data-test="wt-progress-text"]').text()).toBe(
+      '12K / 20K characters used · 3 translated · 2 in progress',
+    )
+    wrapper.unmount()
+  })
+
+  it('模型翻译进度：不限额度时无进度条', async () => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    tabAndStatus('https://example.com/', progressStatus({ spent: 1500, budget: 0, translated: 0, queued: 1 }))
+    replies({ 'wt:get-config': () => ({ ok: true, config: CONFIG }) })
+    const wrapper = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.find('.popup-card-meter').exists()).toBe(false)
+    expect(wrapper.get('[data-test="wt-progress-text"]').text()).toBe(
+      '1.5K characters used (no limit) · 1 in progress',
+    )
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['无翻译活动', {}, { spent: 0, budget: 20000, translated: 0, queued: 0 }, {}],
+    ['敏感页', { url: 'https://accounts.google.com/' }, { spent: 12000, budget: 20000, translated: 3, queued: 2 }, {}],
+    [
+      '范围外',
+      { url: 'https://example.com/' },
+      { spent: 12000, budget: 20000, translated: 3, queued: 2 },
+      { config: { ...CONFIG, siteScopeMode: 'include' as const, siteScopeHosts: ['other.example'] } },
+    ],
+    ['总开关关闭', { url: 'https://example.com/', disabled: true }, { spent: 12000, budget: 20000, translated: 3, queued: 2 }, {}],
+    [
+      '无自动/暂停/上限状态',
+      { url: 'https://example.com/' },
+      { spent: 12000, budget: 20000, translated: 3, queued: 2 },
+      { flags: { auto: false, paused: false, capped: false } },
+    ],
+  ] as const)('进度不显示：%s', async (_name, setup, progress, extra) => {
+    const { url = 'https://example.com/', disabled = false } = setup as { url?: string; disabled?: boolean }
+    const { config = CONFIG, flags = {} } = extra as { config?: TranslationConfig; flags?: Record<string, unknown> }
+    await settingsItem.setValue({ ...DEFAULT_SETTINGS, enabled: !disabled })
+    tabAndStatus(url, progressStatus(progress, flags))
+    replies({ 'wt:get-config': () => ({ ok: true, config }) })
+    const wrapper = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.find('[data-test="wt-progress"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('状态卡每 1.5 秒轮询页面状态，进度文字随之更新；卸载后停止', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      await settingsItem.setValue(DEFAULT_SETTINGS)
+      let spent = 100
+      const send = vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async () => ({
+        ok: true,
+        status: {
+          ...ACTIVE_STATUS,
+          progress: { spent, budget: 20000, translated: 1, queued: 0 },
+        },
+      }))
+      vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(
+        async () => [{ id: 9, url: 'https://example.com/' }] as never,
+      )
+      replies({ 'wt:get-config': () => ({ ok: true, config: CONFIG }) })
+      const wrapper = mountStatusCard()
+      await flushPromises()
+      await flushPromises()
+      expect(wrapper.get('[data-test="wt-progress-text"]').text()).toBe('100 / 20K characters used · 1 translated')
+
+      spent = 24000
+      vi.advanceTimersByTime(STATUS_POLL_MS)
+      await flushPromises()
+      await flushPromises()
+      expect(send.mock.calls.length).toBeGreaterThanOrEqual(2)
+      expect(wrapper.get('[data-test="wt-progress-text"]').text()).toBe('24K / 20K characters used · 1 translated')
+
+      const calls = send.mock.calls.length
+      wrapper.unmount()
+      vi.advanceTimersByTime(STATUS_POLL_MS * 3)
+      await flushPromises()
+      expect(send.mock.calls.length).toBe(calls)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('轮询请求未返回时不重叠发起', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      await settingsItem.setValue(DEFAULT_SETTINGS)
+      const reply = progressStatus({ spent: 100, budget: 20000, translated: 1, queued: 0 })
+      let release!: (value: unknown) => void
+      const gate = new Promise((resolve) => {
+        release = resolve
+      })
+      const send = vi
+        .spyOn(fakeBrowser.tabs, 'sendMessage')
+        .mockImplementationOnce(async () => reply)
+        .mockImplementation(() => gate)
+      vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(
+        async () => [{ id: 9, url: 'https://example.com/' }] as never,
+      )
+      replies({ 'wt:get-config': () => ({ ok: true, config: CONFIG }) })
+      const wrapper = mountStatusCard()
+      await flushPromises()
+      await flushPromises()
+      expect(send).toHaveBeenCalledTimes(1)
+
+      vi.advanceTimersByTime(STATUS_POLL_MS)
+      await flushPromises()
+      expect(send).toHaveBeenCalledTimes(2)
+      vi.advanceTimersByTime(STATUS_POLL_MS)
+      await flushPromises()
+      expect(send).toHaveBeenCalledTimes(2)
+
+      release(reply)
+      await flushPromises()
+      vi.advanceTimersByTime(STATUS_POLL_MS)
+      await flushPromises()
+      expect(send).toHaveBeenCalledTimes(3)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('轮询超时不清空状态：进度与徽章保持，恢复后更新', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      await settingsItem.setValue(DEFAULT_SETTINGS)
+      let spent = 100
+      let fail = false
+      vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async () => {
+        if (fail) throw new Error('timeout')
+        return {
+          ok: true,
+          status: { ...ACTIVE_STATUS, progress: { spent, budget: 20000, translated: 1, queued: 0 } },
+        }
+      })
+      vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(
+        async () => [{ id: 9, url: 'https://example.com/' }] as never,
+      )
+      replies({ 'wt:get-config': () => ({ ok: true, config: CONFIG }) })
+      const wrapper = mountStatusCard()
+      await flushPromises()
+      await flushPromises()
+      const badge = wrapper.get('[data-test="wt-page-state"]').text()
+      expect(wrapper.get('[data-test="wt-progress-text"]').text()).toBe('100 / 20K characters used · 1 translated')
+
+      fail = true
+      vi.advanceTimersByTime(STATUS_POLL_MS)
+      await flushPromises()
+      await flushPromises()
+      expect(wrapper.get('[data-test="wt-progress-text"]').text()).toBe('100 / 20K characters used · 1 translated')
+      expect(wrapper.get('[data-test="wt-page-state"]').text()).toBe(badge)
+
+      fail = false
+      spent = 5000
+      vi.advanceTimersByTime(STATUS_POLL_MS)
+      await flushPromises()
+      await flushPromises()
+      expect(wrapper.get('[data-test="wt-progress-text"]').text()).toBe('5K / 20K characters used · 1 translated')
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
     }
   })
 })

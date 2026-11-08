@@ -22,6 +22,24 @@ describe('wt:read-selection 消息与回复校验', () => {
     }
   })
 
+  it('状态 progress 缺省有效；存在时四字段必须是非负安全整数', () => {
+    const message = { type: 'wt:status' } as const
+    const status = { supported: true, fixed: false, auto: true, paused: false, capped: false, failed: 0, error: '' }
+    const progress = { spent: 10, budget: 20000, translated: 3, queued: 2 }
+    expect(isContentTranslationReply({ ok: true, status }, message)).toBe(true)
+    expect(isContentTranslationReply({ ok: true, status: { ...status, progress } }, message)).toBe(true)
+    for (const bad of [
+      { ...progress, spent: -1 },
+      { ...progress, budget: 1.5 },
+      { ...progress, translated: '3' },
+      { spent: 1, budget: 2, translated: 3 },
+      'progress',
+      42,
+    ]) {
+      expect(isContentTranslationReply({ ok: true, status: { ...status, progress: bad } }, message)).toBe(false)
+    }
+  })
+
   it('自动弹窗仅接受布尔补丁及布尔配置回复', () => {
     const message = { type: 'wt:save-config', patch: { autoInteractionEnabled: false } } as const
     expect(isTranslationMessage(message)).toBe(true)

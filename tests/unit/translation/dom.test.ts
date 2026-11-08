@@ -2851,3 +2851,65 @@ it('脱离 DOM 的节点在 GitHub 引擎 stop 后重挂载，不再阻塞通用
     legacy.stop()
   }
 })
+
+describe('翻译进度', () => {
+  it('排队、在途、已译与额度随批次推进，缓存字符不计入', async () => {
+    document.body.innerHTML = '<p>First sentence here.</p><p>Second sentence here.</p>'
+    engine = makeEngine({ auto: true, autoBudget: 1000 })
+    engine.start()
+    await vi.advanceTimersByTimeAsync(0)
+    // 扫描完成、批次未发出：两段排队，尚未计入额度
+    expect(engine.progress()).toEqual({ spent: 0, budget: 1000, translated: 0, queued: 2 })
+
+    await settle()
+    // 在途：条目计入 queued，字符已预扣额度
+    const chars = 'First sentence here.'.length + 'Second sentence here.'.length
+    expect(engine.progress()).toEqual({ spent: chars, budget: 1000, translated: 0, queued: 2 })
+
+    batches[0]?.apply(['第一句', '第二句'], undefined, 10)
+    await settle()
+    expect(engine.progress()).toEqual({ spent: chars - 10, budget: 1000, translated: 2, queued: 0 })
+  })
+
+  it('固定词典写入不计入已译段数', async () => {
+    document.body.innerHTML = '<button>Settings</button><p>English text here.</p>'
+    engine = makeEngine({ fixed: true, auto: true, autoBudget: 1000 })
+    engine.start()
+    await settle()
+    // 固定词库先写按钮；模型批次仍在途或已应用
+    const button = document.querySelector('button')!
+    expect(button.textContent).toBe('设置')
+    const before = engine.progress().translated
+    for (const batch of batches.splice(0)) batch.apply(batch.texts.map(() => '译文'))
+    await settle()
+    expect(engine.progress().translated).toBe(before + 1)
+  })
+
+  it('额度不限时 budget 为 0；追加份数与重置反映在 progress', async () => {
+    document.body.innerHTML = '<p>English text here</p><p>Another sentence.</p>'
+    engine = makeEngine({ auto: true, autoBudget: 0 })
+    engine.start()
+    await settle()
+    expect(engine.progress().budget).toBe(0)
+    for (const batch of batches.splice(0)) batch.apply(batch.texts.map(() => '译文'))
+    await settle()
+    engine.dispose()
+    engine = undefined
+
+    document.body.innerHTML = '<p>English text here</p><p>Another sentence.</p>'
+    engine = makeEngine({ auto: true, autoBudget: 20 })
+    engine.start()
+    await settle()
+    batches[0]?.apply(['译文'])
+    await settle()
+    expect(engine.isCapped()).toBe(true)
+    expect(engine.progress().budget).toBe(20)
+    engine.extendBudget()
+    await settle()
+    expect(engine.progress().budget).toBe(40)
+    batches.at(-1)?.apply(['译文'])
+    await settle()
+    engine.resetBudget()
+    expect(engine.progress()).toEqual({ spent: 0, budget: 20, translated: 2, queued: 0 })
+  })
+})

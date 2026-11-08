@@ -168,6 +168,17 @@ export type ContentTranslationMessage =
   | { type: 'wt:refresh-input-frame' }
   | { type: 'wt:stop-input-frame' }
 
+export interface PageTranslationProgress {
+  /** 本页已计入额度的字符数（缓存命中不计） */
+  readonly spent: number
+  /** 当前额度，含「继续翻译」追加的份数；0 表示不限 */
+  readonly budget: number
+  /** 当前保留模型译文的文本段数 */
+  readonly translated: number
+  /** 排队、拆分重发或请求中的文本段数（尚未进入视口的不算） */
+  readonly queued: number
+}
+
 export interface PageTranslationStatus {
   readonly supported: boolean
   readonly fixed: boolean
@@ -178,6 +189,7 @@ export interface PageTranslationStatus {
   /** 已放弃、仍保留原文的文本段数。 */
   readonly failed: number
   readonly error: string
+  readonly progress?: PageTranslationProgress
 }
 
 interface ContentPayloads {
@@ -494,6 +506,15 @@ export function isContentTranslationMessage(value: unknown): value is ContentTra
   }
 }
 
+function isPageTranslationProgress(value: unknown): value is PageTranslationProgress {
+  return (
+    isRecord(value) &&
+    ['spent', 'budget', 'translated', 'queued'].every(
+      (key) => Number.isSafeInteger(value[key]) && (value[key] as number) >= 0,
+    )
+  )
+}
+
 export function isPageTranslationStatus(value: unknown): value is PageTranslationStatus {
   return (
     isRecord(value) &&
@@ -505,7 +526,8 @@ export function isPageTranslationStatus(value: unknown): value is PageTranslatio
     (value.budgetCapped === undefined || typeof value.budgetCapped === 'boolean') &&
     Number.isSafeInteger(value.failed) &&
     (value.failed as number) >= 0 &&
-    typeof value.error === 'string'
+    typeof value.error === 'string' &&
+    (value.progress === undefined || isPageTranslationProgress(value.progress))
   )
 }
 
