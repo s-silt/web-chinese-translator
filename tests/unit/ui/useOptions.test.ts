@@ -288,29 +288,102 @@ describe('useCustomEntries', () => {
     expect(await getCustomEntries()).toEqual({ Code: '代码', Issues: '议题' })
   })
 
-  it('导入合法 JSON：合并并提示条数', async () => {
+  it('导入合法 JSON：先预览不写入，确认后合并并提示条数', async () => {
     await customEntriesItem.setValue({ Code: '代码', Issues: '议题' })
-    const { importText } = scoped(useCustomEntries)
+    const { importText, importPreview, confirmImport } = scoped(useCustomEntries)
     await settle()
     expect(await importText('{"Issues": "问题", "Wiki": "维基", "Bad": 1}')).toBe(true)
+    // 解析成功但不写存储：Issues 译文不同算覆盖，Wiki 算新增
+    expect(await getCustomEntries()).toEqual({ Code: '代码', Issues: '议题' })
+    expect(importPreview.value?.added).toEqual([['Wiki', '维基']])
+    expect(importPreview.value?.changed).toEqual([{ source: 'Issues', from: '议题', to: '问题' }])
+    expect(shownToasts()).toEqual([])
+
+    expect(await confirmImport(true)).toBe(true)
+    expect(importPreview.value).toBeUndefined()
     expect(shownToasts()).toEqual([{ tone: 'success', key: 'imported', params: { count: 2 } }])
     expect(await getCustomEntries()).toEqual({ Code: '代码', Issues: '问题', Wiki: '维基' })
   })
 
+  it('确认时只导入新增：已有原文保留现有译文', async () => {
+    await customEntriesItem.setValue({ Code: '代码', Issues: '议题' })
+    const { importText, confirmImport } = scoped(useCustomEntries)
+    await settle()
+    await importText('{"Issues": "问题", "Wiki": "维基"}')
+    expect(await confirmImport(false)).toBe(true)
+    expect(shownToasts()).toEqual([{ tone: 'success', key: 'imported', params: { count: 1 } }])
+    expect(await getCustomEntries()).toEqual({ Code: '代码', Issues: '议题', Wiki: '维基' })
+  })
+
+  it('取消导入：不写入，预览消失', async () => {
+    await customEntriesItem.setValue({ Code: '代码' })
+    const { importText, importPreview, cancelImport } = scoped(useCustomEntries)
+    await settle()
+    await importText('{"Wiki": "维基"}')
+    expect(importPreview.value).toBeDefined()
+    cancelImport()
+    expect(importPreview.value).toBeUndefined()
+    expect(await getCustomEntries()).toEqual({ Code: '代码' })
+  })
+
+  it('全部相同：提示没有新词条，不进预览', async () => {
+    await customEntriesItem.setValue({ Code: '代码' })
+    const { importText, importPreview } = scoped(useCustomEntries)
+    await settle()
+    expect(await importText('{"Code": "代码"}')).toBe(true)
+    expect(importPreview.value).toBeUndefined()
+    expect(shownToasts()).toEqual([{ tone: 'success', key: 'importNothing', params: { count: 1 } }])
+    expect(await getCustomEntries()).toEqual({ Code: '代码' })
+  })
+
+  it('预览打开期间词条被其他页面改动：预览实时重算，确认按最新词条合并', async () => {
+    await customEntriesItem.setValue({ Code: '代码' })
+    const { importText, importPreview, confirmImport } = scoped(useCustomEntries)
+    await settle()
+    await importText('{"Issues": "问题", "Wiki": "维基"}')
+    expect(importPreview.value?.added).toHaveLength(2)
+
+    // 另一个标签页先加了 Issues：预览里它从新增变为覆盖
+    await customEntriesItem.setValue({ Code: '代码', Issues: '议题' })
+    await settle()
+    expect(importPreview.value?.added).toEqual([['Wiki', '维基']])
+    expect(importPreview.value?.changed).toEqual([{ source: 'Issues', from: '议题', to: '问题' }])
+
+    expect(await confirmImport(true)).toBe(true)
+    expect(shownToasts()).toEqual([{ tone: 'success', key: 'imported', params: { count: 2 } }])
+    expect(await getCustomEntries()).toEqual({ Code: '代码', Issues: '问题', Wiki: '维基' })
+  })
+
+  it('确认保存失败：保留预览可重试', async () => {
+    await customEntriesItem.setValue({ Code: '代码' })
+    const { importText, importPreview, confirmImport } = scoped(useCustomEntries)
+    await settle()
+    await importText('{"Wiki": "维基"}')
+    failStorage('local', 'set')
+    expect(await confirmImport(true)).toBe(false)
+    expect(shownToasts()).toEqual([{ tone: 'danger', key: 'saveFailed' }])
+    expect(importPreview.value?.added).toEqual([['Wiki', '维基']])
+  })
+
   it.each(['not json', '["Code"]', '{"Bad": 1}'])('导入 %j → 格式错误，不写入', async (text) => {
     await customEntriesItem.setValue({ Code: '代码' })
-    const { importText } = scoped(useCustomEntries)
+    const { importText, importPreview } = scoped(useCustomEntries)
     await settle()
     expect(await importText(text)).toBe(false)
+    expect(importPreview.value).toBeUndefined()
     expect(shownToasts()).toEqual([{ tone: 'danger', key: 'invalidFormat' }])
     expect(await getCustomEntries()).toEqual({ Code: '代码' })
   })
 
-  it('导入文件；读取失败 → 读取失败', async () => {
-    const { importFile } = scoped(useCustomEntries)
+  it('导入文件；坏 JSON 与读取失败照旧', async () => {
+    const { importFile, confirmImport } = scoped(useCustomEntries)
     await settle()
     expect(await importFile(new File(['{"Code": "代码"}'], 'entries.json'))).toBe(true)
+    expect(await confirmImport(true)).toBe(true)
     expect(shownToasts()).toEqual([{ tone: 'success', key: 'imported', params: { count: 1 } }])
+
+    expect(await importFile(new File(['["Code"]'], 'bad.json'))).toBe(false)
+    expect(shownToasts()).toEqual([{ tone: 'danger', key: 'invalidFormat' }])
 
     const broken = new Blob([])
     vi.spyOn(broken, 'text').mockRejectedValue(new Error('无法读取'))

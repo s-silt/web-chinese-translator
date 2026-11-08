@@ -10,10 +10,12 @@ import {
   mergeEntries,
   normalizeEntry,
   parseCustomEntriesJson,
+  previewImport,
   removeEntry,
   serializeEntries,
   type EntryEditResult,
   type EntryPair,
+  type ImportPreview,
 } from '../../shared/custom-entries'
 import { getCustomEntries, setCustomEntries, watchCustomEntries, type CustomEntries } from '../../shared/settings'
 import { sendToBackground } from '../../shared/tab-messages'
@@ -34,6 +36,11 @@ export interface UseCustomEntries {
   remove(source: string): Promise<boolean>
   importText(text: string): Promise<boolean>
   importFile(file: Blob): Promise<boolean>
+  /** 待确认导入的预览；没有待确认导入时为 undefined。随词条变化实时重算 */
+  readonly importPreview: ComputedRef<ImportPreview | undefined>
+  /** 确认导入：overwrite 为 false 时只写入新增词条 */
+  confirmImport(overwrite: boolean): Promise<boolean>
+  cancelImport(): void
   exportFile(): void
 }
 
@@ -56,6 +63,8 @@ export function useCustomEntries(): UseCustomEntries {
   const query = ref('')
   const loadFailed = ref(false)
   const toast = createToastSource()
+  /** 已解析、待用户确认的导入内容 */
+  const pending = shallowRef<CustomEntries>()
   let changed = false
 
   const stopWatch = watchCustomEntries((next) => {
@@ -76,6 +85,9 @@ export function useCustomEntries(): UseCustomEntries {
 
   const rows = computed(() => filterEntries(entries.value, query.value))
   const total = computed(() => Object.keys(entries.value).length)
+  const importPreview = computed<ImportPreview | undefined>(() =>
+    pending.value === undefined ? undefined : previewImport(entries.value, pending.value),
+  )
 
   const rowIds = new Map<string, number>()
   let nextRowId = 0
@@ -131,15 +143,39 @@ export function useCustomEntries(): UseCustomEntries {
     return save(removeEntry(entries.value, source))
   }
 
+  /** 解析导入文件：全部与现有相同时直接提示，否则进入待确认预览，不写存储 */
   async function importText(text: string): Promise<boolean> {
     const imported = parseCustomEntriesJson(text)
     if (!imported) {
       toast.show('danger', 'invalidFormat')
       return false
     }
-    if (!(await save(mergeEntries(entries.value, imported)))) return false
-    toast.show('success', 'imported', { count: Object.keys(imported).length })
+    const preview = previewImport(entries.value, imported)
+    if (preview.added.length === 0 && preview.changed.length === 0) {
+      toast.show('success', 'importNothing', { count: preview.unchanged })
+      return true
+    }
+    pending.value = imported
+    toast.clear()
     return true
+  }
+
+  async function confirmImport(overwrite: boolean): Promise<boolean> {
+    const current = pending.value
+    if (current === undefined) return false
+    // 按确认这一刻的词条算条数：保存后 entries 已是合并结果，再算会全部相同
+    const preview = previewImport(entries.value, current)
+    if (!(await save(mergeEntries(entries.value, current, overwrite)))) return false
+    pending.value = undefined
+    toast.show('success', 'imported', {
+      count: overwrite ? preview.added.length + preview.changed.length : preview.added.length,
+    })
+    return true
+  }
+
+  function cancelImport(): void {
+    pending.value = undefined
+    toast.clear()
   }
 
   async function importFile(file: Blob): Promise<boolean> {
@@ -157,5 +193,21 @@ export function useCustomEntries(): UseCustomEntries {
     downloadText(EXPORT_FILE_NAME, serializeEntries(entries.value))
   }
 
-  return { entries, query, rows, total, loadFailed, rowKey, add, edit, remove, importText, importFile, exportFile }
+  return {
+    entries,
+    query,
+    rows,
+    total,
+    loadFailed,
+    rowKey,
+    add,
+    edit,
+    remove,
+    importText,
+    importFile,
+    importPreview,
+    confirmImport,
+    cancelImport,
+    exportFile,
+  }
 }
