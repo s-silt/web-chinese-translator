@@ -75,22 +75,40 @@ test.describe('划词卡片风格', () => {
     return { context, extensionId }
   }
 
-  /** 拖选；headed 窗口焦点不稳时重试，每次先清空旧选区 */
-  async function dragText(page: Page, selector: string): Promise<void> {
+  /** 拖选；选区与期望不符时重试（最多 3 次），每次先清空旧选区。起止点取文本 Range 的首末行中线 */
+  async function dragText(page: Page, selector: string, expected: string): Promise<void> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       await page.bringToFront()
       await page.locator(selector).scrollIntoViewIfNeeded()
       await page.mouse.click(4, 4)
-      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
-      const box = await page.locator(selector).boundingBox()
-      if (box === null) throw new Error(`no box for ${selector}`)
-      await page.mouse.move(box.x + 2, box.y + 2)
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            getSelection()?.removeAllRanges()
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+          }),
+      )
+      const points = await page.locator(selector).evaluate((element) => {
+        const range = document.createRange()
+        range.selectNodeContents(element)
+        const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0)
+        const first = rects[0]
+        const last = rects.at(-1)
+        if (first === undefined || last === undefined) throw new Error('Fixture text is not visible')
+        return {
+          start: { x: first.left + 0.5, y: first.top + first.height / 2 },
+          end: { x: last.right - 0.5, y: last.top + last.height / 2 },
+        }
+      })
+      await page.mouse.move(points.start.x, points.start.y)
       await page.mouse.down()
-      await page.mouse.move(box.x + box.width - 2, box.y + box.height - 2, { steps: 8 })
+      await page.mouse.move(points.end.x, points.end.y, { steps: 8 })
       await page.mouse.up()
-      if ((await page.evaluate(() => getSelection()?.toString() ?? '')).length > 0) return
+      const selected = await page.evaluate(() => getSelection()?.toString() ?? '')
+      if (selected === expected) return
     }
-    throw new Error(`no selection for ${selector}`)
+    const actual = await page.evaluate(() => getSelection()?.toString() ?? '')
+    throw new Error(`selection mismatch for ${selector}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
   }
 
   for (const style of ['cyber', 'glass'] as const) {
@@ -132,8 +150,7 @@ test.describe('划词卡片风格', () => {
         await page.goto(targetUrl)
         await page.waitForSelector('#p1')
         await waitForSiteContentReady(options, page, { supported: true, refresh: true })
-        await dragText(page, '#p1')
-        expect(await page.evaluate(() => getSelection()?.toString())).toBe(PHYSICS)
+        await dragText(page, '#p1', PHYSICS)
         const panel = page.locator(`.panel[data-style="${style}"]`)
         await expect(panel).toBeVisible()
         // HUD 角标用 background-image 绘制，不得在 overflow:auto 面板上撑出滚动条
