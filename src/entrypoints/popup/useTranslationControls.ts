@@ -170,6 +170,14 @@ export function useTranslationControls(): UseTranslationControls {
   const pageError = ref('')
   let disposed = false
   let loadEpoch = 0
+  // 状态查询按发出顺序编号：较早发出的查询（如轮询）晚于较新的查询返回时丢弃，不覆盖较新的状态
+  let statusSeq = 0
+  let appliedStatusSeq = 0
+  function applyStatus(seq: number, next: PageTranslationStatus | undefined): void {
+    if (seq < appliedStatusSeq) return
+    appliedStatusSeq = seq
+    status.value = next
+  }
   const toast = createToastSource()
 
   const supported = computed(() => loaded.value && tab.value !== undefined)
@@ -268,12 +276,13 @@ export function useTranslationControls(): UseTranslationControls {
       getSettings().catch(() => undefined),
     ])
     if (disposed || epoch !== loadEpoch) return
+    const seq = ++statusSeq
     const nextStatus = active !== undefined ? await queryStatus(active.id) : undefined
     if (disposed || epoch !== loadEpoch) return
     masterEnabled.value = settings?.enabled === true
     tab.value = active
     config.value = reply.ok && reply.config !== undefined ? reply.config : undefined
-    status.value = nextStatus
+    applyStatus(seq, nextStatus)
     loaded.value = true
   }
 
@@ -351,7 +360,8 @@ export function useTranslationControls(): UseTranslationControls {
       if (disposed) return
       if (reply.ok && reply.config !== undefined) {
         config.value = reply.config
-        status.value = await queryStatus(current.id)
+        const seq = ++statusSeq
+        applyStatus(seq, await queryStatus(current.id))
         return
       }
       autoError.value = 'saveFailed'
@@ -397,7 +407,8 @@ export function useTranslationControls(): UseTranslationControls {
       if (disposed) return
       if (reply.ok && reply.config !== undefined) {
         config.value = reply.config
-        status.value = await queryStatus(current.id)
+        const seq = ++statusSeq
+        applyStatus(seq, await queryStatus(current.id))
         return
       }
       autoError.value = 'saveFailed'
@@ -467,7 +478,8 @@ export function useTranslationControls(): UseTranslationControls {
         return
       }
       if (action === 'restore') toast.show('success', 'wtRestored')
-      status.value = await queryStatus(current.id)
+      const seq = ++statusSeq
+      applyStatus(seq, await queryStatus(current.id))
     } finally {
       busy.value = false
     }
@@ -527,11 +539,12 @@ export function useTranslationControls(): UseTranslationControls {
     if (disposed || polling || busy.value || current === undefined) return
     polling = true
     const epoch = loadEpoch
+    const seq = ++statusSeq
     const next = await queryStatus(current.id)
     polling = false
     // 轮询未取到状态（页面繁忙超时）时保留上次结果，避免进度和徽章闪断；load 与操作后的查询仍以 undefined 为真实状态
     if (disposed || epoch !== loadEpoch || next === undefined) return
-    status.value = next
+    applyStatus(seq, next)
   }
 
   onMounted(() => {

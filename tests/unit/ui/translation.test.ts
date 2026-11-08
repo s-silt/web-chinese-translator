@@ -2054,6 +2054,65 @@ describe('弹出页站点控制', () => {
       vi.useRealTimers()
     }
   })
+
+  it('轮询结果晚于操作后的查询返回时丢弃，不覆盖新状态', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      await settingsItem.setValue(DEFAULT_SETTINGS)
+      vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(
+        async () => [{ id: 9, url: 'https://example.com/' }] as never,
+      )
+      const RUNNING = {
+        ok: true,
+        status: { ...ACTIVE_STATUS, progress: { spent: 100, budget: 20000, translated: 1, queued: 0 } },
+      }
+      const RESTORED = {
+        ok: true,
+        status: { supported: true, fixed: false, auto: false, paused: false, capped: false, failed: 0, error: '' },
+      }
+      let release!: (value: unknown) => void
+      const gate = new Promise((resolve) => {
+        release = resolve
+      })
+      const send = vi
+        .spyOn(fakeBrowser.tabs, 'sendMessage')
+        .mockImplementationOnce(async () => RUNNING)
+        .mockImplementationOnce(() => gate)
+        .mockImplementation(async () => RESTORED)
+      replies({
+        'wt:get-config': () => ({ ok: true, config: { ...CONFIG, autoOrigins: ['https://example.com'] } }),
+        'wt:page-action': () => ({ ok: true }),
+      })
+      const wrapper = mountStatusCard()
+      await flushPromises()
+      await flushPromises()
+      expect(wrapper.get('[data-test="wt-progress-text"]').text()).toBe('100 / 20K characters used · 1 translated')
+      expect(wrapper.get('[data-test="wt-translate-page"]').text()).toBe(en.wtRestore)
+
+      vi.advanceTimersByTime(STATUS_POLL_MS)
+      await flushPromises()
+      expect(send).toHaveBeenCalledTimes(2)
+
+      const badge = wrapper.get('[data-test="wt-page-state"]').text()
+      await wrapper.get('[data-test="wt-translate-page"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+      expect(send).toHaveBeenCalledTimes(3)
+      expect(wrapper.find('[data-test="wt-progress"]').exists()).toBe(false)
+      const restoredBadge = wrapper.get('[data-test="wt-page-state"]').text()
+      expect(restoredBadge).not.toBe(badge)
+
+      release(RUNNING)
+      await flushPromises()
+      await flushPromises()
+      expect(wrapper.find('[data-test="wt-progress"]').exists()).toBe(false)
+      expect(wrapper.get('[data-test="wt-page-state"]').text()).toBe(restoredBadge)
+      wrapper.unmount()
+      clearToasts()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('连接测试按钮与未保存改动', () => {
