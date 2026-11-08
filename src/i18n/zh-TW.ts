@@ -82,6 +82,12 @@ export default {
   readFailed: '讀取失敗',
   loadFailed: '載入失敗',
   imported: '已匯入 {count} 筆',
+  importPreview: '匯入預覽',
+  importSummary: '新增 {added} 筆，覆蓋 {changed} 筆，{unchanged} 筆與現有相同',
+  importConfirm: '確認匯入',
+  importAddedOnly: '只匯入新增',
+  importMore: '另有 {count} 筆未列出',
+  importNothing: '沒有新詞條，{count} 筆與現有相同',
 
   about: '關於',
   githubRepository: 'GitHub 漢化上游',

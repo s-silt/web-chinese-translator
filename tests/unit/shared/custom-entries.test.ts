@@ -5,6 +5,7 @@ import {
   mergeEntries,
   normalizeEntry,
   parseCustomEntriesJson,
+  previewImport,
   removeEntry,
   serializeEntries,
 } from '../../../src/shared/custom-entries'
@@ -114,6 +115,12 @@ describe('removeEntry / mergeEntries / filterEntries / serializeEntries', () => 
     })
   })
 
+  it('不覆盖时保留现有译文与顺序，只按导入顺序追加新增', () => {
+    const merged = mergeEntries({ B: '旧', A: '甲' }, { C: '丙', A: '新', B: '乙' }, false)
+    expect(merged).toEqual({ B: '旧', A: '甲', C: '丙' })
+    expect(Object.keys(merged)).toEqual(['B', 'A', 'C'])
+  })
+
   it('新添加的在前，按原文或译文筛选，不区分大小写', () => {
     const entries = { Code: '代码', Issues: '议题', 'Pull requests': '拉取请求' }
     expect(filterEntries(entries, '')).toEqual([
@@ -128,5 +135,25 @@ describe('removeEntry / mergeEntries / filterEntries / serializeEntries', () => 
 
   it('导出为缩进 JSON', () => {
     expect(serializeEntries({ Code: '代码' })).toBe('{\n  "Code": "代码"\n}\n')
+  })
+})
+
+describe('previewImport', () => {
+  it('分出新增、覆盖与相同，added 与 changed 按导入的键顺序', () => {
+    const preview = previewImport(
+      { Code: '代码', Issues: '议题' },
+      { Wiki: '维基', Issues: '问题', Code: '代码', Pulls: '拉取' },
+    )
+    expect(preview.added).toEqual([
+      ['Wiki', '维基'],
+      ['Pulls', '拉取'],
+    ])
+    expect(preview.changed).toEqual([{ source: 'Issues', from: '议题', to: '问题' }])
+    expect(preview.unchanged).toBe(1)
+  })
+
+  it('全部相同或都为空', () => {
+    expect(previewImport({ Code: '代码' }, { Code: '代码' })).toEqual({ added: [], changed: [], unchanged: 1 })
+    expect(previewImport({}, {})).toEqual({ added: [], changed: [], unchanged: 0 })
   })
 })

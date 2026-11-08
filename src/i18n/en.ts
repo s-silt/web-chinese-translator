@@ -83,6 +83,12 @@ export default {
   readFailed: 'Read failed',
   loadFailed: 'Load failed',
   imported: 'Imported {count}',
+  importPreview: 'Import preview',
+  importSummary: 'New: {added} · Overwrite: {changed} · Unchanged: {unchanged}',
+  importConfirm: 'Import',
+  importAddedOnly: 'Import new only',
+  importMore: '{count} more not shown',
+  importNothing: 'Nothing new; {count} already match',
 
   about: 'About',
   githubRepository: 'Upstream (github-chinese)',

@@ -80,6 +80,12 @@ const zhCN = {
   readFailed: '读取失败',
   loadFailed: '加载失败',
   imported: '已导入 {count} 条',
+  importPreview: '导入预览',
+  importSummary: '新增 {added} 条，覆盖 {changed} 条，{unchanged} 条与现有相同',
+  importConfirm: '确认导入',
+  importAddedOnly: '只导入新增',
+  importMore: '另有 {count} 条未列出',
+  importNothing: '没有新词条，{count} 条与现有相同',
 
   about: '关于',
   githubRepository: 'GitHub 汉化上游',

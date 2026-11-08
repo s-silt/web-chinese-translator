@@ -43,7 +43,10 @@ function headings(wrapper: VueWrapper): string[] {
   return wrapper.findAll('h2').map((item) => item.text())
 }
 
-function button(scope: VueWrapper | DOMWrapper<Element>, text: string): DOMWrapper<HTMLButtonElement> {
+function button(
+  scope: VueWrapper | DOMWrapper<Element> | Omit<DOMWrapper<Element>, 'exists'>,
+  text: string,
+): DOMWrapper<HTMLButtonElement> {
   const found = scope.findAll('button').find((item) => item.text() === text)
   if (!found) throw new Error(`未找到按钮：${text}`)
   return found as DOMWrapper<HTMLButtonElement>
@@ -470,20 +473,81 @@ describe.skipIf(!App)('设置页组件', () => {
       expect(create).not.toHaveBeenCalled()
     })
 
-    it('导入 JSON 后提示条数', async () => {
+    it('导入 JSON：先预览不写入，确认后写入并提示条数', async () => {
       await customEntriesItem.setValue({ Code: '代码' })
       const wrapper = await render()
+      const entries = section(wrapper, '自定义词条')
       await chooseFile(wrapper, '{"Issues": "议题", "Wiki": "维基"}')
+
+      const preview = entries.get('[data-test="import-preview"]')
+      expect(preview.get('[data-test="import-summary"]').text()).toContain('新增 2 条，覆盖 0 条，0 条与现有相同')
+      expect(preview.findAll('[data-test="import-preview-row"]')).toHaveLength(2)
+      // 预览打开时焦点在「确认导入」
+      expect(document.activeElement?.getAttribute('data-test')).toBe('import-confirm')
+      expect(await getCustomEntries()).toEqual({ Code: '代码' })
+
+      await button(preview, '确认导入').trigger('click')
+      await settle()
       expect(toastTexts(wrapper)).toEqual(['已导入 2 条'])
       expect(await getCustomEntries()).toEqual({ Code: '代码', Issues: '议题', Wiki: '维基' })
+      expect(entries.find('[data-test="import-preview"]').exists()).toBe(false)
       expect((wrapper.get('[data-test="import-file"]').element as HTMLInputElement).value).toBe('')
+    })
+
+    it('导入预览：覆盖项在前、显示旧译文删除线；「只导入新增」只写新增', async () => {
+      await customEntriesItem.setValue({ Code: '代码', Issues: '议题' })
+      const wrapper = await render()
+      const entries = section(wrapper, '自定义词条')
+      await chooseFile(wrapper, '{"Issues": "问题", "Wiki": "维基"}')
+
+      const preview = entries.get('[data-test="import-preview"]')
+      expect(preview.get('[data-test="import-summary"]').text()).toContain('新增 1 条，覆盖 1 条，0 条与现有相同')
+      const rows = preview.findAll('[data-test="import-preview-row"]')
+      expect(rows).toHaveLength(2)
+      expect(rows[0]!.text()).toContain('Issues')
+      expect(rows[0]!.get('del').text()).toBe('议题')
+      expect(rows[0]!.text()).toContain('问题')
+      expect(rows[1]!.text()).toContain('Wiki')
+
+      await button(preview, '只导入新增').trigger('click')
+      await settle()
+      expect(toastTexts(wrapper)).toEqual(['已导入 1 条'])
+      expect(await getCustomEntries()).toEqual({ Code: '代码', Issues: '议题', Wiki: '维基' })
+      expect(entries.find('[data-test="import-preview"]').exists()).toBe(false)
+    })
+
+    it('导入预览：无覆盖项时不显示「只导入新增」；取消不写入', async () => {
+      await customEntriesItem.setValue({ Code: '代码' })
+      const wrapper = await render()
+      const entries = section(wrapper, '自定义词条')
+      await chooseFile(wrapper, '{"Wiki": "维基"}')
+
+      const preview = entries.get('[data-test="import-preview"]')
+      expect(preview.find('[data-test="import-added-only"]').exists()).toBe(false)
+
+      await button(preview, '取消').trigger('click')
+      await settle()
+      expect(await getCustomEntries()).toEqual({ Code: '代码' })
+      expect(entries.find('[data-test="import-preview"]').exists()).toBe(false)
+      expect(toastTexts(wrapper)).toEqual([])
+    })
+
+    it('导入预览：只有覆盖项时「只导入新增」禁用', async () => {
+      await customEntriesItem.setValue({ Code: '代码' })
+      const wrapper = await render()
+      await chooseFile(wrapper, '{"Code": "源码"}')
+
+      const preview = section(wrapper, '自定义词条').get('[data-test="import-preview"]')
+      expect(button(preview, '只导入新增').element.disabled).toBe(true)
     })
 
     it('导入格式错误', async () => {
       const wrapper = await render()
+      const entries = section(wrapper, '自定义词条')
       await chooseFile(wrapper, '["Code"]')
       expect(toastTexts(wrapper)).toEqual(['格式错误'])
       expect(await getCustomEntries()).toEqual({})
+      expect(entries.find('[data-test="import-preview"]').exists()).toBe(false)
     })
 
     it('导出 JSON', async () => {
@@ -643,6 +707,10 @@ describe.skipIf(!App)('设置页组件', () => {
         await chooseFile(wrapper, '["Code"]')
         expect(viewportOf(wrapper).scrollTop).toBe(100 * ROW)
         await chooseFile(wrapper, '{"Issues": "议题"}')
+        // 先预览不写入，滚动位置不变；确认导入后才写入并回到顶部
+        expect(viewportOf(wrapper).scrollTop).toBe(100 * ROW)
+        await button(entries, '确认导入').trigger('click')
+        await settle()
         expect(viewportOf(wrapper).scrollTop).toBe(0)
         expect(inputAt(wrapper, 0, '原文').value).toBe('Issues')
       })

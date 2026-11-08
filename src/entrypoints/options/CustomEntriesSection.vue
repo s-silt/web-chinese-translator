@@ -18,6 +18,54 @@
       </div>
     </div>
 
+    <div
+      v-if="importPreview"
+      ref="previewBox"
+      class="import-preview"
+      role="region"
+      aria-labelledby="import-preview-title"
+      data-test="import-preview"
+    >
+      <h3 id="import-preview-title" class="import-preview-title">{{ t('importPreview') }}</h3>
+      <p class="import-summary" data-test="import-summary">
+        {{
+          t('importSummary', {
+            added: importPreview.added.length,
+            changed: importPreview.changed.length,
+            unchanged: importPreview.unchanged,
+          })
+        }}
+      </p>
+      <ul class="import-list">
+        <li
+          v-for="row in shownPreviewRows"
+          :key="`${row.kind}:${row.source}`"
+          class="import-row"
+          data-test="import-preview-row"
+        >
+          <span class="import-source">{{ row.source }}</span>
+          <del v-if="row.kind === 'changed'" class="import-old">{{ row.from }}</del>
+          <span class="import-arrow" aria-hidden="true">→</span>
+          <span class="import-target">{{ row.to }}</span>
+        </li>
+        <li v-if="previewMore > 0" class="import-more">{{ t('importMore', { count: previewMore }) }}</li>
+      </ul>
+      <div class="import-actions">
+        <UiButton variant="primary" data-test="import-confirm" @click="onConfirmImport(true)">
+          {{ t('importConfirm') }}
+        </UiButton>
+        <UiButton
+          v-if="importPreview.changed.length > 0"
+          :disabled="importPreview.added.length === 0"
+          data-test="import-added-only"
+          @click="onConfirmImport(false)"
+        >
+          {{ t('importAddedOnly') }}
+        </UiButton>
+        <UiButton data-test="import-cancel" @click="cancelImport">{{ t('cancel') }}</UiButton>
+      </div>
+    </div>
+
     <form class="entry-form" @submit.prevent="onAdd">
       <UiInput ref="sourceInput" v-model="source" :aria-label="t('source')" :placeholder="t('source')" />
       <UiInput v-model="target" :aria-label="t('target')" :placeholder="t('target')" />
@@ -66,7 +114,21 @@ import { useCustomEntries } from './useCustomEntries'
 const ROW_HEIGHT = 44
 
 const { t } = useI18n()
-const { query, rows, total, loadFailed, rowKey, add, edit, remove, importFile, exportFile } = useCustomEntries()
+const {
+  query,
+  rows,
+  total,
+  loadFailed,
+  rowKey,
+  add,
+  edit,
+  remove,
+  importFile,
+  importPreview,
+  confirmImport,
+  cancelImport,
+  exportFile,
+} = useCustomEntries()
 
 const source = ref('')
 const target = ref('')
@@ -85,6 +147,46 @@ const { items, scrollToTop, pin } = useVirtualList({
 watch(query, () => scrollToTop())
 
 const canAdd = computed(() => source.value.trim() !== '' && target.value.trim() !== '')
+
+/** 预览明细最多列出的行数，超出折叠为「另有 N 条」 */
+const PREVIEW_ROW_LIMIT = 100
+
+interface PreviewRow {
+  readonly kind: 'added' | 'changed'
+  readonly source: string
+  readonly from?: string
+  readonly to: string
+}
+
+/** 先覆盖项后新增项，与导入文件的键顺序一致 */
+const previewRows = computed<PreviewRow[]>(() => {
+  const preview = importPreview.value
+  if (preview === undefined) return []
+  return [
+    ...preview.changed.map((item) => ({ kind: 'changed' as const, source: item.source, from: item.from, to: item.to })),
+    ...preview.added.map(([source, to]) => ({ kind: 'added' as const, source, to })),
+  ]
+})
+const shownPreviewRows = computed(() => previewRows.value.slice(0, PREVIEW_ROW_LIMIT))
+const previewMore = computed(() => previewRows.value.length - shownPreviewRows.value.length)
+
+const previewBox = useTemplateRef<HTMLElement>('previewBox')
+
+// 预览打开时把焦点移到「确认导入」；词条变化引起的重算不抢焦点
+watch(
+  importPreview,
+  async (preview, before) => {
+    if (preview === undefined || before !== undefined) return
+    await nextTick()
+    previewBox.value?.querySelector<HTMLElement>('[data-test="import-confirm"]')?.focus()
+  },
+)
+
+/** 确认导入成功后新词条排在最前 */
+async function onConfirmImport(overwrite: boolean): Promise<void> {
+  if (await confirmImport(overwrite)) scrollToTop()
+}
+
 /** 列表为空时：没有词条（或读取失败），或搜索无结果 */
 const emptyMessage = computed<MessageKey>(() => {
   if (total.value > 0) return 'notFound'
@@ -137,8 +239,8 @@ async function onFileChange(event: Event): Promise<void> {
   const file = input.files?.[0]
   // 清空以便重复选择同一文件
   input.value = ''
-  // 新导入的词条在最前
-  if (file && (await importFile(file))) scrollToTop()
+  // 解析后先显示预览，确认时才写入（见 onConfirmImport）
+  if (file) await importFile(file)
 }
 </script>
 
@@ -201,5 +303,71 @@ async function onFileChange(event: Event): Promise<void> {
   background: var(--gcn-bg-muted);
   border: 1px dashed var(--gcn-border);
   border-radius: var(--gcn-radius-lg);
+}
+
+/* 导入预览：确认前不写入存储 */
+.import-preview {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: var(--gcn-bg-muted);
+  border: 1px solid var(--gcn-border);
+  border-radius: var(--gcn-radius-lg);
+}
+
+.import-preview-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.import-summary {
+  margin: 0;
+  font-size: 13px;
+  color: var(--gcn-fg-muted);
+}
+
+/* 明细限高，超出框内滚动 */
+.import-list {
+  max-height: 160px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.import-list > li + li {
+  border-top: 1px solid var(--gcn-border-muted);
+}
+
+.import-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  padding: 4px 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.import-row > * {
+  min-width: 0;
+}
+
+.import-old,
+.import-arrow,
+.import-more {
+  color: var(--gcn-fg-muted);
+}
+
+.import-more {
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 </style>
