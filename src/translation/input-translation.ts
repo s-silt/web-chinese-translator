@@ -11,7 +11,7 @@ import {
   isInputAutoReplaceDelay,
   isInputReplaceMode,
   type InputReplaceMode,
-} from './config'
+} from './input-replace-mode'
 import {
   isDiscordPlainEditor,
   readDiscordDraft,
