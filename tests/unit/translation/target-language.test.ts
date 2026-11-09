@@ -92,3 +92,16 @@ describe('isCandidateDraft', () => {
     expect(isCandidateDraft('Hello', 'en', 'en')).toBe(false)
   })
 })
+
+describe('isCandidateDraft 手动触发', () => {
+  it('自动检测下字形像目标语言的草稿：自动预览跳过，手动触发仍发送', () => {
+    // 无重音法语 → 英语、简体 → 繁体：字形无法区分
+    expect(isCandidateDraft('Bonjour le monde', 'auto', 'en')).toBe(false)
+    expect(isCandidateDraft('Bonjour le monde', 'auto', 'en', true)).toBe(true)
+    expect(isCandidateDraft('你好', 'auto', 'zh-TW')).toBe(false)
+    expect(isCandidateDraft('你好', 'auto', 'zh-TW', true)).toBe(true)
+    // 手动触发也不放行空白、无字母或源与目标相同
+    expect(isCandidateDraft('12345', 'auto', 'en', true)).toBe(false)
+    expect(isCandidateDraft('hello', 'en', 'en', true)).toBe(false)
+  })
+})

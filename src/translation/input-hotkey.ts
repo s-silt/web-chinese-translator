@@ -85,6 +85,8 @@ const SPECIAL_KEY_CANONICAL: Readonly<Record<string, string>> = {
   f10: 'F10',
   f11: 'F11',
   f12: 'F12',
+  // 「+」与分隔符冲突，规范写作 Plus
+  plus: 'Plus',
 }
 
 const BARE_ALLOWED_KEYS: ReadonlySet<string> = new Set([
@@ -105,6 +107,7 @@ const BARE_ALLOWED_KEYS: ReadonlySet<string> = new Set([
 
 function canonicalKeyName(raw: string): string | undefined {
   if (raw === ' ') return 'Space'
+  if (raw === '+') return 'Plus'
   const trimmed = raw.trim()
   if (trimmed === '') return undefined
   const lower = trimmed.toLowerCase()
@@ -120,7 +123,7 @@ function canonicalKeyName(raw: string): string | undefined {
 }
 
 function isPrintableSingleKey(key: string): boolean {
-  return key.length === 1
+  return key.length === 1 || key === 'Plus'
 }
 
 function isLegalHotkey(parsed: ParsedHotkey): boolean {
@@ -149,7 +152,8 @@ export function parseHotkey(value: unknown): ParsedHotkey | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
   if (trimmed === '') return undefined
-  const tokens = trimmed.split('+')
+  // 末段为「+」本身（如 Ctrl++）时按 Plus 解析
+  const tokens = (trimmed.endsWith('++') ? `${trimmed.slice(0, -1)}Plus` : trimmed === '+' ? 'Plus' : trimmed).split('+')
   if (tokens.some((token) => token.trim() === '')) return undefined
   let ctrl = false
   let alt = false

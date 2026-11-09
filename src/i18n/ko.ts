@@ -331,7 +331,7 @@ const messages: Messages = {
   wtInputTranslation: '입력 번역',
   wtInputTranslationHint: '켜려면 사이트 접근 권한이 필요합니다. 허용된 사이트에서 보내지 않은 초안을 설정된 번역 서비스로 보내 선택한 원문 언어(자동 감지 가능)에서 대상 언어로 번역합니다. 단축키는 추가 확인 없이 바로 바꿉니다. 새 초안은 끝나지 않은 이전 요청을 취소합니다. 자동으로 보내지 않습니다. 자동 팝업을 꺼도 단축키는 사용할 수 있습니다. 현재는 일반 입력란과 Discord, ChatGPT, Claude, Telegram Web, WhatsApp, Slack, Teams의 일반 텍스트 초안만 지원합니다. 복잡한 리치 텍스트, 멘션, 첨부는 아직 지원하지 않습니다. 민감한 페이지와 필드는 처리하지 않습니다.',
   wtInputSourceLanguage: '입력 번역 원문 언어',
-  wtInputSourceLanguageHint: '기본값은 자동 감지이며, 이미 대상 언어인 초안은 다시 번역하지 않습니다.',
+  wtInputSourceLanguageHint: '기본값은 자동 감지이며, 이미 대상 언어로 보이는 초안은 자동 미리보기하지 않지만 단축키로 수동 번역하면 전송됩니다.',
   wtInputTargetLanguage: '입력 번역 대상 언어',
   wtInputTargetLanguageHint: '채팅, 댓글, 자막 댓글 입력에만 쓰입니다. 웹페이지나 동영상 자막의 번역 언어는 바꾸지 않습니다.',
   wtInputSameLanguageHint: '입력 번역의 원문 언어와 대상 언어가 같아 초안이 번역되지 않습니다.',

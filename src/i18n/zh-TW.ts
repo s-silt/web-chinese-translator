@@ -340,7 +340,7 @@ export default {
   wtInputTranslation: '輸入翻譯',
   wtInputTranslationHint: '開啟時需申請網站存取權限。開啟後，允許的網站會把尚未傳送的草稿從所選來源語言（可自動偵測）交給你設定的翻譯服務，譯成所選目標語言。快捷鍵直接取代，無需再確認；新草稿會取消尚未完成的舊請求，不會自動傳送。自動彈窗關閉時，快捷鍵仍然可用。目前僅支援一般輸入框，以及 Discord、ChatGPT、Claude、Telegram Web、WhatsApp、Slack 和 Teams 的純文字草稿；複雜富文本、提及和附件暫不支援；敏感頁面與欄位不處理。',
   wtInputSourceLanguage: '輸入翻譯來源語言',
-  wtInputSourceLanguageHint: '預設自動偵測；已是目標語言的草稿不會重複翻譯。',
+  wtInputSourceLanguageHint: '預設自動偵測；看起來已是目標語言的草稿不自動預覽，按快速鍵手動翻譯時照常傳送。',
   wtInputTargetLanguage: '輸入翻譯目標語言',
   wtInputTargetLanguageHint: '僅用於聊天、留言和彈幕輸入，不改變網頁或影片字幕的翻譯語言。',
   wtInputSameLanguageHint: '輸入翻譯的來源語言與目標語言相同，草稿不會觸發翻譯。',
