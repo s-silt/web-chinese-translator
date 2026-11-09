@@ -292,6 +292,8 @@ const zhCN = {
   wtAssistInvalidResult: '翻译服务返回格式不正确',
   wtSettingsReadFailed: '无法读取页面翻译设置，请刷新重试',
   wtShortcuts: '快捷键',
+  wtGroupFeatures: '功能',
+  wtGroupPageTranslation: '网页翻译',
   wtCmdTogglePage: '翻译本页 / 恢复原文',
   wtCmdTranslateSelection: '翻译选中文字',
   wtShortcutUnset: '未设置',

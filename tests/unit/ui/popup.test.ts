@@ -52,7 +52,10 @@ function stateText(wrapper: VueWrapper): string {
 
 /** 有标题的分区（常规、语言），按标题查找 */
 function section(wrapper: VueWrapper, title: string): DOMWrapper<Element> {
-  const found = wrapper.findAll('section').find((item) => item.find('h2').exists() && item.get('h2').text() === title)
+  const found = wrapper.findAll('section').find((item) => {
+    const heading = item.find('h2, h3')
+    return heading.exists() && heading.text() === title
+  })
   if (!found) throw new Error(`未找到分区：${title}`)
   return found
 }
@@ -66,7 +69,7 @@ function toastTexts(wrapper: VueWrapper): string[] {
 }
 
 function headings(wrapper: VueWrapper): string[] {
-  return wrapper.findAll('h2').map((item) => item.text())
+  return wrapper.findAll('h2, h3').map((item) => item.text())
 }
 
 function switchOf(scope: VueWrapper | DOMWrapper<Element>, label: string): DOMWrapper<HTMLButtonElement> {
@@ -346,7 +349,7 @@ describe.skipIf(!App)('弹出页组件', () => {
       expect(headings(wrapper)).toContain('语言')
       for (const title of ['常规', '语言']) {
         const found = section(wrapper, title)
-        expect(found.attributes('aria-labelledby')).toBe(found.get('h2').attributes('id'))
+        expect(found.attributes('aria-labelledby')).toBe(found.get('h2, h3').attributes('id'))
       }
     })
 

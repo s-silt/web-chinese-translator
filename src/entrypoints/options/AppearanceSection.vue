@@ -3,7 +3,7 @@
     <h2 id="appearance-title" class="section-title">{{ t('appearanceSection') }}</h2>
     <div class="wt-appearance-grid">
       <label class="wt-field">
-        <span class="wt-label">{{ t('uiStyle') }}</span>
+        <span class="ui-label">{{ t('uiStyle') }}</span>
         <UiSelect
           :model-value="settings.uiStyle"
           :options="styleOptions"
@@ -13,7 +13,7 @@
         />
       </label>
       <label class="wt-field">
-        <span class="wt-label">{{ t('appearance') }}</span>
+        <span class="ui-label">{{ t('appearance') }}</span>
         <UiSelect
           :model-value="settings.theme"
           :options="themeOptions"
@@ -21,7 +21,7 @@
           data-test="wt-theme"
           @update:model-value="changeTheme($event as ThemePreference)"
         />
-        <span v-if="settings.uiStyle === 'cyber'" class="wt-hint">{{ t('uiStyleCyberDarkOnly') }}</span>
+        <span v-if="settings.uiStyle === 'cyber'" class="ui-hint">{{ t('uiStyleCyberDarkOnly') }}</span>
       </label>
     </div>
   </section>
@@ -78,17 +78,5 @@ function changeTheme(value: ThemePreference): void {
 
 .wt-field :deep(.ui-select) {
   width: 100%;
-}
-
-.wt-label {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--gcn-fg);
-}
-
-.wt-hint {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--gcn-fg-muted);
 }
 </style>

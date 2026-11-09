@@ -1602,7 +1602,7 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
 
       api.failModelsNext(401)
       await fetch.click()
-      await expect(options.locator('#wt-model-status')).toHaveClass(/wt-status-error/)
+      await expect(options.locator('#wt-model-status')).toHaveClass(/is-danger/)
       await expect(fetch).toHaveText(zhCN.wtModelsFetch)
       await expect(fetch).toBeEnabled()
       await expect(menu).toHaveCount(0)

@@ -44,7 +44,7 @@
               data-test="wt-auto"
               @change="setAuto"
             />
-            <p v-if="autoReason" class="popup-reason">
+            <p v-if="autoReason" class="ui-hint">
               {{ t(autoReason) }}
               <button
                 v-if="autoReason === 'wtNotConfigured'"
@@ -58,7 +58,7 @@
             </p>
           </template>
           <div v-else class="popup-model-guide">
-            <p class="popup-reason">{{ t('wtModelSetupHint') }}</p>
+            <p class="ui-hint">{{ t('wtModelSetupHint') }}</p>
             <UiButton size="sm" data-test="wt-configure-now" @click="openOptionsAt('#wt-title')">
               {{ t('wtConfigureNow') }}
             </UiButton>
@@ -67,7 +67,12 @@
       </div>
 
       <details class="popup-more" :open="moreOpen" @toggle="onMoreToggle">
-        <summary>{{ t('wtMoreFeatures') }}</summary>
+        <summary>
+          <svg class="popup-more-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="m6 4 4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>{{ t('wtMoreFeatures') }}</span>
+        </summary>
         <div class="popup-more-body">
           <div class="popup-switch">
             <UiSwitch
@@ -106,7 +111,7 @@
               @change="setInputTranslation"
             />
           </div>
-          <p v-if="moreReason" class="popup-reason" data-test="wt-more-reason">{{ t(moreReason) }}</p>
+          <p v-if="moreReason" class="ui-hint" data-test="wt-more-reason">{{ t(moreReason) }}</p>
         </div>
       </details>
     </template>
@@ -308,22 +313,32 @@ const autoReason = computed(() => {
 }
 
 .popup-more > summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   cursor: pointer;
   user-select: none;
   font-weight: 600;
+}
+
+.popup-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.popup-more-chevron {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.popup-more[open] .popup-more-chevron {
+  transform: rotate(90deg);
 }
 
 .popup-more-body {
   display: grid;
   gap: 6px;
   padding-top: 10px;
-}
-
-.popup-reason {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--gcn-fg-muted);
 }
 
 .popup-reason-link {

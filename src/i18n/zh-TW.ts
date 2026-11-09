@@ -294,6 +294,8 @@ export default {
   wtAssistInvalidResult: '翻譯服務回傳格式不正確',
   wtSettingsReadFailed: '無法讀取頁面翻譯設定，請重新整理後再試',
   wtShortcuts: '快速鍵',
+  wtGroupFeatures: '功能',
+  wtGroupPageTranslation: '網頁翻譯',
   wtCmdTogglePage: '翻譯本頁 / 還原原文',
   wtCmdTranslateSelection: '翻譯選取文字',
   wtShortcutUnset: '未設定',
