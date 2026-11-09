@@ -7,6 +7,7 @@ import {
   LIMITS,
   getCustomDictionaries,
   newCustomDictionaryId,
+  normalizeDictionaryHost,
   parseDictionaryJson,
   parseEntryLines,
   serializeDictionary,
@@ -18,7 +19,6 @@ import {
 import type { TranslationConfig } from '../../translation/config'
 import type { TranslationConfigPatch } from '../../translation/messages'
 import { sendTranslationMessage } from '../../translation/client'
-import { normalizeExcludedHost } from '../../translation/page-policy'
 
 export interface BuiltinRow {
   readonly id: string
@@ -181,7 +181,7 @@ export function useCustomDictionaries(): UseCustomDictionaries {
     const hosts: string[] = []
     for (const token of draftHosts.value.split(/[\s,]+/)) {
       if (token === '') continue
-      const host = normalizeExcludedHost(token)
+      const host = normalizeDictionaryHost(token)
       if (host !== '' && !hosts.includes(host)) hosts.push(host)
     }
     return hosts

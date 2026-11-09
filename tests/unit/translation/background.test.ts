@@ -765,6 +765,65 @@ describe('模型隐私边界真实消息入口', () => {
     expect(fetcher.mock.calls[0]![1]!.body).not.toContain('EXCLUDED_CONTEXT_TITLE')
   })
 
+  it('写回页面的自动翻译只带同站线索，划词与辅助保留跨站线索', async () => {
+    await enableSmart()
+    const otherSender = {
+      ...contentSender,
+      tab: { id: 9 },
+      documentId: 'doc-other',
+      url: 'https://other.example/article',
+    }
+    expect(await trigger({
+      type: 'wt:page-context', pageId: 'ctx-other',
+      page: { site: 'other.example', title: 'OTHER_SITE_TITLE', heading: 'Other heading' },
+    }, otherSender)).toMatchObject({ ok: true })
+    expect(await trigger({
+      type: 'wt:page-context', pageId: 'ctx-same',
+      page: { site: 'app.devin.ai', title: 'SAME_SITE_TITLE', heading: 'Same heading' },
+    }, contentSender)).toMatchObject({ ok: true })
+
+    const sameEntry = { site: 'app.devin.ai', title: 'SAME_SITE_TITLE', heading: 'Same heading' }
+    const otherEntry = { site: 'other.example', title: 'OTHER_SITE_TITLE', heading: 'Other heading' }
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completionReply(['译文']))
+    const lastCall = (): { body: string; context: { recentPages: { site: string }[] } } => {
+      const call = fetcher.mock.calls.at(-1)
+      const body = call![1]!.body as string
+      const parsed = JSON.parse(body) as { messages: { content: string }[] }
+      return { body, context: JSON.parse(parsed.messages[1]!.content) as { recentPages: { site: string }[] } }
+    }
+
+    // mode=auto：译文写回页面 DOM，只保留同站线索
+    expect(await trigger({
+      type: 'wt:translate', mode: 'auto', texts: ['A public sentence.'],
+    }, contentSender)).toMatchObject({ ok: true })
+    const autoCall = lastCall()
+    expect(autoCall.context.recentPages).toEqual([sameEntry])
+    expect(autoCall.body).toContain('SAME_SITE_TITLE')
+    expect(autoCall.body).not.toContain('OTHER_SITE_TITLE')
+
+    // mode=selection：结果只进扩展面板，保留跨站线索
+    fetcher.mockClear()
+    expect(await trigger({
+      type: 'wt:translate', mode: 'selection', texts: ['A public sentence.'],
+    }, contentSender)).toMatchObject({ ok: true })
+    expect(lastCall().context.recentPages).toEqual([sameEntry, otherEntry])
+
+    // wt:assist：结果只进扩展面板，保留跨站线索
+    fetcher.mockClear()
+    fetcher.mockImplementation(async () => new Response(
+      JSON.stringify({
+        choices: [{
+          message: { content: JSON.stringify({ decision: 'show', intent: 'translate', translation: '译文', explanation: '' }) },
+        }],
+      }),
+      { status: 200 },
+    ))
+    expect(await trigger({
+      type: 'wt:assist', requestId: 'cross-site', input,
+    }, contentSender)).toMatchObject({ ok: true })
+    expect(lastCall().context.recentPages).toEqual([sameEntry, otherEntry])
+  })
+
   it('页面动作校验接受 retry-failed，拒绝未知动作', () => {
     for (const action of ['restore', 'resume', 'retry-failed']) {
       expect(isTranslationMessage({ type: 'wt:page-action', action })).toBe(true)

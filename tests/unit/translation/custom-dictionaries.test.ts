@@ -61,4 +61,16 @@ describe('parseDictionaryJson / serializeDictionary', () => {
     const d = { id: 'custom:a1b2c3', label: 'My', hosts: ['example.com'], entries: { A: '甲' }, enabled: true }
     expect(parseDictionaryJson(serializeDictionary(d))).toMatchObject({ label: 'My', entries: { A: '甲' }, enabled: true })
   })
+
+  it('拒绝单标签主机与公共后缀，保留具体站点', () => {
+    const draft = parseDictionaryJson(
+      '{"hosts":["com","co.uk","github.io","localhost","com.vn","CO.UK.","https://com/",' +
+        '"example.com","app.example.com","example.co.uk","user.github.io","a.co.uk"],"entries":{"a":"b"}}',
+    )
+    expect(draft?.hosts).toEqual(['example.com', 'app.example.com', 'example.co.uk', 'user.github.io', 'a.co.uk'])
+    const stored = sanitizeCustomDictionaries([
+      { id: 'custom:a1b2c3', label: 'x', hosts: ['com', 'co.uk', 'com.vn', 'example.com'], entries: { a: 'b' }, enabled: true },
+    ])
+    expect(stored[0]?.hosts).toEqual(['example.com'])
+  })
 })

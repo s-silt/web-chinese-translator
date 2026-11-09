@@ -698,6 +698,7 @@ async function translationContext(
   smart: boolean,
   senderTabId: number,
   scope: Pick<TranslationConfig, 'excludedHosts' | 'siteScopeMode' | 'siteScopeHosts'>,
+  sameSiteRecentOnly: boolean,
 ): Promise<TranslationContext> {
   const hostname = normalizeOrigin(senderUrl)
   const host = hostname === '' ? '' : new URL(hostname).hostname
@@ -708,6 +709,8 @@ async function translationContext(
   const recentPages =
     smart && !sensitive && pageId !== undefined
       ? (await recentPageContexts(pageId, senderTabId)).filter((entry) => {
+          // 译文写回页面 DOM 时只带同站线索，避免别站标题随模型输出落进本页被脚本读回。
+          if (sameSiteRecentOnly && entry.site !== host) return false
           const siteUrl = `https://${entry.site}/`
           return !isExcludedSite(siteUrl, scope.excludedHosts) &&
             isSiteScopeAllowed(siteUrl, scope) &&
@@ -1379,6 +1382,7 @@ async function handleTranslate(
               config.proactiveAssistEnabled,
               sender.tab?.id ?? -1,
               config,
+              message.mode === 'auto',
             )
     checkCurrent(snapshot, controller.signal)
     if (context !== undefined && context.recentPages.length > 0 && readingGeneration !== reading0) {
@@ -1503,6 +1507,7 @@ async function handleAssist(
         snapshot.config.proactiveAssistEnabled,
         sender.tab?.id ?? -1,
         snapshot.config,
+        false,
       )
     const validateDispatch = async (signal: AbortSignal): Promise<void> => {
       await assertDispatchAllowed(snapshot, signal, {
