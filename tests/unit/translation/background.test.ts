@@ -813,6 +813,12 @@ describe('模型隐私边界真实消息入口', () => {
     expect(isTranslationMessage({ type: 'wt:save-config', patch: { sourceLanguage: 'auto' } })).toBe(true)
     expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputTargetLanguage: 'es' } })).toBe(true)
     expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputTargetLanguage: 'xx' } })).toBe(false)
+    expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputSourceLanguage: 'auto' } })).toBe(true)
+    expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputSourceLanguage: 'ja' } })).toBe(true)
+    expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputSourceLanguage: 'xx' } })).toBe(false)
+    expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputReplaceKey: 'Ctrl+Enter' } })).toBe(true)
+    expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputReplaceKey: '' } })).toBe(true)
+    expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputReplaceKey: 'a' } })).toBe(false)
     const { sourceLanguage: _source, ...missingSource } = VALID_CONFIG
     expect(isTranslationReply({ ok: true, config: missingSource })).toBe(false)
     expect(isTranslationReply({ ok: true, config: VALID_CONFIG })).toBe(true)
@@ -4234,6 +4240,7 @@ describe('视频字幕与输入翻译后台策略与方向控制', () => {
       ...VALID_CONFIG,
       autoOrigins: [],
       targetLanguage: 'ja',
+      inputSourceLanguage: 'fr',
       inputTargetLanguage: 'es',
       videoSubtitlesEnabled: true,
       inputTranslationEnabled: true,
@@ -4244,6 +4251,7 @@ describe('视频字幕与输入翻译后台策略与方向控制', () => {
     )
     expect(esReply).toEqual({ ok: true, texts: ['Translated line'] })
     expect(prompts.at(-1)).toContain('into natural, accurate Spanish')
+    expect(prompts.at(-1)).toContain('The source language is French.')
     expect(prompts.at(-1)).not.toContain('Japanese')
     const stored = await translationConfigItem.getValue()
     expect(stored.targetLanguage).toBe('ja')

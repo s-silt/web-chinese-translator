@@ -7,6 +7,12 @@ import {
 } from './chat-input'
 import { copySelectionText } from './clipboard'
 import {
+  INPUT_AUTO_REPLACE_DELAY_DEFAULT,
+  isInputAutoReplaceDelay,
+  isInputReplaceMode,
+  type InputReplaceMode,
+} from './config'
+import {
   isDiscordPlainEditor,
   readDiscordDraft,
   type DiscordReplacementRequest,
@@ -20,9 +26,17 @@ import {
   planNativeVideoChatDraft,
   readNativeVideoChatDraft,
 } from './video-chat-input'
+import { DEFAULT_INPUT_REPLACE_KEY, formatHotkey, matchesHotkey, normalizeHotkey } from './input-hotkey'
 import type { TranslationReply } from './messages'
 import { closestComposed } from './sites'
-import { TARGET_LANGUAGE_NATIVE_LABEL, type TargetLanguage } from './target-language'
+import {
+  isCandidateDraft,
+  TARGET_LANGUAGE_NATIVE_LABEL,
+  type SourceLanguage,
+  type TargetLanguage,
+} from './target-language'
+
+export { isCandidateDraft } from './target-language'
 
 export interface InputTranslationWatcher extends LiveTranslationWatcher {
   translateAndReplace(): boolean
@@ -35,14 +49,16 @@ export interface InputTranslationOptions extends Omit<LiveTranslationOptions, 't
     manualInput?: boolean,
   ) => Promise<TranslationReply<'wt:translate'>>
   readonly autoPreview?: () => boolean
+  readonly sourceLanguage?: () => SourceLanguage
   readonly targetLanguage?: () => TargetLanguage
+  readonly replaceKey?: () => string
+  readonly replaceMode?: () => InputReplaceMode
+  readonly autoReplaceDelayMs?: () => number
   replaceDiscordInput?: (request: DiscordReplacementRequest) => Promise<DiscordReplacementStatus>
   replaceChatInput?: (request: ChatReplacementRequest) => Promise<ChatReplacementStatus>
 }
 
 const DEBOUNCE_MS = 600
-const MAX_INPUT_LENGTH = 6000
-const HAN_PATTERN = /\p{Script=Han}/u
 
 const RICH_EDITOR_SELECTOR =
   '.ProseMirror,[data-lexical-editor],[data-slate-editor],.DraftEditor-root,.ql-editor,.ck-editor,.monaco-editor,.cm-editor,.CodeMirror'
@@ -155,6 +171,13 @@ const INPUT_POPOVER_CSS = `
 .popover button:focus-visible {
   outline: 2px solid #1f6feb;
   outline-offset: 2px;
+}
+.auto-hint {
+  font-size: 11px;
+  color: #63778a;
+}
+@media (prefers-color-scheme: dark) {
+  .auto-hint { color: #a6b6c4; }
 }
 `
 
@@ -338,12 +361,6 @@ function readFieldValue(field: EditableElement): string {
   if (isChatPlainEditor(field)) return readChatDraft(field)
   if (isNativeVideoChatEditor(field)) return readNativeVideoChatDraft(field)
   return readPlainEditable(field)
-}
-
-function isCandidateChineseDraft(value: string): boolean {
-  const trimmed = value.trim()
-  if (trimmed === '' || value.length > MAX_INPUT_LENGTH) return false
-  return HAN_PATTERN.test(trimmed)
 }
 
 function setNativeControlValue(control: HTMLInputElement | HTMLTextAreaElement, nextValue: string): void {
@@ -543,6 +560,8 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   let composingField: EditableElement | undefined
   let debounceTimer: ReturnType<typeof setTimeout> | undefined
   let beforeInputTimer: ReturnType<typeof setTimeout> | undefined
+  let autoReplaceTimer: ReturnType<typeof setTimeout> | undefined
+  let lastEditAt = 0
   let inFlightId: string | undefined
   let ownInputWrite: EditableElement | undefined
   let directReplaceRequestId: string | undefined
@@ -609,16 +628,54 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   restoreButton.type = 'button'
   restoreButton.dataset.action = 'restore'
 
+  const autoHintNode = document.createElement('span')
+  autoHintNode.className = 'auto-hint'
+  autoHintNode.dataset.action = 'auto-hint'
+
   popover.append(header, statusNode, actions)
   shadow.append(style, popover)
 
-  function syncLabels(): void {
+  function currentReplaceKey(): string {
+    const raw = options.replaceKey === undefined ? DEFAULT_INPUT_REPLACE_KEY : options.replaceKey()
+    return normalizeHotkey(raw) ?? DEFAULT_INPUT_REPLACE_KEY
+  }
+
+  function currentReplaceMode(): InputReplaceMode {
+    const raw = options.replaceMode?.()
+    return isInputReplaceMode(raw) ? raw : 'hotkey'
+  }
+
+  function currentAutoReplaceDelayMs(): number {
+    const raw = options.autoReplaceDelayMs?.()
+    return isInputAutoReplaceDelay(raw) ? raw : INPUT_AUTO_REPLACE_DELAY_DEFAULT
+  }
+
+  function isDraftCandidate(value: string): boolean {
+    const source = options.sourceLanguage?.() ?? 'auto'
     const target = options.targetLanguage?.() ?? 'en'
-    title.textContent = `${options.t('wtInputTranslation')} · ${TARGET_LANGUAGE_NATIVE_LABEL[target]}`
+    return isCandidateDraft(value, source, target)
+  }
+
+  function syncLabels(): void {
+    const source = options.sourceLanguage?.() ?? 'auto'
+    const target = options.targetLanguage?.() ?? 'en'
+    const sourceLabel = source === 'auto' ? options.t('wtSourceAuto') : TARGET_LANGUAGE_NATIVE_LABEL[source]
+    const targetLabel = TARGET_LANGUAGE_NATIVE_LABEL[target]
+    title.textContent = `${options.t('wtInputTranslation')} · ${sourceLabel} → ${targetLabel}`
     closeButton.setAttribute('aria-label', options.t('wtPanelClose'))
     replaceButton.textContent = options.t('wtInputReplace')
-    replaceButton.title = options.t('wtInputReplaceHint')
-    replaceButton.setAttribute('aria-keyshortcuts', 'Tab')
+    const replaceKey = currentReplaceKey()
+    if (replaceKey === '') {
+      replaceButton.title = options.t('wtInputReplaceClickHint')
+      replaceButton.removeAttribute('aria-keyshortcuts')
+    } else {
+      const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
+      const keyLabel = formatHotkey(replaceKey, isMac)
+      // 调用方的 t 未必处理参数，此处兜底替换
+      replaceButton.title = options.t('wtInputReplaceHint', { key: keyLabel }).replace('{key}', keyLabel)
+      // ARIA 规定修饰键写作 Control
+      replaceButton.setAttribute('aria-keyshortcuts', replaceKey.replace(/^Ctrl\+/, 'Control+'))
+    }
     if (copyTimer === undefined) copyButton.textContent = options.t('wtToolbarCopy')
     if (copyOriginalTimer === undefined) copyOriginalButton.textContent = options.t('wtInputCopyOriginal')
     restoreButton.textContent = options.t('wtInputRestore')
@@ -636,6 +693,14 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       clearTimeout(beforeInputTimer)
       beforeInputTimer = undefined
     }
+  }
+
+  function clearAutoReplace(): void {
+    if (autoReplaceTimer !== undefined) {
+      clearTimeout(autoReplaceTimer)
+      autoReplaceTimer = undefined
+     }
+    autoHintNode.remove()
   }
 
   function clearCopyTimer(): void {
@@ -706,6 +771,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   }
 
   function hidePopover(clearBackup = true): void {
+    clearAutoReplace()
     clearCopyTimer()
     previewVisible = false
     previewTranslation = ''
@@ -729,6 +795,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     epoch += 1
     clearDebounce()
     clearBeforeInput()
+    clearAutoReplace()
     cancelInFlight()
     releasePendingManagedToken()
     snapshotText = ''
@@ -750,6 +817,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     epoch += 1
     clearDebounce()
     clearBeforeInput()
+    clearAutoReplace()
     cancelInFlight()
     composingField = undefined
     if (managedBackupStillLive()) {
@@ -768,7 +836,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     showPopover()
   }
 
-  function renderPreview(translation: string): void {
+  function renderPreview(translation: string, autoHint?: string): void {
     const normalized = translation.replace(/\r\n?/g, '\n')
     previewVisible = true
     previewTranslation = normalized
@@ -776,6 +844,10 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     statusNode.textContent = normalized
     actions.textContent = ''
     actions.append(replaceButton, copyButton)
+    if (autoHint !== undefined && autoHint !== '') {
+      autoHintNode.textContent = autoHint
+      actions.append(autoHintNode)
+    }
     showPopover()
   }
 
@@ -804,6 +876,45 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     showPopover()
   }
 
+  function canAutoReplace(field: EditableElement, requestEpoch: number): boolean {
+    return (
+      !disposed &&
+      requestEpoch === epoch &&
+      activeField === field &&
+      focusedField() === field &&
+      isCurrentEditable(field) &&
+      composingField !== field &&
+      readFieldValue(field) === snapshotText &&
+      !replacementBusy &&
+      previewVisible &&
+      previewTranslation !== ''
+    )
+  }
+
+  function scheduleAutoReplace(field: EditableElement, requestEpoch: number, translation: string): void {
+    clearAutoReplace()
+    const delay = currentAutoReplaceDelayMs()
+    const elapsed = Date.now() - lastEditAt
+    const remaining = delay - elapsed
+    if (remaining <= 0) {
+      renderPreview(translation)
+      if (canAutoReplace(field, requestEpoch)) {
+        replacePreview()
+      }
+      return
+    }
+    const seconds = String(delay / 1000)
+    const hint = options.t('wtInputAutoReplaceCountdown', { seconds }).replace('{seconds}', seconds)
+    renderPreview(translation, hint)
+    autoReplaceTimer = setTimeout(() => {
+      autoReplaceTimer = undefined
+      autoHintNode.remove()
+      if (canAutoReplace(field, requestEpoch)) {
+        replacePreview()
+      }
+    }, remaining)
+  }
+
   function startTranslationForField(field: EditableElement, manualInput = false): void {
     if (disposed || composingField === field) return
     if (!isCurrentEditable(field)) {
@@ -814,13 +925,17 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     if (suppressedSnapshot !== undefined && suppressedSnapshot.field === field && suppressedSnapshot.value === liveValue) {
       return
     }
-    if (!isCandidateChineseDraft(liveValue)) {
+    if (backupState !== undefined && backupState.field === field && liveValue === backupState.inserted) {
+      return
+    }
+    if (!isDraftCandidate(liveValue)) {
       clearAllState(true)
       return
     }
     epoch += 1
     const requestEpoch = epoch
     const requestId = createId()
+    clearAutoReplace()
     cancelInFlight()
     directReplaceRequestId = manualInput ? requestId : undefined
     activeField = field
@@ -846,8 +961,16 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
         if (reply.ok && Array.isArray(reply.texts) && typeof reply.texts[0] === 'string' && reply.texts[0].trim() !== '') {
           const shouldReplace = directReplaceRequestId === requestId
           directReplaceRequestId = undefined
+          if (shouldReplace) {
+            renderPreview(reply.texts[0])
+            if (focusedField() === field) replacePreview()
+            return
+          }
+          if (currentReplaceMode() === 'auto') {
+            scheduleAutoReplace(field, requestEpoch, reply.texts[0])
+            return
+          }
           renderPreview(reply.texts[0])
-          if (shouldReplace && focusedField() === field) replacePreview()
           return
         }
         if (directReplaceRequestId === requestId) directReplaceRequestId = undefined
@@ -874,30 +997,41 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   function scheduleFieldCheck(field: EditableElement): void {
     if (disposed) return
     const liveValue = readFieldValue(field)
-    if (suppressedSnapshot !== undefined && (suppressedSnapshot.field !== field || suppressedSnapshot.value !== liveValue)) {
+    if (suppressedSnapshot !== undefined) {
+      if (suppressedSnapshot.field === field && suppressedSnapshot.value === liveValue) {
+        return
+      }
       suppressedSnapshot = undefined
     }
-    if (backupState !== undefined && (backupState.field !== field || liveValue !== backupState.inserted)) {
+    if (backupState !== undefined) {
+      if (backupState.field === field && liveValue === backupState.inserted) {
+        return
+      }
       backupState = undefined
     }
+    lastEditAt = Date.now()
     if (activeField !== undefined && activeField !== field) {
       clearAllState(true)
     }
     activeField = field
     epoch += 1
     clearDebounce()
+    clearAutoReplace()
     cancelInFlight()
     hidePopover(false)
     if (composingField === field) return
-    if (!isCandidateChineseDraft(liveValue)) {
+    if (!isDraftCandidate(liveValue)) {
       backupState = undefined
       return
     }
-    if (options.autoPreview?.() === false) return
+    // 用户选择「停止输入后自动替换」即表示同意自动处理草稿，不应被「自动弹窗」开关阻断
+    const autoMode = currentReplaceMode() === 'auto'
+    if (!autoMode && options.autoPreview?.() === false) return
+    const debounceMs = autoMode ? Math.min(DEBOUNCE_MS, currentAutoReplaceDelayMs()) : DEBOUNCE_MS
     debounceTimer = setTimeout(() => {
       debounceTimer = undefined
       startTranslationForField(field)
-    }, DEBOUNCE_MS)
+    }, debounceMs)
   }
 
   function deferManagedFieldCheck(field: HTMLElement): void {
@@ -925,10 +1059,12 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     releasePendingManagedToken()
     epoch += 1
     clearDebounce()
+    clearAutoReplace()
     cancelInFlight()
     hidePopover(false)
     if (event.isComposing) composingField = field
     if (composingField === field) return
+    lastEditAt = Date.now()
     deferManagedFieldCheck(field)
   }
 
@@ -941,6 +1077,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     composingField = field
     epoch += 1
     clearDebounce()
+    clearAutoReplace()
     cancelInFlight()
     hidePopover(false)
   }
@@ -959,21 +1096,17 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       composingField = undefined
     }
     if (field === undefined) return
+    lastEditAt = Date.now()
     if (isManagedPlainEditor(field)) deferManagedFieldCheck(field)
     else scheduleFieldCheck(field)
   }
 
   function onKeyDown(event: KeyboardEvent): void {
     if (disposed || !event.isTrusted) return
+    const replaceKey = currentReplaceKey()
     if (
-      event.key === 'Tab' &&
-      !event.shiftKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.metaKey &&
-      !event.isComposing &&
-      event.keyCode !== 229 &&
-      !event.repeat &&
+      replaceKey !== '' &&
+      matchesHotkey(event, replaceKey) &&
       previewVisible &&
       host.style.display !== 'none' &&
       !replacementBusy &&
@@ -988,6 +1121,22 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       replacePreview()
       return
     }
+    if (
+      event.key === 'Escape' &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      !event.metaKey &&
+      !event.isComposing &&
+      composingField === undefined &&
+      host.style.display !== 'none'
+    ) {
+      if (activeField !== undefined && activeField.isConnected) {
+        suppressedSnapshot = { field: activeField, value: readFieldValue(activeField) }
+      }
+      clearAllState(true)
+      return
+    }
     // 原生 compositionend 被站点吞掉且未重发时的兜底：浏览器给出的可信 keydown 已不处于合成，
     // 且不是输入法开始合成时的 Process 键，就结束同一输入框的合成状态并重新取样。
     if (event.isComposing || composingField === undefined) return
@@ -996,6 +1145,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     const field = resolveEditableField(eventTarget(event))
     if (field === undefined || field !== composingField) return
     composingField = undefined
+    lastEditAt = Date.now()
     if (isManagedPlainEditor(field)) deferManagedFieldCheck(field)
     else scheduleFieldCheck(field)
   }
@@ -1015,10 +1165,12 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       composingField = field
       epoch += 1
       clearDebounce()
+      clearAutoReplace()
       cancelInFlight()
       hidePopover(false)
       return
     }
+    lastEditAt = Date.now()
     scheduleFieldCheck(field)
   }
 
@@ -1047,6 +1199,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       if (docActive === host || shadow.activeElement !== null || docActive === activeField || (docActive instanceof Node && activeField.contains(docActive))) {
         return
       }
+      clearAutoReplace()
       if (!(docActive instanceof Element) || docActive === document.body || docActive === document.documentElement) return
       leaveFieldForFocus()
     })
@@ -1183,6 +1336,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       }
       const translated = expected.replace(/\r\n?/g, '\n')
       backupState = undefined
+      suppressedSnapshot = { field, value: normalizedNext }
       snapshotText = normalizedNext
       previewTranslation = translated
       renderPreview(translated)
@@ -1205,6 +1359,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   }
 
   function replacePreview(): void {
+    clearAutoReplace()
     if (disposed || replacementBusy || activeField === undefined || previewTranslation === '') return
     const field = activeField
     recoveryOriginalText = undefined
@@ -1258,10 +1413,11 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     const field = focusedField()
     if (field === undefined || composingField === field || !isCurrentEditable(field)) return false
     const live = readFieldValue(field)
-    if (!isCandidateChineseDraft(live)) return false
+    if (!isDraftCandidate(live)) return false
     if (backupState !== undefined && backupState.field === field && live === backupState.inserted) return false
     clearBeforeInput()
     clearDebounce()
+    clearAutoReplace()
     suppressedSnapshot = undefined
     if (activeField === field && snapshotText === live && inFlightId !== undefined) {
       directReplaceRequestId = inFlightId
@@ -1311,6 +1467,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     const outcome = commitPlainDraft(field, inserted, normalizedOriginal)
     if (outcome === 'ok') {
       backupState = undefined
+      suppressedSnapshot = { field, value: normalizedOriginal }
       snapshotText = normalizedOriginal
       previewTranslation = inserted
       renderPreview(inserted)
@@ -1391,6 +1548,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       composingField = undefined
       suppressedSnapshot = undefined
       activeField = undefined
+      clearAutoReplace()
       clearAllState(true)
       host.remove()
     },

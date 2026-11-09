@@ -47,8 +47,10 @@ export function requestAffected(request: RequestScope, previous: TranslationConf
   if (request.kind === 'subtitle') return previous.videoSubtitlesEnabled !== next.videoSubtitlesEnabled || previous.autoInteractionEnabled !== next.autoInteractionEnabled
   if (request.kind === 'input') {
     return previous.inputTranslationEnabled !== next.inputTranslationEnabled ||
-      previous.autoInteractionEnabled !== next.autoInteractionEnabled ||
-      previous.inputTargetLanguage !== next.inputTargetLanguage
+      (previous.autoInteractionEnabled !== next.autoInteractionEnabled && next.inputReplaceMode !== 'auto') ||
+      previous.inputReplaceMode !== next.inputReplaceMode ||
+      previous.inputTargetLanguage !== next.inputTargetLanguage ||
+      previous.inputSourceLanguage !== next.inputSourceLanguage
   }
   if (request.kind === 'assist') return readingPolicyChanged(previous, next)
   if (request.kind === 'auto') {

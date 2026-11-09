@@ -2403,5 +2403,84 @@ describe('字幕与输入翻译生命周期联动', () => {
       expect((globalThis as Record<symbol, unknown>)[SINGLETON_KEY]).toBeDefined()
       expect(allRootShadowTexts()).toContain(BACKGROUND_LOST_ERROR)
     })
+
+    it('输入翻译目标为 zh-CN 时翻译英文草稿，且修改 inputReplaceKey 即时生效无需刷新页面', async () => {
+      const { sendTranslationMessage } = await import('../../../src/translation/client')
+      vi.mocked(sendTranslationMessage).mockImplementation((async (message: { type: string; texts?: string[] }) => {
+        if (message.type === 'wt:page-modes') {
+          return {
+            ok: true,
+            modes: { enabled: true, fixed: false, auto: false, selection: false, smart: false, input: true },
+          }
+        }
+        if (message.type === 'wt:translate') {
+          return { ok: true, texts: (message.texts ?? []).map((t) => `ZH:${t}`) }
+        }
+        return { ok: true }
+      }) as never)
+
+      await settingsItem.setValue({ ...DEFAULT_SETTINGS, uiLanguage: 'zh-CN' })
+      await translationConfigItem.setValue({
+        ...CONFIG,
+        inputTranslationEnabled: true,
+        inputSourceLanguage: 'en',
+        inputTargetLanguage: 'zh-CN',
+        inputReplaceKey: 'Ctrl+Enter',
+        autoInteractionEnabled: true,
+      })
+
+      const input = document.createElement('input')
+      input.type = 'text'
+      document.body.append(input)
+
+      await startPageTranslation()
+      await settle(100)
+
+      input.focus()
+      input.value = 'Hello from English draft'
+      input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+      await settle(650)
+
+      // Tab 不触发替换
+      const tabEvent = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, composed: true, cancelable: true })
+      Object.defineProperty(tabEvent, 'isTrusted', { value: true, configurable: true })
+      input.dispatchEvent(tabEvent)
+      expect(tabEvent.defaultPrevented).toBe(false)
+      expect(input.value).toBe('Hello from English draft')
+
+      // Ctrl+Enter 触发替换
+      const ctrlEnter = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        ctrlKey: true,
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      })
+      Object.defineProperty(ctrlEnter, 'isTrusted', { value: true, configurable: true })
+      input.dispatchEvent(ctrlEnter)
+      expect(ctrlEnter.defaultPrevented).toBe(true)
+      expect(input.value).toBe('ZH:Hello from English draft')
+
+      // 切换为 auto 模式（1000ms），无需刷新页面即可在停止输入后自动替换
+      await translationConfigItem.setValue({
+        ...CONFIG,
+        inputTranslationEnabled: true,
+        inputSourceLanguage: 'en',
+        inputTargetLanguage: 'zh-CN',
+        inputReplaceMode: 'auto',
+        inputAutoReplaceDelayMs: 1000,
+        autoInteractionEnabled: false,
+      })
+      await settle(100)
+
+      input.focus()
+      vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+      input.value = 'Auto replace draft'
+      input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+      await settle(600)
+      expect(input.value).toBe('Auto replace draft')
+      await settle(450)
+      expect(input.value).toBe('ZH:Auto replace draft')
+    })
   })
 })

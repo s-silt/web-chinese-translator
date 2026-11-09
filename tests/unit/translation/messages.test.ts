@@ -246,9 +246,81 @@ describe('wt:open-options 固定分区', () => {
     expect(
       isTranslationMessage({
         type: 'wt:save-config',
-        patch: { videoSubtitlesEnabled: true, inputTranslationEnabled: false },
+        patch: {
+          videoSubtitlesEnabled: true,
+          inputTranslationEnabled: false,
+          inputSourceLanguage: 'ja',
+          inputTargetLanguage: 'zh-CN',
+          inputReplaceKey: 'Ctrl+Enter',
+          inputReplaceMode: 'auto',
+          inputAutoReplaceDelayMs: 1500,
+        },
       }),
     ).toBe(true)
+    expect(
+      isTranslationMessage({
+        type: 'wt:save-config',
+        patch: { inputSourceLanguage: 'auto', inputReplaceKey: '', inputReplaceMode: 'hotkey', inputAutoReplaceDelayMs: 500 },
+      }),
+    ).toBe(true)
+    for (const badPatch of [
+      { inputReplaceMode: 'manual' },
+      { inputReplaceMode: '' },
+      { inputReplaceMode: 1 },
+      { inputAutoReplaceDelayMs: 499 },
+      { inputAutoReplaceDelayMs: 10001 },
+      { inputAutoReplaceDelayMs: 150 },
+      { inputAutoReplaceDelayMs: 550 },
+      { inputAutoReplaceDelayMs: '1000' },
+      { inputAutoReplaceDelayMs: null },
+    ]) {
+      expect(isTranslationMessage({ type: 'wt:save-config', patch: badPatch })).toBe(false)
+    }
+    expect(
+      isTranslationReply(
+        {
+          ok: true,
+          config: { ...DEFAULT_TRANSLATION_CONFIG, inputReplaceMode: 'auto', inputAutoReplaceDelayMs: 2500 },
+        },
+        { type: 'wt:get-config' },
+      ),
+    ).toBe(true)
+    expect(
+      isTranslationReply(
+        {
+          ok: true,
+          config: { ...DEFAULT_TRANSLATION_CONFIG, inputReplaceMode: 'invalid' as never },
+        },
+        { type: 'wt:get-config' },
+      ),
+    ).toBe(false)
+    expect(
+      isTranslationReply(
+        {
+          ok: true,
+          config: { ...DEFAULT_TRANSLATION_CONFIG, inputAutoReplaceDelayMs: 150 },
+        },
+        { type: 'wt:get-config' },
+      ),
+    ).toBe(false)
+    expect(
+      isTranslationMessage({
+        type: 'wt:save-config',
+        patch: { inputSourceLanguage: 'xx' },
+      }),
+    ).toBe(false)
+    expect(
+      isTranslationMessage({
+        type: 'wt:save-config',
+        patch: { inputReplaceKey: 'a' },
+      }),
+    ).toBe(false)
+    expect(
+      isTranslationMessage({
+        type: 'wt:save-config',
+        patch: { inputReplaceKey: 'Escape' },
+      }),
+    ).toBe(false)
     expect(
       isTranslationMessage({
         type: 'wt:save-config',

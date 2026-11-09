@@ -226,19 +226,93 @@
           @change="changeInputTranslation"
         />
         <p id="wt-input-translation-hint" class="wt-hint">{{ t('wtInputTranslationHint') }}</p>
-        <label class="wt-field">
-          <span id="wt-input-target-language-label" class="wt-label">{{ t('wtInputTargetLanguage') }}</span>
-          <UiSelect
-            :model-value="inputTargetLanguage"
-            :disabled="!ready || saving"
-            :options="languageOptions"
-            aria-labelledby="wt-input-target-language-label"
-            aria-describedby="wt-input-target-language-hint"
-            data-test="wt-input-target-language"
-            @update:model-value="changeInputTargetLanguage($event as TargetLanguage)"
-          />
-          <span id="wt-input-target-language-hint" class="wt-hint">{{ t('wtInputTargetLanguageHint') }}</span>
-        </label>
+        <div class="wt-subpanel" :class="{ 'is-inactive': !inputTranslationEnabled }" data-test="wt-input-subpanel">
+          <div class="wt-language-pair">
+            <label class="wt-field">
+              <span id="wt-input-source-language-label" class="wt-label">{{ t('wtInputSourceLanguage') }}</span>
+              <UiSelect
+                :model-value="inputSourceLanguage"
+                :disabled="!ready || saving"
+                :options="sourceLanguageOptions"
+                aria-labelledby="wt-input-source-language-label"
+                aria-describedby="wt-input-source-language-hint"
+                data-test="wt-input-source-language"
+                @update:model-value="changeInputSourceLanguage($event as SourceLanguage)"
+              />
+              <span id="wt-input-source-language-hint" class="wt-hint">{{ t('wtInputSourceLanguageHint') }}</span>
+            </label>
+            <label class="wt-field">
+              <span id="wt-input-target-language-label" class="wt-label">{{ t('wtInputTargetLanguage') }}</span>
+              <UiSelect
+                :model-value="inputTargetLanguage"
+                :disabled="!ready || saving"
+                :options="languageOptions"
+                aria-labelledby="wt-input-target-language-label"
+                aria-describedby="wt-input-target-language-hint"
+                data-test="wt-input-target-language"
+                @update:model-value="changeInputTargetLanguage($event as TargetLanguage)"
+              />
+              <span id="wt-input-target-language-hint" class="wt-hint">{{ t('wtInputTargetLanguageHint') }}</span>
+            </label>
+          </div>
+          <p
+            v-if="inputSourceLanguage !== 'auto' && inputSourceLanguage === inputTargetLanguage"
+            class="wt-hint wt-status-error"
+            role="status"
+            data-test="wt-input-same-language-hint"
+          >{{ t('wtInputSameLanguageHint') }}</p>
+          <div class="wt-language-pair">
+            <label class="wt-field">
+              <span id="wt-input-replace-mode-label" class="wt-label">{{ t('wtInputReplaceMode') }}</span>
+              <UiSelect
+                :model-value="inputReplaceMode"
+                :disabled="!ready || saving"
+                :options="inputReplaceModeOptions"
+                aria-labelledby="wt-input-replace-mode-label"
+                aria-describedby="wt-input-replace-mode-hint"
+                data-test="wt-input-replace-mode"
+                @update:model-value="changeInputReplaceMode($event as InputReplaceMode)"
+              />
+              <span id="wt-input-replace-mode-hint" class="wt-hint">{{ t('wtInputReplaceModeHint') }}</span>
+            </label>
+            <div v-if="inputReplaceMode === 'auto'" class="wt-field">
+              <span id="wt-input-auto-delay-label" class="wt-label">{{ t('wtInputAutoReplaceDelay') }}</span>
+              <div class="wt-delay-row" :class="{ 'has-custom': autoReplaceDelaySelectValue === 'custom' }">
+                <UiSelect
+                  :model-value="autoReplaceDelaySelectValue"
+                  :disabled="!ready || saving"
+                  :options="autoReplaceDelayOptions"
+                  aria-labelledby="wt-input-auto-delay-label"
+                  data-test="wt-input-auto-delay"
+                  @update:model-value="onAutoReplaceDelaySelect"
+                />
+                <div v-if="autoReplaceDelaySelectValue === 'custom'" class="wt-delay-custom">
+                  <UiInput
+                    :model-value="customDelaySecondsDraft"
+                    type="number"
+                    min="0.5"
+                    max="10"
+                    step="0.1"
+                    :disabled="!ready || saving"
+                    aria-labelledby="wt-input-auto-delay-label"
+                    :aria-invalid="customDelayError !== '' ? 'true' : undefined"
+                    data-test="wt-input-auto-delay-custom"
+                    @update:model-value="onCustomDelayInput"
+                    @blur="commitCustomAutoReplaceDelay"
+                    @keydown.enter.prevent="commitCustomAutoReplaceDelay"
+                  />
+                  <span class="wt-delay-unit" aria-hidden="true">{{ t('wtSecondsUnit') }}</span>
+                </div>
+              </div>
+              <span
+                v-if="customDelayError !== ''"
+                class="wt-hint wt-status-error"
+                role="status"
+                data-test="wt-input-auto-delay-error"
+              >{{ customDelayError }}</span>
+            </div>
+          </div>
+        </div>
       </div>
       <label class="wt-field">
         <span id="wt-assist-mode-label" class="wt-label">{{ t('wtAssistMode') }}</span>
@@ -297,11 +371,44 @@
       </label>
     </div>
 
-    <div v-if="shortcuts.length > 0" v-show="props.view === 'all' || props.view === 'general'" class="wt-shortcuts" data-test="wt-shortcuts">
+    <div v-show="props.view === 'all' || props.view === 'general'" class="wt-shortcuts" data-test="wt-shortcuts">
       <span class="wt-label">{{ t('wtShortcuts') }}</span>
       <ul class="wt-shortcut-list">
         <li v-for="item in shortcuts" :key="item.name"><span>{{ t(item.labelKey) }}</span><kbd>{{ item.shortcut || t('wtShortcutUnset') }}</kbd></li>
+        <li class="wt-shortcut-custom" data-test="wt-replace-key-row">
+          <span>{{ t('wtShortcutReplaceDraft') }}</span>
+          <kbd data-test="wt-replace-key-value" :class="{ 'is-recording': recordingHotkey }">{{ recordingHotkey ? '…' : inputReplaceKey === '' ? t('wtShortcutDisabled') : formatHotkey(inputReplaceKey, isMacPlatform) }}</kbd>
+          <div class="wt-shortcut-actions">
+            <UiButton
+              size="sm"
+              :disabled="!ready || saving"
+              data-test="wt-replace-key-record"
+              @click="toggleRecordingHotkey"
+              @keydown="onRecordKeyDown"
+              @blur="cancelRecordingHotkey"
+            >
+              {{ recordingHotkey ? t('wtShortcutRecording') : t('wtShortcutChange') }}
+            </UiButton>
+            <UiButton
+              size="sm"
+              :disabled="!ready || saving || (inputReplaceKey === 'Tab' && !recordingHotkey)"
+              data-test="wt-replace-key-reset"
+              @click="resetReplaceHotkey"
+            >
+              {{ t('wtShortcutResetDefault') }}
+            </UiButton>
+            <UiButton
+              size="sm"
+              :disabled="!ready || saving || (inputReplaceKey === '' && !recordingHotkey)"
+              data-test="wt-replace-key-disable"
+              @click="disableReplaceHotkey"
+            >
+              {{ t('wtShortcutDisable') }}
+            </UiButton>
+          </div>
+        </li>
       </ul>
+      <p v-if="hotkeyError" class="wt-hint wt-status-error" role="status" data-test="wt-replace-key-error">{{ hotkeyError }}</p>
       <p class="wt-hint">{{ t('wtShortcutsHint') }}</p>
       <UiButton size="sm" data-test="wt-shortcuts-manage" @click="openShortcuts">{{ t('wtShortcutsManage') }}</UiButton>
     </div>
@@ -404,12 +511,23 @@ import {
   DEFAULT_PAGE_CHAR_LIMIT,
   DEFAULT_TRANSLATION_CONFIG,
   hostPermissionPattern,
+  INPUT_AUTO_REPLACE_DELAY_DEFAULT,
+  INPUT_AUTO_REPLACE_DELAY_PRESETS,
+  isInputAutoReplaceDelay,
+  isInputReplaceMode,
   isPageCharLimit,
   normalizeBaseUrl,
   normalizeOrigin,
   PAGE_CHAR_LIMITS,
+  type InputReplaceMode,
 } from '../../translation/config'
 import { createId } from '../../translation/id'
+import {
+  DEFAULT_INPUT_REPLACE_KEY,
+  formatHotkey,
+  hotkeyFromEvent,
+  normalizeHotkey,
+} from '../../translation/input-hotkey'
 import { validateApiKey } from '../../translation/secrets'
 import {
   TARGET_LANGUAGE_NATIVE_LABEL,
@@ -493,7 +611,17 @@ const floatingButtonEnabled = ref(false)
 const autoInteractionEnabled = ref(true)
 const videoSubtitlesEnabled = ref(false)
 const inputTranslationEnabled = ref(false)
+const inputSourceLanguage = ref<SourceLanguage>('auto')
 const inputTargetLanguage = ref<TargetLanguage>('en')
+const inputReplaceKey = ref<string>(DEFAULT_INPUT_REPLACE_KEY)
+const inputReplaceMode = ref<InputReplaceMode>(DEFAULT_TRANSLATION_CONFIG.inputReplaceMode)
+const inputAutoReplaceDelayMs = ref<number>(INPUT_AUTO_REPLACE_DELAY_DEFAULT)
+const customDelaySelected = ref(false)
+const customDelaySecondsDraft = ref(String(INPUT_AUTO_REPLACE_DELAY_DEFAULT / 1000))
+const customDelayError = ref('')
+const recordingHotkey = ref(false)
+const hotkeyError = ref('')
+const isMacPlatform = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
 const pageCharLimit = ref<number>(DEFAULT_PAGE_CHAR_LIMIT)
 const shortcuts = ref<ShortcutItem[]>([])
 const newSite = ref('')
@@ -568,6 +696,22 @@ const sourceLanguageOptions = computed(() => [
   { value: 'auto', label: t('wtSourceAuto') },
   ...TARGET_LANGUAGES.map((value) => ({ value, label: TARGET_LANGUAGE_NATIVE_LABEL[value] })),
 ])
+const inputReplaceModeOptions = computed(() => [
+  { value: 'hotkey', label: t('wtInputReplaceModeHotkey') },
+  { value: 'auto', label: t('wtInputReplaceModeAuto') },
+])
+const autoReplaceDelayOptions = computed(() => [
+  ...INPUT_AUTO_REPLACE_DELAY_PRESETS.map((ms) => ({
+    value: String(ms),
+    label: t('wtInputAutoReplaceDelaySeconds', { seconds: String(ms / 1000) }),
+  })),
+  { value: 'custom', label: t('wtInputAutoReplaceDelayCustom') },
+])
+const autoReplaceDelaySelectValue = computed(() =>
+  customDelaySelected.value || !(INPUT_AUTO_REPLACE_DELAY_PRESETS as readonly number[]).includes(inputAutoReplaceDelayMs.value)
+    ? 'custom'
+    : String(inputAutoReplaceDelayMs.value),
+)
 
 const modeOptions = computed(() => [
   { value: 'off', label: t('wtModeOff') },
@@ -664,7 +808,18 @@ function applyConfig(
   autoInteractionEnabled.value = config.autoInteractionEnabled
   videoSubtitlesEnabled.value = config.videoSubtitlesEnabled
   inputTranslationEnabled.value = config.inputTranslationEnabled
+  inputSourceLanguage.value = config.inputSourceLanguage
   inputTargetLanguage.value = config.inputTargetLanguage
+  inputReplaceKey.value = config.inputReplaceKey
+  inputReplaceMode.value = config.inputReplaceMode
+  inputAutoReplaceDelayMs.value = config.inputAutoReplaceDelayMs
+  if (!(INPUT_AUTO_REPLACE_DELAY_PRESETS as readonly number[]).includes(config.inputAutoReplaceDelayMs)) {
+    customDelaySelected.value = true
+    customDelaySecondsDraft.value = String(config.inputAutoReplaceDelayMs / 1000)
+  } else if (replaceDrafts || !customDelaySelected.value) {
+    customDelaySelected.value = false
+    customDelaySecondsDraft.value = String(config.inputAutoReplaceDelayMs / 1000)
+  }
   pageCharLimit.value = config.pageCharLimit
   assistMode.value = persistedMode()
   keyState.value = state
@@ -1094,6 +1249,17 @@ async function changePageCharLimit(value: number): Promise<void> {
   }
 }
 
+async function changeInputSourceLanguage(value: SourceLanguage): Promise<void> {
+  if (!ready.value || saving.value || value === inputSourceLanguage.value) return
+  saving.value = true
+  setStatus('', false)
+  try {
+    await savePatch({ inputSourceLanguage: value })
+  } finally {
+    saving.value = false
+  }
+}
+
 async function changeInputTargetLanguage(value: TargetLanguage): Promise<void> {
   if (!ready.value || saving.value || value === inputTargetLanguage.value) return
   saving.value = true
@@ -1103,6 +1269,127 @@ async function changeInputTargetLanguage(value: TargetLanguage): Promise<void> {
   } finally {
     saving.value = false
   }
+}
+
+async function changeInputReplaceMode(value: InputReplaceMode): Promise<void> {
+  if (!ready.value || saving.value || value === inputReplaceMode.value || !isInputReplaceMode(value)) return
+  saving.value = true
+  setStatus('', false)
+  customDelayError.value = ''
+  try {
+    await savePatch({ inputReplaceMode: value })
+  } finally {
+    saving.value = false
+  }
+}
+
+async function onAutoReplaceDelaySelect(value: string): Promise<void> {
+  if (!ready.value || saving.value) return
+  customDelayError.value = ''
+  if (value === 'custom') {
+    customDelaySelected.value = true
+    customDelaySecondsDraft.value = String(inputAutoReplaceDelayMs.value / 1000)
+    return
+  }
+  const ms = Number(value)
+  if (!isInputAutoReplaceDelay(ms)) return
+  customDelaySelected.value = false
+  customDelaySecondsDraft.value = String(ms / 1000)
+  if (ms === inputAutoReplaceDelayMs.value) return
+  saving.value = true
+  setStatus('', false)
+  try {
+    await savePatch({ inputAutoReplaceDelayMs: ms })
+  } finally {
+    saving.value = false
+  }
+}
+
+function onCustomDelayInput(value: string | number): void {
+  customDelaySecondsDraft.value = typeof value === 'number' ? String(value) : value
+  customDelayError.value = ''
+}
+
+async function commitCustomAutoReplaceDelay(): Promise<void> {
+  if (!ready.value || saving.value) return
+  const trimmed = customDelaySecondsDraft.value.trim()
+  if (trimmed === '') {
+    customDelayError.value = t('wtInputAutoReplaceDelayInvalid')
+    return
+  }
+  const seconds = Number(trimmed)
+  const ms = Math.round(seconds * 1000)
+  if (!Number.isFinite(seconds) || Math.abs(seconds * 1000 - ms) > 1e-6 || !isInputAutoReplaceDelay(ms)) {
+    customDelayError.value = t('wtInputAutoReplaceDelayInvalid')
+    return
+  }
+  customDelayError.value = ''
+  customDelaySecondsDraft.value = String(ms / 1000)
+  if (ms === inputAutoReplaceDelayMs.value) return
+  saving.value = true
+  setStatus('', false)
+  try {
+    await savePatch({ inputAutoReplaceDelayMs: ms })
+  } finally {
+    saving.value = false
+  }
+}
+
+async function changeInputReplaceKey(value: string): Promise<void> {
+  if (!ready.value || saving.value || value === inputReplaceKey.value) return
+  saving.value = true
+  setStatus('', false)
+  try {
+    await savePatch({ inputReplaceKey: value })
+  } finally {
+    saving.value = false
+  }
+}
+
+function toggleRecordingHotkey(): void {
+  if (!ready.value || saving.value) return
+  recordingHotkey.value = !recordingHotkey.value
+  hotkeyError.value = ''
+}
+
+function cancelRecordingHotkey(): void {
+  recordingHotkey.value = false
+}
+
+async function onRecordKeyDown(event: KeyboardEvent): Promise<void> {
+  if (!recordingHotkey.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  if (event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
+    recordingHotkey.value = false
+    hotkeyError.value = ''
+    return
+  }
+  const candidate = hotkeyFromEvent(event)
+  if (candidate === undefined) return
+  const normalized = normalizeHotkey(candidate)
+  if (normalized === undefined || normalized === '') {
+    recordingHotkey.value = false
+    hotkeyError.value = t('wtShortcutInvalid')
+    toast.show('danger', 'wtShortcutInvalid')
+    return
+  }
+  recordingHotkey.value = false
+  hotkeyError.value = ''
+  toast.clear()
+  await changeInputReplaceKey(normalized)
+}
+
+async function resetReplaceHotkey(): Promise<void> {
+  recordingHotkey.value = false
+  hotkeyError.value = ''
+  await changeInputReplaceKey(DEFAULT_INPUT_REPLACE_KEY)
+}
+
+async function disableReplaceHotkey(): Promise<void> {
+  recordingHotkey.value = false
+  hotkeyError.value = ''
+  await changeInputReplaceKey('')
 }
 
 async function changeInputTranslation(enabled: boolean): Promise<void> {
@@ -1335,8 +1622,10 @@ async function loadShortcuts(): Promise<void> {
 }
 
 async function openShortcuts(): Promise<void> {
+  const isEdge = typeof navigator !== 'undefined' && navigator.userAgent.includes('Edg/')
+  const url = isEdge ? 'edge://extensions/shortcuts' : 'chrome://extensions/shortcuts'
   try {
-    await browser.tabs.create({ url: 'chrome://extensions/shortcuts' })
+    await browser.tabs.create({ url })
   } catch {
     toast.show('danger', 'wtShortcutsOpenFailed')
   }
@@ -1609,13 +1898,76 @@ onBeforeUnmount(() => {
 
 .wt-shortcut-list > li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
   padding: 8px 12px;
   background: var(--gcn-bg-muted);
   border: 1px solid var(--gcn-border-muted);
   border-radius: var(--gcn-radius);
+}
+
+.wt-shortcut-actions {
+  display: flex;
+  flex-wrap: wrap;
+  flex-basis: 100%;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+
+.wt-shortcut-list kbd.is-recording {
+  color: var(--gcn-accent);
+  border-color: var(--gcn-accent);
+}
+
+/* 输入翻译的子设置：缩进并以左边线归属到上方开关 */
+.wt-subpanel {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 12px 14px;
+  background: var(--gcn-bg-muted);
+  border: 1px solid var(--gcn-border-muted);
+  border-left: 3px solid var(--gcn-accent);
+  border-radius: var(--gcn-radius);
+  transition: opacity var(--gcn-duration-base) var(--gcn-ease);
+}
+
+.wt-subpanel.is-inactive {
+  opacity: 0.6;
+}
+
+.wt-subpanel > .wt-hint {
+  margin: 0;
+}
+
+.wt-delay-row {
+  display: grid;
+  gap: 8px;
+}
+
+.wt-delay-row.has-custom {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 7.5em);
+}
+
+.wt-delay-custom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.wt-delay-custom :deep(.ui-input) {
+  min-width: 0;
+  width: 100%;
+}
+
+.wt-delay-unit {
+  flex: none;
+  font-size: 12px;
+  color: var(--gcn-fg-muted);
 }
 
 .wt-shortcut-list kbd {

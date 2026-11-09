@@ -102,13 +102,13 @@ describe.skipIf(!App)('设置页组件', () => {
       expect(wrapper.get('[data-test="wt-input-translation-toggle"] [role="switch"]').attributes('aria-checked')).toBe('false')
       expect(wrapper.get('[data-test="wt-dict-devin"]').find('[role="switch"]').exists()).toBe(true)
       expect(wrapper.get('[data-test="wt-dict-cursor"]').find('[role="switch"]').exists()).toBe(true)
-      // 接口协议、模型、源语言、目标语言、输入目标语言、辅助模式、单页上限、网站运行范围，外观里的界面风格与主题，加上 GitHub 界面语言与词典语言里实际渲染的下拉
+      // 接口协议、模型、源语言、目标语言、输入源语言、输入目标语言、输入替换方式、辅助模式、单页上限、网站运行范围，外观里的界面风格与主题，加上 GitHub 界面语言与词典语言里实际渲染的下拉
       expect(wrapper.find('[data-test="ui-language"]').exists()).toBe(true)
       expect(wrapper.find('[data-test="page-language"]').exists()).toBe(true)
       expect(wrapper.find('[data-test="wt-page-limit"]').exists()).toBe(true)
-      expect(wrapper.findAll('[role="combobox"]')).toHaveLength(12)
+      expect(wrapper.findAll('[role="combobox"]')).toHaveLength(14)
       expect(wrapper.find('[data-test="wt-assist-mode"]').exists()).toBe(true)
-      expect(wrapper.find('[data-test="wt-shortcuts"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="wt-shortcuts"]').exists()).toBe(true)
       expect(wrapper.text()).toContain('输入翻译快捷键在自动弹窗关闭时仍可直接替换')
     })
 

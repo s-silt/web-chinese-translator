@@ -5,6 +5,12 @@ import {
   completionUrl,
   DEFAULT_TRANSLATION_CONFIG,
   getTranslationConfig,
+  INPUT_AUTO_REPLACE_DELAY_DEFAULT,
+  INPUT_AUTO_REPLACE_DELAY_MAX,
+  INPUT_AUTO_REPLACE_DELAY_MIN,
+  INPUT_AUTO_REPLACE_DELAY_PRESETS,
+  isInputAutoReplaceDelay,
+  isInputReplaceMode,
   isModelId,
   isModelList,
   MAX_DISCOVERED_MODELS,
@@ -256,6 +262,51 @@ describe('sanitizeTranslationConfig', () => {
     expect(sanitizeTranslationConfig({ inputTargetLanguage: 'xx' }).inputTargetLanguage).toBe('en')
     for (const inputTargetLanguage of ['ja', 'es', 'fr', 'de', 'pt'] as const) {
       expect(sanitizeTranslationConfig({ inputTargetLanguage }).inputTargetLanguage).toBe(inputTargetLanguage)
+    }
+  })
+
+  it('缺省输入源语言迁移为 auto，合法值保留，非法值回落 auto', () => {
+    expect(sanitizeTranslationConfig({ model: 'legacy' }).inputSourceLanguage).toBe('auto')
+    expect(sanitizeTranslationConfig({ inputSourceLanguage: 'xx' }).inputSourceLanguage).toBe('auto')
+    expect(sanitizeTranslationConfig({ inputSourceLanguage: '' }).inputSourceLanguage).toBe('auto')
+    for (const inputSourceLanguage of ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt'] as const) {
+      expect(sanitizeTranslationConfig({ inputSourceLanguage }).inputSourceLanguage).toBe(inputSourceLanguage)
+    }
+  })
+
+  it('输入替换快捷键默认 Tab，空串保留，合法组合键归一化，非法值回落 Tab', () => {
+    expect(sanitizeTranslationConfig({ model: 'legacy' }).inputReplaceKey).toBe('Tab')
+    expect(sanitizeTranslationConfig({ inputReplaceKey: '' }).inputReplaceKey).toBe('')
+    expect(sanitizeTranslationConfig({ inputReplaceKey: 'ctrl+enter' }).inputReplaceKey).toBe('Ctrl+Enter')
+    expect(sanitizeTranslationConfig({ inputReplaceKey: 'shift+ctrl+r' }).inputReplaceKey).toBe('Ctrl+Shift+R')
+    for (const bad of ['a', 'Enter', 'Escape', 'Shift+a', 123, null]) {
+      expect(sanitizeTranslationConfig({ inputReplaceKey: bad }).inputReplaceKey).toBe('Tab')
+    }
+  })
+
+  it('输入替换方式默认 hotkey，自动替换等待时间默认 1000ms，非法值归一化回落默认', () => {
+    expect(DEFAULT_TRANSLATION_CONFIG.inputReplaceMode).toBe('hotkey')
+    expect(DEFAULT_TRANSLATION_CONFIG.inputAutoReplaceDelayMs).toBe(INPUT_AUTO_REPLACE_DELAY_DEFAULT)
+    expect(INPUT_AUTO_REPLACE_DELAY_MIN).toBe(500)
+    expect(INPUT_AUTO_REPLACE_DELAY_MAX).toBe(10_000)
+    expect(INPUT_AUTO_REPLACE_DELAY_DEFAULT).toBe(1000)
+    expect(INPUT_AUTO_REPLACE_DELAY_PRESETS).toEqual([1000, 2000, 3000, 5000])
+
+    expect(isInputReplaceMode('hotkey')).toBe(true)
+    expect(isInputReplaceMode('auto')).toBe(true)
+    for (const badMode of ['', 'manual', null, undefined, 1]) {
+      expect(isInputReplaceMode(badMode)).toBe(false)
+      expect(sanitizeTranslationConfig({ inputReplaceMode: badMode }).inputReplaceMode).toBe('hotkey')
+    }
+    expect(sanitizeTranslationConfig({ inputReplaceMode: 'auto' }).inputReplaceMode).toBe('auto')
+
+    for (const validDelay of [500, 600, 1000, 1500, 2000, 3000, 5000, 10_000]) {
+      expect(isInputAutoReplaceDelay(validDelay)).toBe(true)
+      expect(sanitizeTranslationConfig({ inputAutoReplaceDelayMs: validDelay }).inputAutoReplaceDelayMs).toBe(validDelay)
+    }
+    for (const badDelay of [499, 10_001, 150, 550, 1000.5, 0, -1000, '1000', null, undefined, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(isInputAutoReplaceDelay(badDelay)).toBe(false)
+      expect(sanitizeTranslationConfig({ inputAutoReplaceDelayMs: badDelay }).inputAutoReplaceDelayMs).toBe(1000)
     }
   })
 

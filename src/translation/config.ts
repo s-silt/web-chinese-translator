@@ -1,5 +1,6 @@
 import { storage } from 'wxt/utils/storage'
 import { BUILTIN_DICTIONARY_META } from './dictionaries/index'
+import { DEFAULT_INPUT_REPLACE_KEY, normalizeHotkey } from './input-hotkey'
 import { isSourceLanguage, isTargetLanguage, type SourceLanguage, type TargetLanguage } from './target-language'
 import { sanitizeExcludedHosts } from './page-policy'
 import {
@@ -12,6 +13,27 @@ import {
 } from './request-options'
 import { isSiteScopeMode, type SiteScopeMode } from './site-scope'
 
+export type InputReplaceMode = 'hotkey' | 'auto'
+
+export function isInputReplaceMode(value: unknown): value is InputReplaceMode {
+  return value === 'hotkey' || value === 'auto'
+}
+
+export const INPUT_AUTO_REPLACE_DELAY_MIN = 500
+export const INPUT_AUTO_REPLACE_DELAY_MAX = 10_000
+export const INPUT_AUTO_REPLACE_DELAY_DEFAULT = 1000
+export const INPUT_AUTO_REPLACE_DELAY_PRESETS = [1000, 2000, 3000, 5000] as const
+
+export function isInputAutoReplaceDelay(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= INPUT_AUTO_REPLACE_DELAY_MIN &&
+    value <= INPUT_AUTO_REPLACE_DELAY_MAX &&
+    value % 100 === 0
+  )
+}
+
 export interface TranslationConfig {
   readonly baseUrl: string
   readonly model: string
@@ -23,6 +45,10 @@ export interface TranslationConfig {
   readonly disabledDictionaries: readonly string[]
   readonly targetLanguage: TargetLanguage
   readonly inputTargetLanguage: TargetLanguage
+  readonly inputSourceLanguage: SourceLanguage
+  readonly inputReplaceKey: string
+  readonly inputReplaceMode: InputReplaceMode
+  readonly inputAutoReplaceDelayMs: number
   readonly sourceLanguage: SourceLanguage
   readonly selectionPopupEnabled: boolean
   readonly selectionToolbarEnabled: boolean
@@ -57,6 +83,10 @@ export const DEFAULT_TRANSLATION_CONFIG: TranslationConfig = {
   disabledDictionaries: [],
   targetLanguage: 'zh-CN',
   inputTargetLanguage: 'en',
+  inputSourceLanguage: 'auto',
+  inputReplaceKey: DEFAULT_INPUT_REPLACE_KEY,
+  inputReplaceMode: 'hotkey',
+  inputAutoReplaceDelayMs: INPUT_AUTO_REPLACE_DELAY_DEFAULT,
   sourceLanguage: 'auto',
   selectionPopupEnabled: false,
   selectionToolbarEnabled: false,
@@ -234,6 +264,15 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
     disabledDictionaries: sanitizeDisabledDictionaries(value),
     targetLanguage: isTargetLanguage(value.targetLanguage) ? value.targetLanguage : 'zh-CN',
     inputTargetLanguage: isTargetLanguage(value.inputTargetLanguage) ? value.inputTargetLanguage : 'en',
+    inputSourceLanguage: isSourceLanguage(value.inputSourceLanguage) ? value.inputSourceLanguage : 'auto',
+    inputReplaceKey:
+      typeof value.inputReplaceKey === 'string'
+        ? normalizeHotkey(value.inputReplaceKey) ?? DEFAULT_INPUT_REPLACE_KEY
+        : DEFAULT_INPUT_REPLACE_KEY,
+    inputReplaceMode: isInputReplaceMode(value.inputReplaceMode) ? value.inputReplaceMode : 'hotkey',
+    inputAutoReplaceDelayMs: isInputAutoReplaceDelay(value.inputAutoReplaceDelayMs)
+      ? value.inputAutoReplaceDelayMs
+      : INPUT_AUTO_REPLACE_DELAY_DEFAULT,
     sourceLanguage: isSourceLanguage(value.sourceLanguage) ? value.sourceLanguage : 'auto',
     selectionPopupEnabled: selectionOn,
     selectionToolbarEnabled: toolbarOn,
