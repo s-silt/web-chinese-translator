@@ -699,7 +699,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     if (autoReplaceTimer !== undefined) {
       clearTimeout(autoReplaceTimer)
       autoReplaceTimer = undefined
-     }
+    }
     autoHintNode.remove()
   }
 
@@ -903,7 +903,8 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       }
       return
     }
-    const seconds = String(delay / 1000)
+    // 显示实际剩余时间（向上取到 0.1 秒），而非完整等待时间
+    const seconds = String(Math.ceil(remaining / 100) / 10)
     const hint = options.t('wtInputAutoReplaceCountdown', { seconds }).replace('{seconds}', seconds)
     renderPreview(translation, hint)
     autoReplaceTimer = setTimeout(() => {

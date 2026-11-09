@@ -2923,11 +2923,11 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
     await vi.advanceTimersByTimeAsync(600)
     await Promise.resolve()
 
-    // 600ms 时译文返回，预览浮层显示且带「1 秒后自动替换」提示，尚未替换
+    // 600ms 时译文返回，预览浮层显示剩余时间「0.4 秒后自动替换」，尚未替换
     expect(translate).toHaveBeenCalledTimes(1)
     expect(textarea.value).toBe('第一版中文')
     expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('EN:第一版中文')
-    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')?.textContent).toBe('1 秒后自动替换')
+    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')?.textContent).toBe('0.4 秒后自动替换')
 
     // 800ms（未满 1s）时再次输入：取消上一次自动替换并重新计时
     await vi.advanceTimersByTimeAsync(200)
@@ -2943,7 +2943,7 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(2)
     expect(textarea.value).toBe('第二版中文')
-    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')?.textContent).toBe('1 秒后自动替换')
+    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')?.textContent).toBe('0.4 秒后自动替换')
 
     // 距第二次输入满 1000ms（再过 400ms）自动替换
     await vi.advanceTimersByTimeAsync(399)
