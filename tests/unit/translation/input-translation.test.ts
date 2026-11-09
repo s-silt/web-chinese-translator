@@ -1672,6 +1672,41 @@ describe('直接替换', () => {
     watcher.dispose()
   })
 
+  it('自动检测下字形像目标语言的草稿（无重音法语 → 英语、简体 → 繁体）：自动预览跳过，手动快捷键仍翻译', async () => {
+    const input = document.createElement('textarea')
+    document.body.append(input)
+    let target: 'en' | 'zh-TW' = 'en'
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`T:${texts[0]}`] }))
+    const watcher = createInputTranslation({
+      translate,
+      cancel: vi.fn(),
+      t: (key) => zhCN[key],
+      targetLanguage: () => target,
+    })
+    focusEditable(input)
+    input.value = 'Bonjour le monde'
+    trustedInput(input)
+    await vi.advanceTimersByTimeAsync(650)
+    expect(translate).not.toHaveBeenCalled()
+    expect(watcher.translateAndReplace()).toBe(true)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(translate).toHaveBeenCalledTimes(1)
+    expect(input.value).toBe('T:Bonjour le monde')
+
+    target = 'zh-TW'
+    input.value = '你好'
+    trustedInput(input)
+    await vi.advanceTimersByTimeAsync(650)
+    expect(translate).toHaveBeenCalledTimes(1)
+    expect(watcher.translateAndReplace()).toBe(true)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(translate).toHaveBeenCalledTimes(2)
+    expect(input.value).toBe('T:你好')
+    watcher.dispose()
+  })
+
   it('在途再次按键不新请求，已有预览不额外请求', async () => {
     const input = document.createElement('textarea')
     document.body.append(input)

@@ -338,7 +338,7 @@ const zhCN = {
   wtInputTranslation: '输入翻译',
   wtInputTranslationHint: '开启时需申请网站访问权限。开启后，允许的网站会把尚未发送的草稿从所选源语言（可自动检测）交给你配置的翻译服务，译成所选目标语言。快捷键直接替换，无需再确认；新草稿会取消尚未完成的旧请求，不会自动发送。自动弹窗关闭时，快捷键仍然可用。目前仅支持普通输入框，以及 Discord、ChatGPT、Claude、Telegram Web、WhatsApp、Slack 和 Teams 的纯文字草稿；复杂富文本、提及和附件暂不支持；敏感页面与字段不处理。',
   wtInputSourceLanguage: '输入翻译源语言',
-  wtInputSourceLanguageHint: '默认自动检测；已是目标语言的草稿不会重复翻译。',
+  wtInputSourceLanguageHint: '默认自动检测；看起来已是目标语言的草稿不自动预览，按快捷键手动翻译时照常发送。',
   wtInputTargetLanguage: '输入翻译目标语言',
   wtInputTargetLanguageHint: '仅用于聊天、评论和弹幕输入，不改变网页或视频字幕的翻译语言。',
   wtInputSameLanguageHint: '输入翻译的源语言与目标语言相同，草稿不会触发翻译。',

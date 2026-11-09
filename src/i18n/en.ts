@@ -343,7 +343,7 @@ export default {
   wtInputTranslation: 'Input translation',
   wtInputTranslationHint: 'Requires site access. On allowed sites, an unsent draft is sent to your configured translation service and translated from the selected source language (or auto-detected) into the selected target language. The shortcut replaces the draft directly, with no extra confirmation. A new draft cancels the previous request. Drafts are never sent automatically. The shortcut still works when automatic popups are off. Standard fields and plain-text drafts on Discord, ChatGPT, Claude, Telegram Web, WhatsApp, Slack, and Teams are supported. Complex rich text, mentions, and attachments are not supported yet. Sensitive pages and fields are skipped.',
   wtInputSourceLanguage: 'Input source language',
-  wtInputSourceLanguageHint: 'Auto-detected by default. Drafts already in the target language are skipped.',
+  wtInputSourceLanguageHint: 'Auto-detected by default. Drafts that already look like the target language are not previewed automatically, but the manual shortcut still translates them.',
   wtInputTargetLanguage: 'Input translation language',
   wtInputTargetLanguageHint: 'Used only for chat, comments and on-screen comments. It does not change the language used for pages or video subtitles.',
   wtInputSameLanguageHint: 'Input source and target languages are the same; drafts will not be translated.',

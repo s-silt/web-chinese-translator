@@ -331,7 +331,7 @@ const messages: Messages = {
   wtInputTranslation: '入力翻訳',
   wtInputTranslationHint: '有効にするにはサイトへのアクセス権限が必要です。許可されたサイトでは、未送信の下書きを設定済みの翻訳サービスへ送り、選んだ原文の言語（自動検出可）から対象言語に訳します。ショートカットは確認なしで直接置き換えます。新しい下書きは未完了の依頼を取り消します。自動送信はしません。自動ポップアップをオフにしてもショートカットは使えます。現在対応しているのは通常の入力欄と、Discord、ChatGPT、Claude、Telegram Web、WhatsApp、Slack、Teams のプレーンテキスト下書きだけです。複雑なリッチテキスト、メンション、添付ファイルには未対応です。機密ページや機密欄は処理しません。',
   wtInputSourceLanguage: '入力翻訳の原文言語',
-  wtInputSourceLanguageHint: '既定は自動検出です。すでに対象言語になっている下書きは翻訳しません。',
+  wtInputSourceLanguageHint: '既定は自動検出です。すでに対象言語に見える下書きは自動プレビューしませんが、ショートカットで手動翻訳すると送信されます。',
   wtInputTargetLanguage: '入力翻訳の対象言語',
   wtInputTargetLanguageHint: 'チャット、コメント、弾幕の入力だけに使います。ウェブページや動画字幕の翻訳言語は変えません。',
   wtInputSameLanguageHint: '入力翻訳の原文言語と対象言語が同じため、下書きは翻訳されません。',

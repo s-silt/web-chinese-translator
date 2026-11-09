@@ -650,10 +650,10 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     return isInputAutoReplaceDelay(raw) ? raw : INPUT_AUTO_REPLACE_DELAY_DEFAULT
   }
 
-  function isDraftCandidate(value: string): boolean {
+  function isDraftCandidate(value: string, manual = false): boolean {
     const source = options.sourceLanguage?.() ?? 'auto'
     const target = options.targetLanguage?.() ?? 'en'
-    return isCandidateDraft(value, source, target)
+    return isCandidateDraft(value, source, target, manual)
   }
 
   function syncLabels(): void {
@@ -929,7 +929,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     if (backupState !== undefined && backupState.field === field && liveValue === backupState.inserted) {
       return
     }
-    if (!isDraftCandidate(liveValue)) {
+    if (!isDraftCandidate(liveValue, manualInput)) {
       clearAllState(true)
       return
     }
@@ -1414,7 +1414,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     const field = focusedField()
     if (field === undefined || composingField === field || !isCurrentEditable(field)) return false
     const live = readFieldValue(field)
-    if (!isDraftCandidate(live)) return false
+    if (!isDraftCandidate(live, true)) return false
     if (backupState !== undefined && backupState.field === field && live === backupState.inserted) return false
     clearBeforeInput()
     clearDebounce()

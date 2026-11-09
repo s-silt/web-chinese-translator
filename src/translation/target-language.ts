@@ -78,17 +78,22 @@ const HAN_SCRIPT = /\p{Script=Han}/u
 const LATIN_SCRIPT = /\p{Script=Latin}/u
 const LETTER_CHAR = /\p{L}/u
 
-/** 输入框草稿是否适合发起输入翻译。 */
+/**
+ * 输入框草稿是否适合发起输入翻译。
+ * 自动检测只凭字形判断，分不清无重音法语与英语、简体与繁体，所以自动预览遇到「像目标语言」的草稿就跳过；
+ * 用户手动触发（manual）时不做这一步，交给模型处理。
+ */
 export function isCandidateDraft(
   value: string,
   source: SourceLanguage = 'auto',
   target: TargetLanguage = 'en',
+  manual = false,
 ): boolean {
   const trimmed = value.trim()
   if (trimmed === '' || value.length > MAX_INPUT_DRAFT_LENGTH) return false
   if (!LETTER_CHAR.test(trimmed)) return false
   if (source === 'auto') {
-    return !looksLikeTargetLanguage(trimmed, target)
+    return manual || !looksLikeTargetLanguage(trimmed, target)
   }
   if (source === target) return false
   switch (source) {

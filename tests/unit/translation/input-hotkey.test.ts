@@ -190,3 +190,19 @@ describe('input-hotkey 解析与规范化', () => {
     expect(formatHotkey('invalid', false)).toBe('')
   })
 })
+
+describe('加号键', () => {
+  it('Ctrl 加「+」录制为 Ctrl+Plus，可往返解析并匹配实际按键', () => {
+    const recorded = hotkeyFromEvent({ key: '+', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false })
+    expect(recorded).toBe('Ctrl+Plus')
+    expect(normalizeHotkey('Ctrl+Plus')).toBe('Ctrl+Plus')
+    expect(normalizeHotkey('Ctrl++')).toBe('Ctrl+Plus')
+    expect(parseHotkey('Ctrl+Plus')).toEqual({ ctrl: true, alt: false, shift: false, meta: false, key: 'Plus' })
+    expect(matchesHotkey({ key: '+', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false }, 'Ctrl+Plus')).toBe(true)
+    expect(matchesHotkey({ key: '=', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false }, 'Ctrl+Plus')).toBe(false)
+    // 不带主修饰键的「+」仍属可打印字符，不允许
+    expect(normalizeHotkey('Plus')).toBeUndefined()
+    expect(normalizeHotkey('Shift+Plus')).toBeUndefined()
+    expect(normalizeHotkey('+')).toBeUndefined()
+  })
+})
