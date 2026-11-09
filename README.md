@@ -2,6 +2,7 @@
   <img src="public/icon/128.png" width="72" height="72" alt=""><br>
   网页汉化助手
 </h1>
+<p align="center">简体中文 · <a href="README.en.md">English</a></p>
 
 <p align="center">
   用你自己的模型接口，把任意网页翻译成中文<br>
