@@ -12,27 +12,22 @@ import {
   type RequestOptions,
 } from './request-options'
 import { isSiteScopeMode, type SiteScopeMode } from './site-scope'
+import {
+  INPUT_AUTO_REPLACE_DELAY_DEFAULT,
+  isInputAutoReplaceDelay,
+  isInputReplaceMode,
+  type InputReplaceMode,
+} from './input-replace-mode'
 
-export type InputReplaceMode = 'hotkey' | 'auto'
-
-export function isInputReplaceMode(value: unknown): value is InputReplaceMode {
-  return value === 'hotkey' || value === 'auto'
-}
-
-export const INPUT_AUTO_REPLACE_DELAY_MIN = 500
-export const INPUT_AUTO_REPLACE_DELAY_MAX = 10_000
-export const INPUT_AUTO_REPLACE_DELAY_DEFAULT = 1000
-export const INPUT_AUTO_REPLACE_DELAY_PRESETS = [1000, 2000, 3000, 5000] as const
-
-export function isInputAutoReplaceDelay(value: unknown): value is number {
-  return (
-    typeof value === 'number' &&
-    Number.isInteger(value) &&
-    value >= INPUT_AUTO_REPLACE_DELAY_MIN &&
-    value <= INPUT_AUTO_REPLACE_DELAY_MAX &&
-    value % 100 === 0
-  )
-}
+export {
+  INPUT_AUTO_REPLACE_DELAY_DEFAULT,
+  INPUT_AUTO_REPLACE_DELAY_MAX,
+  INPUT_AUTO_REPLACE_DELAY_MIN,
+  INPUT_AUTO_REPLACE_DELAY_PRESETS,
+  isInputAutoReplaceDelay,
+  isInputReplaceMode,
+  type InputReplaceMode,
+} from './input-replace-mode'
 
 export interface TranslationConfig {
   readonly baseUrl: string
