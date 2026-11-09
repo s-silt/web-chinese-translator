@@ -72,3 +72,38 @@ export function looksLikeTargetLanguage(text: string, language: TargetLanguage):
 export function joinsWithoutSpaces(language: TargetLanguage): boolean {
   return language === 'zh-CN' || language === 'zh-TW' || language === 'ja'
 }
+
+const MAX_INPUT_DRAFT_LENGTH = 6000
+const HAN_SCRIPT = /\p{Script=Han}/u
+const LATIN_SCRIPT = /\p{Script=Latin}/u
+const LETTER_CHAR = /\p{L}/u
+
+/** 输入框草稿是否适合发起输入翻译。 */
+export function isCandidateDraft(
+  value: string,
+  source: SourceLanguage = 'auto',
+  target: TargetLanguage = 'en',
+): boolean {
+  const trimmed = value.trim()
+  if (trimmed === '' || value.length > MAX_INPUT_DRAFT_LENGTH) return false
+  if (!LETTER_CHAR.test(trimmed)) return false
+  if (source === 'auto') {
+    return !looksLikeTargetLanguage(trimmed, target)
+  }
+  if (source === target) return false
+  switch (source) {
+    case 'zh-CN':
+    case 'zh-TW':
+      return HAN_SCRIPT.test(trimmed)
+    case 'ja':
+      return KANA.test(trimmed) || HAN_SCRIPT.test(trimmed)
+    case 'ko':
+      return HANGUL.test(trimmed)
+    case 'en':
+    case 'es':
+    case 'fr':
+    case 'de':
+    case 'pt':
+      return LATIN_SCRIPT.test(trimmed)
+  }
+}

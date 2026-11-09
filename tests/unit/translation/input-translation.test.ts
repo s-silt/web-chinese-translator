@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { translateMessage } from '../../../src/i18n'
 import zhCN from '../../../src/i18n/zh-CN'
 import {
   isChatEditorCandidate,
@@ -2619,7 +2620,7 @@ describe('预览弹窗 Tab 快捷键替换', () => {
 
     const replaceBtn = requirePopoverButton('replace')
     expect(replaceBtn.getAttribute('aria-keyshortcuts')).toBe('Tab')
-    expect(replaceBtn.title).toBe(zhCN.wtInputReplaceHint)
+    expect(replaceBtn.title).toBe(translateMessage('zh-CN', 'wtInputReplaceHint', { key: 'Tab' }))
 
     const bubbleSpy = vi.fn()
     textarea.addEventListener('keydown', bubbleSpy)
@@ -2788,6 +2789,425 @@ describe('预览弹窗 Tab 快捷键替换', () => {
 
     watcher.dispose()
   })
+
+  it('自定义替换键（如 Ctrl+Enter）生效且 Tab 不再触发；空串时不拦截 Tab 且移除 aria-keyshortcuts', async () => {
+    const textarea = document.createElement('textarea')
+    document.body.append(textarea)
+    let replaceKey = 'Ctrl+Enter'
+    const translate = vi.fn(async (texts: string[]) => ({
+      ok: true as const,
+      texts: [`Translated: ${texts[0]}`],
+    }))
+    const watcher = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k, params) => translateMessage('zh-CN', k, params),
+      replaceKey: () => replaceKey,
+    })
+
+    textarea.focus()
+    trustedInput(textarea, '需要替换的中文草稿')
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+
+    const replaceBtn = requirePopoverButton('replace')
+    expect(replaceBtn.getAttribute('aria-keyshortcuts')).toBe('Control+Enter')
+    expect(replaceBtn.title).toBe(translateMessage('zh-CN', 'wtInputReplaceHint', { key: 'Ctrl+Enter' }))
+
+    // 按 Tab 不再触发替换
+    const tabEvent = dispatchTab(textarea)
+    expect(tabEvent.defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('需要替换的中文草稿')
+
+    // 按 Ctrl+Enter 触发替换
+    const ctrlEnter = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      ctrlKey: true,
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+    })
+    Object.defineProperty(ctrlEnter, 'isTrusted', { value: true, configurable: true })
+    textarea.dispatchEvent(ctrlEnter)
+    expect(ctrlEnter.defaultPrevented).toBe(true)
+    expect(textarea.value).toBe('Translated: 需要替换的中文草稿')
+
+    // 切换为空串（不使用快捷键）
+    replaceKey = ''
+    trustedInput(textarea, '第二段草稿')
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+
+    const disabledReplaceBtn = requirePopoverButton('replace')
+    expect(disabledReplaceBtn.hasAttribute('aria-keyshortcuts')).toBe(false)
+    expect(disabledReplaceBtn.title).toBe(zhCN.wtInputReplaceClickHint)
+
+    const tabWhenDisabled = dispatchTab(textarea)
+    expect(tabWhenDisabled.defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('第二段草稿')
+
+    watcher.dispose()
+  })
+
+  it('多语言输入翻译：目标为 zh-CN 时翻译英文草稿并跳过中文，浮层标题显示 源语言 → 目标语言', async () => {
+    const textarea = document.createElement('textarea')
+    document.body.append(textarea)
+    let sourceLang: 'auto' | 'en' | 'zh-CN' = 'auto'
+    let targetLang: 'zh-CN' | 'en' = 'zh-CN'
+    const translate = vi.fn(async (texts: string[]) => ({
+      ok: true as const,
+      texts: [`ZH:${texts[0]}`],
+    }))
+    const watcher = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k, params) => translateMessage('zh-CN', k, params),
+      sourceLanguage: () => sourceLang,
+      targetLanguage: () => targetLang,
+    })
+
+    textarea.focus()
+    // 目标为 zh-CN 时，中文草稿已是目标语言，不触发
+    trustedInput(textarea, '已经是中文草稿')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(translate).not.toHaveBeenCalled()
+
+    // 英文草稿在目标为 zh-CN 时触发翻译
+    trustedInput(textarea, 'Please review this pull request')
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+    expect(translate).toHaveBeenCalledTimes(1)
+    expect(translate.mock.calls[0]?.[0]).toEqual(['Please review this pull request'])
+    expect(popoverShadow()?.querySelector('.title')?.textContent).toBe(
+      `${zhCN.wtInputTranslation} · ${zhCN.wtSourceAuto} → 简体中文`,
+    )
+
+    // 指定源语言 en → zh-CN 时标题显示 English → 简体中文
+    sourceLang = 'en'
+    trustedInput(textarea, 'Another English draft')
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+    expect(popoverShadow()?.querySelector('.title')?.textContent).toBe(
+      `${zhCN.wtInputTranslation} · English → 简体中文`,
+    )
+
+    // source === target 时不触发
+    targetLang = 'en'
+    translate.mockClear()
+    trustedInput(textarea, 'Same language draft')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(translate).not.toHaveBeenCalled()
+
+    watcher.dispose()
+  })
 })
+
+describe('停止输入后自动替换（replaceMode = auto）', () => {
+  it('auto + 1000ms：输入后满 1s 自动替换并显示倒计时提示；未满 1s 再次输入会取消并按最后一次输入重新计时', async () => {
+    const textarea = document.createElement('textarea')
+    document.body.append(textarea)
+    const translate = vi.fn(async (texts: string[]) => ({
+      ok: true as const,
+      texts: [`EN:${texts[0]}`],
+    }))
+    const watcher = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+      replaceMode: () => 'auto',
+      autoReplaceDelayMs: () => 1000,
+    })
+
+    focusEditable(textarea)
+    trustedInput(textarea, '第一版中文')
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+
+    // 600ms 时译文返回，预览浮层显示且带「1 秒后自动替换」提示，尚未替换
+    expect(translate).toHaveBeenCalledTimes(1)
+    expect(textarea.value).toBe('第一版中文')
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('EN:第一版中文')
+    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')?.textContent).toBe('1 秒后自动替换')
+
+    // 800ms（未满 1s）时再次输入：取消上一次自动替换并重新计时
+    await vi.advanceTimersByTimeAsync(200)
+    expect(textarea.value).toBe('第一版中文')
+    trustedInput(textarea, '第二版中文')
+
+    // 到原 1000ms 时刻（再过 200ms）不会替换
+    await vi.advanceTimersByTimeAsync(200)
+    expect(textarea.value).toBe('第二版中文')
+
+    // 距第二次输入 600ms 时发起翻译并返回预览
+    await vi.advanceTimersByTimeAsync(400)
+    await Promise.resolve()
+    expect(translate).toHaveBeenCalledTimes(2)
+    expect(textarea.value).toBe('第二版中文')
+    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')?.textContent).toBe('1 秒后自动替换')
+
+    // 距第二次输入满 1000ms（再过 400ms）自动替换
+    await vi.advanceTimersByTimeAsync(399)
+    expect(textarea.value).toBe('第二版中文')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(textarea.value).toBe('EN:第二版中文')
+    expect(requirePopoverButton('restore')).not.toBeNull()
+    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')).toBeNull()
+
+    watcher.dispose()
+  })
+
+  it('译文返回晚于 delay 时立即替换；delay 小于 600ms 时按 delay 防抖', async () => {
+    const textarea = document.createElement('textarea')
+    document.body.append(textarea)
+    let delayMs = 1000
+    let resolveSlow: ((reply: { ok: true; texts: string[] }) => void) | undefined
+    const translate = vi.fn(
+      (texts: string[]) =>
+        new Promise<{ ok: true; texts: string[] }>((resolve) => {
+          resolveSlow = () => resolve({ ok: true, texts: [`EN:${texts[0]}`] })
+        }),
+    )
+    const watcher = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+      replaceMode: () => 'auto',
+      autoReplaceDelayMs: () => delayMs,
+    })
+
+    focusEditable(textarea)
+    trustedInput(textarea, '慢速翻译草稿')
+    await vi.advanceTimersByTimeAsync(600)
+    expect(translate).toHaveBeenCalledTimes(1)
+
+    // 再过 600ms（总计 1200ms > 1000ms）译文才返回，应立即替换
+    await vi.advanceTimersByTimeAsync(600)
+    resolveSlow?.({ ok: true, texts: ['EN:慢速翻译草稿'] })
+    await Promise.resolve()
+    expect(textarea.value).toBe('EN:慢速翻译草稿')
+
+    // delay = 500ms 时防抖取 500ms
+    delayMs = 500
+    trustedInput(textarea, '五百毫秒草稿')
+    await vi.advanceTimersByTimeAsync(499)
+    expect(translate).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(translate).toHaveBeenCalledTimes(2)
+    resolveSlow?.({ ok: true, texts: ['EN:五百毫秒草稿'] })
+    await Promise.resolve()
+    expect(textarea.value).toBe('EN:五百毫秒草稿')
+
+    watcher.dispose()
+  })
+
+  it('等待中失焦、点关闭、按 Escape、合成开始或内容变化均放弃自动替换且不报错', async () => {
+    const textarea = document.createElement('textarea')
+    document.body.append(textarea)
+    const translate = vi.fn(async (texts: string[]) => ({
+      ok: true as const,
+      texts: [`EN:${texts[0]}`],
+    }))
+    const watcher = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+      replaceMode: () => 'auto',
+      autoReplaceDelayMs: () => 1000,
+    })
+
+    // 1. 等待中失焦
+    focusEditable(textarea)
+    trustedInput(textarea, '失焦测试')
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    textarea.blur()
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(textarea.value).toBe('失焦测试')
+
+    // 2. 等待中点浮层关闭按钮
+    focusEditable(textarea)
+    trustedInput(textarea, '点关闭测试')
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    const closeBtn = popoverShadow()!.querySelector<HTMLButtonElement>('button[data-action="close"]')!
+    trustedClick(closeBtn)
+    expect(isPopoverOpen()).toBe(false)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(textarea.value).toBe('点关闭测试')
+
+    // 3. 等待中按 Escape 关闭浮层
+    trustedInput(textarea, '按Esc测试')
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    expect(isPopoverOpen()).toBe(true)
+    const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true })
+    Object.defineProperty(esc, 'isTrusted', { value: true, configurable: true })
+    textarea.dispatchEvent(esc)
+    expect(isPopoverOpen()).toBe(false)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(textarea.value).toBe('按Esc测试')
+
+    // 4. 等待中合成开始
+    trustedInput(textarea, '合成开始测试')
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    trustedComposition(textarea, 'compositionstart')
+    await vi.advanceTimersByTimeAsync(500)
+    expect(textarea.value).toBe('合成开始测试')
+    trustedComposition(textarea, 'compositionend')
+    await vi.advanceTimersByTimeAsync(1100)
+    await Promise.resolve()
+
+    // 5. 等待中内容被脚本静默修改（不触发 input 事件）→ 放弃自动替换且不报错
+    trustedInput(textarea, '内容静默变化测试')
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    textarea.value = '内容已被静默改掉'
+    await vi.advanceTimersByTimeAsync(500)
+    expect(textarea.value).toBe('内容已被静默改掉')
+    expect(popoverShadow()?.querySelector('.status.is-error')).toBeNull()
+
+    watcher.dispose()
+  })
+
+  it('等待中按替换键可提前替换，且计时器到期不会二次替换', async () => {
+    const textarea = document.createElement('textarea')
+    document.body.append(textarea)
+    const translate = vi.fn(async (texts: string[]) => ({
+      ok: true as const,
+      texts: [`EN:${texts[0]}`],
+    }))
+    const watcher = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+      replaceMode: () => 'auto',
+      autoReplaceDelayMs: () => 2000,
+    })
+
+    let inputCount = 0
+    textarea.addEventListener('input', () => {
+      inputCount += 1
+    })
+
+    focusEditable(textarea)
+    trustedInput(textarea, '提前按键草稿')
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    expect(textarea.value).toBe('提前按键草稿')
+
+    inputCount = 0
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, composed: true, cancelable: true })
+    Object.defineProperty(tab, 'isTrusted', { value: true, configurable: true })
+    textarea.dispatchEvent(tab)
+    expect(tab.defaultPrevented).toBe(true)
+    expect(textarea.value).toBe('EN:提前按键草稿')
+    expect(inputCount).toBe(1)
+
+    // 再过 2000ms，原计时器已清理，不会二次写入
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(inputCount).toBe(1)
+    expect(textarea.value).toBe('EN:提前按键草稿')
+
+    watcher.dispose()
+  })
+
+  it('还原原文后不会再次自动替换同一段原文，直到用户再次编辑；西/法/德/葡语译文替换后不会再次触发', async () => {
+    const textarea = document.createElement('textarea')
+    document.body.append(textarea)
+    let targetLang: 'en' | 'es' = 'en'
+    const translate = vi.fn(async (texts: string[]) => ({
+      ok: true as const,
+      texts: [targetLang === 'es' ? `Hola ${texts[0]}` : `Hello ${texts[0]}`],
+    }))
+    const watcher = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+      targetLanguage: () => targetLang,
+      replaceMode: () => 'auto',
+      autoReplaceDelayMs: () => 1000,
+    })
+
+    focusEditable(textarea)
+    trustedInput(textarea, '需要还原的草稿')
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(400)
+    expect(textarea.value).toBe('Hello 需要还原的草稿')
+
+    // 点击「还原原文」
+    const restoreBtn = requirePopoverButton('restore')
+    trustedClick(restoreBtn)
+    expect(textarea.value).toBe('需要还原的草稿')
+
+    // 等待超过 2s，甚至触发不改内容的 input 事件，都不会再次自动替换同一段原文
+    await vi.advanceTimersByTimeAsync(2000)
+    trustedInput(textarea)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(textarea.value).toBe('需要还原的草稿')
+    expect(translate).toHaveBeenCalledTimes(1)
+
+    // 用户再次编辑后正常自动替换，且目标语言为 es 时译文不会再次触发翻译
+    targetLang = 'es'
+    trustedInput(textarea, '修改后的草稿')
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(400)
+    expect(textarea.value).toBe('Hola 修改后的草稿')
+    expect(translate).toHaveBeenCalledTimes(2)
+
+    // 即使派发未改写内容的 input 事件，backupState 仍保护已替换文本不再触发翻译
+    trustedInput(textarea)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(translate).toHaveBeenCalledTimes(2)
+    expect(textarea.value).toBe('Hola 修改后的草稿')
+
+    watcher.dispose()
+  })
+
+  it('autoPreview=false 时 auto 模式仍自动替换；hotkey 模式下不会自动替换（回归）', async () => {
+    const textarea = document.createElement('textarea')
+    document.body.append(textarea)
+    let mode: 'auto' | 'hotkey' = 'auto'
+    let autoPreview = false
+    const translate = vi.fn(async (texts: string[]) => ({
+      ok: true as const,
+      texts: [`EN:${texts[0]}`],
+    }))
+    const watcher = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+      autoPreview: () => autoPreview,
+      replaceMode: () => mode,
+      autoReplaceDelayMs: () => 1000,
+    })
+
+    focusEditable(textarea)
+    trustedInput(textarea, '自动弹窗关闭时的草稿')
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(400)
+    expect(translate).toHaveBeenCalledTimes(1)
+    expect(textarea.value).toBe('EN:自动弹窗关闭时的草稿')
+
+    // 切回 hotkey 模式且开启 autoPreview：出预览但不会自动替换
+    mode = 'hotkey'
+    autoPreview = true
+    trustedInput(textarea, '快捷键模式的草稿')
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    expect(translate).toHaveBeenCalledTimes(2)
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('EN:快捷键模式的草稿')
+    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')).toBeNull()
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(textarea.value).toBe('快捷键模式的草稿')
+
+    watcher.dispose()
+  })
+})
+
 
 

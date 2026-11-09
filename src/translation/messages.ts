@@ -1,6 +1,13 @@
 import { isGitHubPageState, type GitHubPageAction, type GitHubPageState } from '../shared/messages'
-import { isModelList, isPageCharLimit, type TranslationConfig } from './config'
+import {
+  isInputAutoReplaceDelay,
+  isInputReplaceMode,
+  isModelList,
+  isPageCharLimit,
+  type TranslationConfig,
+} from './config'
 import { BUILTIN_DICTIONARY_META, MAX_FIXED_ENTRIES } from './dictionaries/index'
+import { normalizeHotkey } from './input-hotkey'
 import { isSiteScopeMode } from './site-scope'
 import { isSourceLanguage, isTargetLanguage } from './target-language'
 import { isPageContext, isPageId, type PageContext } from './reading-context'
@@ -266,6 +273,10 @@ const PATCH_KEYS = new Set([
   'videoSubtitlesEnabled',
   'inputTranslationEnabled',
   'inputTargetLanguage',
+  'inputSourceLanguage',
+  'inputReplaceKey',
+  'inputReplaceMode',
+  'inputAutoReplaceDelayMs',
   'pageCharLimit',
   'excludedHosts',
   'siteScopeMode',
@@ -283,6 +294,10 @@ function isSaveConfig(value: unknown): boolean {
     if (key === 'inputTargetLanguage' && !isTargetLanguage((patch as Record<string, unknown>)[key])) return false
     if (key === 'sourceLanguage' && !isSourceLanguage((patch as Record<string, unknown>)[key])) return false
     if (key === 'siteScopeMode' && !isSiteScopeMode((patch as Record<string, unknown>)[key])) return false
+    if (key === 'inputSourceLanguage' && !isSourceLanguage((patch as Record<string, unknown>)[key])) return false
+    if (key === 'inputReplaceKey' && normalizeHotkey((patch as Record<string, unknown>)[key]) === undefined) return false
+    if (key === 'inputReplaceMode' && !isInputReplaceMode((patch as Record<string, unknown>)[key])) return false
+    if (key === 'inputAutoReplaceDelayMs' && !isInputAutoReplaceDelay((patch as Record<string, unknown>)[key])) return false
     if (key === 'apiType' && !isApiType((patch as Record<string, unknown>)[key])) return false
     if (key === 'pageCharLimit' && !isPageCharLimit((patch as Record<string, unknown>)[key])) return false
     if (key === 'temperature' && !isTemperature((patch as Record<string, unknown>)[key])) return false
@@ -554,6 +569,11 @@ function isConfigShape(value: unknown): value is TranslationConfig {
     typeof value.videoSubtitlesEnabled === 'boolean' &&
     typeof value.inputTranslationEnabled === 'boolean' &&
     isTargetLanguage(value.inputTargetLanguage) &&
+    isSourceLanguage(value.inputSourceLanguage) &&
+    typeof value.inputReplaceKey === 'string' &&
+    normalizeHotkey(value.inputReplaceKey) === value.inputReplaceKey &&
+    isInputReplaceMode(value.inputReplaceMode) &&
+    isInputAutoReplaceDelay(value.inputAutoReplaceDelayMs) &&
     isPageCharLimit(value.pageCharLimit) &&
     isExcludedHosts(value.excludedHosts) &&
     isSiteScopeMode(value.siteScopeMode) &&

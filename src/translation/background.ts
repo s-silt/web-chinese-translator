@@ -18,6 +18,8 @@ import {
   completionUrl,
   hostPermissionPattern,
   getTranslationConfig,
+  isInputAutoReplaceDelay,
+  isInputReplaceMode,
   normalizeBaseUrl,
   normalizeOrigin,
   sanitizeTranslationConfig,
@@ -37,6 +39,7 @@ import {
   type ModelSnapshot,
 } from './model-state'
 import { clearPageContexts, installContextExpiry, recentPageContexts, recordPageContext } from './context-memory'
+import { normalizeHotkey } from './input-hotkey'
 import { isPageId, type PageContext, type TranslationContext } from './reading-context'
 import {
   isApiType,
@@ -465,7 +468,11 @@ async function assertDispatchAllowed(
       }
       checkCurrent(snapshot, signal)
     }
-    if (!config.autoInteractionEnabled && !(policy.feature === 'input' && policy.manualInput === true)) {
+    // 输入翻译设为停止输入后自动替换时，用户已明确同意自动处理草稿，不受「自动弹窗」关闭阻断
+    if (
+      !config.autoInteractionEnabled &&
+      !(policy.feature === 'input' && (policy.manualInput === true || config.inputReplaceMode === 'auto'))
+    ) {
       throw new TranslationError('自动弹窗已关闭')
     }
     if (policy.feature === 'subtitle' && !config.videoSubtitlesEnabled) {
@@ -1043,6 +1050,19 @@ async function saveConfig(
       videoSubtitlesEnabled: patch.videoSubtitlesEnabled ?? previous.videoSubtitlesEnabled,
       inputTranslationEnabled: patch.inputTranslationEnabled ?? previous.inputTranslationEnabled,
       inputTargetLanguage: patch.inputTargetLanguage ?? previous.inputTargetLanguage,
+      inputSourceLanguage: patch.inputSourceLanguage ?? previous.inputSourceLanguage,
+      inputReplaceKey:
+        patch.inputReplaceKey !== undefined
+          ? normalizeHotkey(patch.inputReplaceKey) ?? previous.inputReplaceKey
+          : previous.inputReplaceKey,
+      inputReplaceMode:
+        patch.inputReplaceMode !== undefined && isInputReplaceMode(patch.inputReplaceMode)
+          ? patch.inputReplaceMode
+          : previous.inputReplaceMode,
+      inputAutoReplaceDelayMs:
+        patch.inputAutoReplaceDelayMs !== undefined && isInputAutoReplaceDelay(patch.inputAutoReplaceDelayMs)
+          ? patch.inputAutoReplaceDelayMs
+          : previous.inputAutoReplaceDelayMs,
       pageCharLimit: patch.pageCharLimit ?? previous.pageCharLimit,
       excludedHosts: nextExcluded,
       siteScopeMode: nextMode,
@@ -1373,7 +1393,7 @@ async function handleTranslate(
             ...snapshot,
             config: {
               ...snapshot.config,
-              sourceLanguage: 'auto',
+              sourceLanguage: feature === 'input' ? snapshot.config.inputSourceLanguage : 'auto',
               targetLanguage:
                 feature === 'input'
                   ? snapshot.config.inputTargetLanguage

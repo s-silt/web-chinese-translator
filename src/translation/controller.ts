@@ -9,6 +9,7 @@ import {
   DEFAULT_PAGE_CHAR_LIMIT,
   DEFAULT_TRANSLATION_CONFIG,
   getTranslationConfig,
+  INPUT_AUTO_REPLACE_DELAY_DEFAULT,
   normalizeOrigin,
   watchTranslationConfig,
   type TranslationConfig,
@@ -49,6 +50,7 @@ import { isExcludedSite, isSensitivePage } from './page-policy'
 import { isSiteScopeAllowed, SITE_SCOPE_BLOCKED_ERROR } from './site-scope'
 import type { LiveTranslationWatcher } from './live-translation'
 import { createSubtitleTranslation } from './subtitles'
+import { DEFAULT_INPUT_REPLACE_KEY } from './input-hotkey'
 import { createInputTranslation, type InputTranslationWatcher } from './input-translation'
 import { currentYouTubeInputFrameTopUrl } from './input-frame'
 
@@ -569,7 +571,11 @@ function createInstance(inputOnly = false): Instance {
     if (inputTranslation !== undefined) return
     inputTranslation = createInputTranslation({
       autoPreview: () => config?.autoInteractionEnabled !== false,
+      sourceLanguage: () => config?.inputSourceLanguage ?? 'auto',
       targetLanguage: () => config?.inputTargetLanguage ?? 'en',
+      replaceKey: () => config?.inputReplaceKey ?? DEFAULT_INPUT_REPLACE_KEY,
+      replaceMode: () => config?.inputReplaceMode ?? 'hotkey',
+      autoReplaceDelayMs: () => config?.inputAutoReplaceDelayMs ?? INPUT_AUTO_REPLACE_DELAY_DEFAULT,
       translate: async (texts, requestId, manualInput) => {
         if (!inputTranslationOn()) {
           return { ok: false, error: t('wtInputUnavailable') }
@@ -585,7 +591,7 @@ function createInstance(inputOnly = false): Instance {
       cancel: (requestId) => {
         void sendTranslationMessage({ type: 'wt:cancel-assist', requestId })
       },
-      t: (key) => t(key),
+      t: (key, params) => t(key, params),
       ...(inputOnly
         ? {}
         : {
@@ -900,6 +906,10 @@ function createInstance(inputOnly = false): Instance {
         nextConfig.videoSubtitlesEnabled !== previousConfig.videoSubtitlesEnabled ||
         nextConfig.inputTranslationEnabled !== previousConfig.inputTranslationEnabled ||
         nextConfig.inputTargetLanguage !== previousConfig.inputTargetLanguage ||
+        nextConfig.inputSourceLanguage !== previousConfig.inputSourceLanguage ||
+        nextConfig.inputReplaceKey !== previousConfig.inputReplaceKey ||
+        nextConfig.inputReplaceMode !== previousConfig.inputReplaceMode ||
+        nextConfig.inputAutoReplaceDelayMs !== previousConfig.inputAutoReplaceDelayMs ||
         nextConfig.autoInteractionEnabled !== previousConfig.autoInteractionEnabled ||
         nextModes.subtitles !== modes.subtitles ||
         nextModes.input !== modes.input

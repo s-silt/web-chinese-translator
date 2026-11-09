@@ -137,4 +137,28 @@ test.describe('界面截图', () => {
       }
     }
   })
+
+  test('设置页：常用设置（输入翻译替换方式与快捷键）', async ({ page, extension, extensionId }) => {
+    test.setTimeout(120_000)
+    for (const style of ['classic', 'cyber', 'glass'] as const) {
+      for (const theme of style === 'cyber' ? (['dark'] as const) : (['light', 'dark'] as const)) {
+        await seed(extension.page, { uiStyle: style, theme }, {
+          enabled: true,
+          baseUrl: 'https://api.deepseek.com',
+          model: 'deepseek-chat',
+          inputTranslationEnabled: true,
+          inputReplaceMode: 'auto',
+          inputAutoReplaceDelayMs: 1500,
+          inputReplaceKey: 'Ctrl+Enter',
+        })
+        for (const width of [1280, 420]) {
+          await page.setViewportSize({ width, height: 900 })
+          await page.goto(`chrome-extension://${extensionId}/options.html#wt-general-title`)
+          await page.waitForTimeout(800)
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+          await shot(page, `options-general-${style}-${theme}-${width}`)
+        }
+      }
+    }
+  })
 })
