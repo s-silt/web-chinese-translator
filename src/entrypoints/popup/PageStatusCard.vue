@@ -38,22 +38,22 @@
       >
         <span :style="{ width: `${percent}%` }"></span>
       </div>
-      <span data-test="wt-progress-text">{{ progressText }}</span>
+      <span class="ui-hint" data-test="wt-progress-text">{{ progressText }}</span>
     </div>
     <div v-if="failedCount > 0 && !outOfScope" class="popup-card-failed">
-      <span data-test="wt-failed">{{ t('wtFailedCount', { count: failedCount }) }}</span>
+      <span class="ui-hint is-danger" data-test="wt-failed">{{ t('wtFailedCount', { count: failedCount }) }}</span>
       <UiButton v-if="canRetryFailed" size="sm" data-test="wt-retry-failed" :disabled="busy" @click="retryFailed">
         {{ t('wtRetryFailed') }}
       </UiButton>
       <!-- 暂停或达到上限时引擎不接受单独重试：继续翻译会一并重试，记录数上限只能恢复原文 -->
-      <span v-else class="popup-card-failed-hint" data-test="wt-failed-hint">
+      <span v-else class="ui-hint" data-test="wt-failed-hint">
         {{ t(canResume ? 'wtFailedRetryWithResume' : 'wtFailedNoRetry') }}
       </span>
     </div>
-    <p v-if="sensitive" class="popup-card-note">{{ t('wtSensitivePage') }}</p>
-    <p v-else-if="state === 'out-of-scope'" class="popup-card-note">{{ t('wtScopeBlocked') }}</p>
-    <p v-else-if="state === 'master-off'" class="popup-card-note">{{ t('wtMasterOff') }}</p>
-    <p v-else-if="state === 'capped'" class="popup-card-note" data-test="wt-capped-note">
+    <p v-if="sensitive" class="ui-hint">{{ t('wtSensitivePage') }}</p>
+    <p v-else-if="state === 'out-of-scope'" class="ui-hint">{{ t('wtScopeBlocked') }}</p>
+    <p v-else-if="state === 'master-off'" class="ui-hint">{{ t('wtMasterOff') }}</p>
+    <p v-else-if="state === 'capped'" class="ui-hint" data-test="wt-capped-note">
       {{ t(canResume ? 'wtCappedNote' : 'wtCappedRecordsNote') }}
       <button type="button" class="popup-card-link" data-test="wt-capped-settings" @click="openOptionsAt('#wt-general-title')">
         {{ t('wtPageLimitAdjust') }}
@@ -175,12 +175,6 @@ const progressText = computed(() => {
   display: grid;
   gap: 4px;
   min-width: 0;
-  font-size: 12px;
-  color: var(--gcn-fg-muted);
-}
-
-.popup-card-progress > span:last-child {
-  overflow-wrap: anywhere;
 }
 
 .popup-card-meter {
@@ -202,12 +196,9 @@ const progressText = computed(() => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  font-size: 12px;
-  color: var(--gcn-danger-fg);
 }
 
-.popup-card-failed-hint {
-  color: var(--gcn-fg-muted);
+.popup-card-failed .ui-hint:last-child {
   text-align: right;
 }
 
@@ -222,12 +213,5 @@ const progressText = computed(() => {
 
 .popup-card-link:hover {
   text-decoration: underline;
-}
-
-.popup-card-note {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--gcn-fg-muted);
 }
 </style>

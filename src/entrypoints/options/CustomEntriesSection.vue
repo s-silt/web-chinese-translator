@@ -21,13 +21,13 @@
     <div
       v-if="importPreview"
       ref="previewBox"
-      class="import-preview"
+      class="ui-panel"
       role="region"
       aria-labelledby="import-preview-title"
       data-test="import-preview"
     >
-      <h3 id="import-preview-title" class="import-preview-title">{{ t('importPreview') }}</h3>
-      <p class="import-summary" data-test="import-summary">
+      <h3 id="import-preview-title" class="ui-subtitle">{{ t('importPreview') }}</h3>
+      <p class="ui-hint" data-test="import-summary">
         {{
           t('importSummary', {
             added: importPreview.added.length,
@@ -305,29 +305,7 @@ async function onFileChange(event: Event): Promise<void> {
   border-radius: var(--gcn-radius-lg);
 }
 
-/* 导入预览：确认前不写入存储 */
-.import-preview {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-  background: var(--gcn-bg-muted);
-  border: 1px solid var(--gcn-border);
-  border-radius: var(--gcn-radius-lg);
-}
-
-.import-preview-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.import-summary {
-  margin: 0;
-  font-size: 13px;
-  color: var(--gcn-fg-muted);
-}
-
-/* 明细限高，超出框内滚动 */
+/* 导入预览：确认前不写入存储；明细限高，超出框内滚动 */
 .import-list {
   max-height: 160px;
   margin: 0;

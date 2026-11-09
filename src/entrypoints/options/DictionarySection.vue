@@ -2,7 +2,7 @@
   <section class="section" aria-labelledby="wt-dictionary-title">
     <h2 id="wt-dictionary-title" class="section-title">{{ t('wtDictionary') }}</h2>
 
-    <h3 class="wt-subtitle">{{ t('wtDictionaryBuiltin') }}</h3>
+    <h3 class="ui-subtitle">{{ t('wtDictionaryBuiltin') }}</h3>
     <div class="wt-builtin-groups">
       <div
         v-for="group in builtinGroups"
@@ -31,14 +31,14 @@
       </div>
     </div>
 
-    <div class="wt-custom-group">
-      <h3 class="wt-subtitle">{{ t('wtDictionaryCustom') }}</h3>
-      <ul v-if="custom.length > 0" class="wt-sites">
+    <div class="wt-custom-group ui-group">
+      <h3 class="ui-subtitle">{{ t('wtDictionaryCustom') }}</h3>
+      <ul v-if="custom.length > 0" class="ui-list">
         <li v-for="row in custom" :key="row.id" class="wt-dict-row" :data-test="`wt-custom-dict-${row.id}`">
           <div class="wt-dict-info">
             <span class="wt-origin">{{ row.label }}</span>
-            <span class="wt-hint">{{ row.hosts.join(', ') }}</span>
-            <span class="wt-hint">{{ t('wtDictionaryEntryCount', { count: entryCount(row) }) }}</span>
+            <span class="ui-hint">{{ row.hosts.join(', ') }}</span>
+            <span class="ui-hint">{{ t('wtDictionaryEntryCount', { count: entryCount(row) }) }}</span>
           </div>
           <div class="wt-dict-actions">
             <UiSwitch
@@ -60,7 +60,7 @@
           </div>
         </li>
       </ul>
-      <p v-else class="wt-hint">{{ t('wtDictionaryEmpty') }}</p>
+      <p v-else class="ui-hint">{{ t('wtDictionaryEmpty') }}</p>
 
       <div class="section-actions">
         <UiButton :disabled="!ready || busy || editing !== undefined" data-test="wt-dict-new" @click="startNew">
@@ -150,13 +150,6 @@ async function onImportPicked(event: Event): Promise<void> {
 </script>
 
 <style scoped>
-.wt-subtitle {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--gcn-fg);
-}
-
 .wt-builtin-groups {
   display: grid;
   gap: 24px;
@@ -211,10 +204,10 @@ async function onImportPicked(event: Event): Promise<void> {
   align-items: center;
   column-gap: 12px;
   row-gap: 2px;
-  padding: 10px 14px;
-  background: var(--gcn-bg-muted);
-  border: 1px solid var(--gcn-border-muted);
-  border-radius: var(--gcn-radius-lg);
+  padding: 12px 14px;
+  background: var(--gcn-card-bg);
+  border: 1px solid var(--gcn-card-border);
+  border-radius: var(--gcn-card-radius);
 }
 
 .wt-builtin-switch {
@@ -242,18 +235,8 @@ async function onImportPicked(event: Event): Promise<void> {
 }
 
 .wt-custom-group {
-  display: grid;
-  gap: 12px;
   padding-top: 16px;
   border-top: 1px solid var(--gcn-border-muted);
-}
-
-.wt-sites {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
 }
 
 .wt-dict-row {
@@ -263,9 +246,9 @@ async function onImportPicked(event: Event): Promise<void> {
   flex-wrap: wrap;
   gap: 12px;
   padding: 12px 14px;
-  background: var(--gcn-bg-muted);
-  border: 1px solid var(--gcn-border-muted);
-  border-radius: var(--gcn-radius-lg);
+  background: var(--gcn-card-bg);
+  border: 1px solid var(--gcn-card-border);
+  border-radius: var(--gcn-card-radius);
 }
 
 .wt-dict-info {
@@ -278,12 +261,6 @@ async function onImportPicked(event: Event): Promise<void> {
 .wt-origin {
   font-size: 14px;
   font-weight: 500;
-  overflow-wrap: anywhere;
-}
-
-.wt-hint {
-  font-size: 12px;
-  color: var(--gcn-fg-muted);
   overflow-wrap: anywhere;
 }
 

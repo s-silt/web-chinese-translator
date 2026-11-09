@@ -36,6 +36,7 @@
       <TranslationSection v-if="translationSupported" v-show="showTranslation" :view="translationView" />
       <div v-show="currentNav === 'github-title'" id="github-title" class="wt-github-group" role="region" :aria-label="t('navGithub')">
         <div class="section wt-github-preferences">
+          <h2 id="github-preferences-title" class="section-title">{{ t('navGithub') }}</h2>
           <GeneralSection />
           <LanguageSection />
         </div>

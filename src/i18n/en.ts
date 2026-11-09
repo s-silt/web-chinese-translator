@@ -297,6 +297,8 @@ export default {
   wtAssistInvalidResult: 'The translation service returned an invalid response.',
   wtSettingsReadFailed: 'Could not load translation settings. Please refresh and try again.',
   wtShortcuts: 'Keyboard shortcuts',
+  wtGroupFeatures: 'Features',
+  wtGroupPageTranslation: 'Page translation',
   wtCmdTogglePage: 'Translate page / show original',
   wtCmdTranslateSelection: 'Translate selected text',
   wtShortcutUnset: 'Not set',

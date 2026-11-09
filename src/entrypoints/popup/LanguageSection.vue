@@ -1,6 +1,6 @@
 <template>
-  <section aria-labelledby="language-title">
-    <h2 id="language-title" class="section-title">{{ t('languageSection') }}</h2>
+  <section class="ui-group" aria-labelledby="language-title">
+    <h3 id="language-title" class="ui-subtitle">{{ t('languageSection') }}</h3>
     <ul class="select-list">
       <li class="select-item">
         <label for="ui-language" class="select-label">{{ t('uiLanguage') }}</label>
@@ -26,7 +26,7 @@
           data-test="page-language"
           @update:model-value="setOption('language', $event)"
         />
-        <p v-if="translationSupported" id="page-language-hint" class="select-hint">{{ t('pageLanguageHint') }}</p>
+        <p v-if="translationSupported" id="page-language-hint" class="ui-hint">{{ t('pageLanguageHint') }}</p>
       </li>
     </ul>
   </section>
@@ -129,10 +129,5 @@ async function setOption(key: SelectKey, value: string): Promise<void> {
   width: auto;
   min-width: 180px;
   max-width: 100%;
-}
-
-.select-hint {
-  font-size: 12px;
-  color: var(--gcn-fg-muted);
 }
 </style>

@@ -1,6 +1,6 @@
 <template>
-  <section aria-labelledby="general-title">
-    <h2 id="general-title" class="section-title">{{ t('general') }}</h2>
+  <section class="ui-group" aria-labelledby="general-title">
+    <h3 id="general-title" class="ui-subtitle">{{ t('general') }}</h3>
     <ul class="toggle-list">
       <li v-for="option in OPTIONS" :key="option.key">
         <UiSwitch

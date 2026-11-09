@@ -287,3 +287,87 @@ body,
     transition: none;
   }
 }
+
+/* 版式原语：分组标题、标签、提示、面板、列表行（设置页与弹出页共用） */
+.ui-subtitle {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--gcn-fg);
+}
+
+.ui-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--gcn-fg);
+}
+
+.ui-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--gcn-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.ui-hint.is-success {
+  color: var(--gcn-success-fg);
+}
+
+.ui-hint.is-attention {
+  color: var(--gcn-attention-fg);
+}
+
+.ui-hint.is-danger {
+  color: var(--gcn-danger-fg);
+}
+
+.ui-group {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ui-group + .ui-group {
+  padding-top: 16px;
+  border-top: 1px solid var(--gcn-border-muted);
+}
+
+.ui-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--gcn-card-bg);
+  border: 1px solid var(--gcn-card-border);
+  border-radius: var(--gcn-card-radius);
+}
+
+.ui-panel-section {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--gcn-border-muted);
+}
+
+.ui-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  min-height: 36px;
+  padding: 6px 12px;
+  background: var(--gcn-card-bg);
+  border: 1px solid var(--gcn-card-border);
+  border-radius: var(--gcn-radius);
+}

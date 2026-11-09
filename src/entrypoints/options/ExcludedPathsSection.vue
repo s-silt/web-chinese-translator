@@ -12,16 +12,18 @@
       :placeholder="PLACEHOLDER"
       @input="markDirty"
     />
-    <UiInput
-      v-model="probe"
-      type="text"
-      spellcheck="false"
-      autocomplete="off"
-      :aria-label="t('excludedPathTest')"
-      placeholder="https://github.com/owner/repo/wiki"
-      data-test="excluded-probe"
-    />
-    <p class="probe-result" :class="`probe-${probeResult.kind}`" data-test="excluded-probe-result" aria-live="polite">
+    <label class="wt-probe-field">
+      <span class="ui-label">{{ t('excludedPathTest') }}</span>
+      <UiInput
+        v-model="probe"
+        type="text"
+        spellcheck="false"
+        autocomplete="off"
+        placeholder="https://github.com/owner/repo/wiki"
+        data-test="excluded-probe"
+      />
+    </label>
+    <p class="ui-hint" :class="probeClass" data-test="excluded-probe-result" aria-live="polite">
       {{ probeText }}
     </p>
     <div class="section-actions">
@@ -43,6 +45,11 @@ const PLACEHOLDER = '/settings\n/*/*/wiki'
 const { t } = useI18n()
 const { text, invalid, probe, probeResult, markDirty, save } = useExcludedPaths()
 
+const probeClass = computed(() => {
+  const kind = probeResult.value.kind
+  return kind === 'excluded' ? 'is-attention' : kind === 'included' ? 'is-success' : ''
+})
+
 const probeText = computed(() => {
   const result = probeResult.value
   if (result.kind === 'empty') return t('excludedProbeHint')
@@ -53,18 +60,8 @@ const probeText = computed(() => {
 </script>
 
 <style scoped>
-.probe-result {
-  margin: 0;
-  font-size: 13px;
-  color: var(--gcn-fg-muted);
-  overflow-wrap: anywhere;
-}
-
-.probe-excluded {
-  color: var(--gcn-attention-fg);
-}
-
-.probe-included {
-  color: var(--gcn-success-fg);
+.wt-probe-field {
+  display: grid;
+  gap: 6px;
 }
 </style>

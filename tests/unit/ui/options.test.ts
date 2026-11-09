@@ -26,7 +26,10 @@ async function render(): Promise<VueWrapper> {
 }
 
 function section(wrapper: VueWrapper, title: string): DOMWrapper<Element> {
-  const found = wrapper.findAll('section').find((item) => item.find('h2').text().replace(/（GitHub）$/, '') === title)
+  const found = wrapper.findAll('section').find((item) => {
+    const heading = item.find('h2, h3')
+    return heading.exists() && heading.text().replace(/（GitHub）$/, '') === title
+  })
   if (!found) throw new Error(`未找到分区：${title}`)
   return found
 }
@@ -93,7 +96,7 @@ describe.skipIf(!App)('设置页组件', () => {
     it('默认常用设置；分区保留单实例及原有控件', async () => {
       const wrapper = await render()
       expect(wrapper.get('h1').text()).toBe('网页汉化助手')
-      expect(headings(wrapper)).toEqual(['基础界面词库', '常用设置', '常规', '语言', '排除路径（GitHub）', '自定义词条（GitHub）', '外观', '关于'])
+      expect(headings(wrapper)).toEqual(['基础界面词库', '常用设置', 'GitHub 规则', '排除路径（GitHub）', '自定义词条（GitHub）', '外观', '关于'])
       expect(wrapper.get('[data-test="wt-general-view"]').isVisible()).toBe(true)
       expect(wrapper.get('[data-test="wt-model-view"]').isVisible()).toBe(false)
       expect(wrapper.get('[data-test="wt-sites-view"]').isVisible()).toBe(false)
@@ -134,8 +137,8 @@ describe.skipIf(!App)('设置页组件', () => {
     })
 
     it.each([
-      ['en', 'Web Chinese Translator', ['Built-in UI glossary', 'General settings', 'General', 'Language', 'Excluded paths (GitHub)', 'Custom entries (GitHub)', 'Appearance', 'About'], 'Upstream (github-chinese)'],
-      ['zh-TW', '網頁漢化助手', ['基礎介面詞庫', '常用設定', '一般', '語言', '排除路徑（GitHub）', '自訂詞條（GitHub）', '外觀', '關於'], 'GitHub 漢化上游'],
+      ['en', 'Web Chinese Translator', ['Built-in UI glossary', 'General settings', 'GitHub rules', 'Excluded paths (GitHub)', 'Custom entries (GitHub)', 'Appearance', 'About'], 'Upstream (github-chinese)'],
+      ['zh-TW', '網頁漢化助手', ['基礎介面詞庫', '常用設定', 'GitHub 規則', '排除路徑（GitHub）', '自訂詞條（GitHub）', '外觀', '關於'], 'GitHub 漢化上游'],
     ] as const)('界面语言随设置（如在弹出页修改）切换：%s', async (uiLanguage, title, sections, repository) => {
       const wrapper = await render()
       await updateSettings({ uiLanguage })

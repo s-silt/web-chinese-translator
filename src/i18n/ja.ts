@@ -285,6 +285,8 @@ const messages: Messages = {
   "wtAssistInvalidResult": "翻訳サービスの応答形式が正しくありません。",
   "wtSettingsReadFailed": "翻訳設定を読み込めませんでした。ページを再読み込みしてください。",
   "wtShortcuts": "キーボードショートカット",
+  "wtGroupFeatures": "機能",
+  "wtGroupPageTranslation": "ページ翻訳",
   "wtCmdTogglePage": "ページを翻訳 / 原文を表示",
   "wtCmdTranslateSelection": "選択したテキストを翻訳",
   "wtShortcutUnset": "未設定",

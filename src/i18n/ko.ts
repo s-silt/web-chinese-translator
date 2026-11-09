@@ -285,6 +285,8 @@ const messages: Messages = {
   "wtAssistInvalidResult": "번역 서비스 응답 형식이 올바르지 않습니다.",
   "wtSettingsReadFailed": "번역 설정을 불러오지 못했습니다. 페이지를 새로고침해 주세요.",
   "wtShortcuts": "키보드 단축키",
+  "wtGroupFeatures": "기능",
+  "wtGroupPageTranslation": "페이지 번역",
   "wtCmdTogglePage": "페이지 번역 / 원문 보기",
   "wtCmdTranslateSelection": "선택한 텍스트 번역",
   "wtShortcutUnset": "설정 안 됨",

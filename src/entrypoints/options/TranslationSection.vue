@@ -1,7 +1,7 @@
 <template>
   <section class="section wt-settings-sections wt-settings-view" :aria-labelledby="sectionTitle">
     <h2 :id="sectionTitle" class="section-title">{{ t(props.view === 'model' ? 'navModel' : props.view === 'sites' ? 'wtSiteSettings' : 'navGeneral') }}</h2>
-    <p v-show="props.view === 'all' || props.view === 'general'" class="wt-hint">{{ t('wtGeneralHint') }}</p>
+    <p v-show="props.view === 'all' || props.view === 'general'" class="ui-hint">{{ t('wtGeneralHint') }}</p>
 
     <ModelPresets
       v-show="props.view === 'all' || props.view === 'model'"
@@ -21,7 +21,7 @@
     />
 
     <label v-show="props.view === 'all' || props.view === 'model'" class="wt-field">
-      <span id="wt-api-type-label" class="wt-label">{{ t('wtApiType') }}</span>
+      <span id="wt-api-type-label" class="ui-label">{{ t('wtApiType') }}</span>
       <UiSelect
         :model-value="apiType"
         :disabled="!ready || saving || testing"
@@ -34,7 +34,7 @@
 
     <div v-show="props.view === 'all' || props.view === 'model'" class="wt-fields" data-test="wt-model-view">
       <label class="wt-field">
-        <span id="wt-base-url-label" class="wt-label">{{ t('wtBaseUrl') }}</span>
+        <span id="wt-base-url-label" class="ui-label">{{ t('wtBaseUrl') }}</span>
         <UiInput
           ref="baseUrlInput"
           v-model="baseUrl"
@@ -46,10 +46,10 @@
         <span v-if="endpointPreview !== ''" id="wt-endpoint-preview" class="wt-endpoint-preview" data-test="wt-endpoint-preview">
           {{ t('wtEndpointPreview') }}: {{ endpointPreview }}
         </span>
-        <span id="wt-base-url-hint" class="wt-hint">{{ t('wtBaseUrlHint') }}</span>
+        <span id="wt-base-url-hint" class="ui-hint">{{ t('wtBaseUrlHint') }}</span>
       </label>
       <label class="wt-field">
-        <span id="wt-api-key-label" class="wt-label">API Key</span>
+        <span id="wt-api-key-label" class="ui-label">API Key</span>
         <UiInput
           v-model="apiKey"
           type="password"
@@ -59,10 +59,10 @@
           aria-labelledby="wt-api-key-label"
           aria-describedby="wt-api-key-hint"
         />
-        <span id="wt-api-key-hint" class="wt-hint">{{ keyHint }}</span>
+        <span id="wt-api-key-hint" class="ui-hint">{{ keyHint }}</span>
       </label>
       <div class="wt-field">
-        <span id="wt-model-label" class="wt-label">{{ t('wtModel') }}</span>
+        <span id="wt-model-label" class="ui-label">{{ t('wtModel') }}</span>
         <div class="wt-model-row">
           <ModelInput
             v-model="model"
@@ -82,12 +82,12 @@
             {{ fetchingModels ? t('wtModelsCancel') : t('wtModelsFetch') }}
           </UiButton>
         </div>
-        <span id="wt-model-hint" class="wt-hint">{{ t('wtModelsHint') }}</span>
+        <span id="wt-model-hint" class="ui-hint">{{ t('wtModelsHint') }}</span>
         <span
           v-if="modelsMessage"
           id="wt-model-status"
-          class="wt-hint"
-          :class="{ 'wt-status-error': modelsError }"
+          class="ui-hint"
+          :class="{ 'is-danger': modelsError }"
           role="status"
         >{{ modelsMessage }}</span>
       </div>
@@ -99,11 +99,11 @@
           <path d="m6 4 4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
         <span>{{ t('wtAdvanced') }}</span>
-        <span class="wt-hint wt-advanced-summary-hint">{{ t('wtAdvancedHint') }}</span>
+        <span class="ui-hint wt-advanced-summary-hint">{{ t('wtAdvancedHint') }}</span>
       </summary>
       <div class="wt-details-body">
         <label class="wt-field">
-          <span id="wt-temperature-label" class="wt-label">{{ t('wtTemperature') }}</span>
+          <span id="wt-temperature-label" class="ui-label">{{ t('wtTemperature') }}</span>
           <UiInput
             :model-value="temperatureDraft"
             type="number"
@@ -118,10 +118,10 @@
             data-test="wt-temperature"
             @update:model-value="onTemperatureInput"
           />
-          <span id="wt-temperature-hint" class="wt-hint">{{ t('wtTemperatureHint') }}</span>
+          <span id="wt-temperature-hint" class="ui-hint">{{ t('wtTemperatureHint') }}</span>
         </label>
         <label class="wt-field">
-          <span id="wt-request-params-label" class="wt-label">{{ t('wtRequestParams') }}</span>
+          <span id="wt-request-params-label" class="ui-label">{{ t('wtRequestParams') }}</span>
           <textarea
             v-model="requestParamsDraft"
             class="ui-field wt-code-textarea"
@@ -136,10 +136,10 @@
             @focus="keepFocusedFieldVisible"
             @input="clearInvalid('requestParams')"
           ></textarea>
-          <span id="wt-request-params-hint" class="wt-hint">{{ t('wtRequestParamsHint') }}</span>
+          <span id="wt-request-params-hint" class="ui-hint">{{ t('wtRequestParamsHint') }}</span>
         </label>
         <label class="wt-field">
-          <span id="wt-custom-headers-label" class="wt-label">{{ t('wtCustomHeaders') }}</span>
+          <span id="wt-custom-headers-label" class="ui-label">{{ t('wtCustomHeaders') }}</span>
           <textarea
             v-model="customHeadersDraft"
             class="ui-field wt-code-textarea"
@@ -155,8 +155,8 @@
             @focus="keepFocusedFieldVisible"
             @input="clearInvalid('customHeaders')"
           ></textarea>
-          <span id="wt-custom-headers-hint" class="wt-hint">{{ t('wtCustomHeadersHint') }}</span>
-          <span v-if="customHeadersStatusHint !== ''" id="wt-custom-headers-state" class="wt-hint">{{ customHeadersStatusHint }}</span>
+          <span id="wt-custom-headers-hint" class="ui-hint">{{ t('wtCustomHeadersHint') }}</span>
+          <span v-if="customHeadersStatusHint !== ''" id="wt-custom-headers-state" class="ui-hint">{{ customHeadersStatusHint }}</span>
         </label>
       </div>
     </details>
@@ -173,309 +173,315 @@
       </UiButton>
     </div>
 
-    <div v-show="props.view === 'all' || props.view === 'general'" class="wt-reading-group" data-test="wt-general-view">
-      <div class="wt-floating-group">
-        <UiSwitch
-          :checked="autoInteractionEnabled"
-          :label="t('wtAutomaticInteractions')"
-          :disabled="!ready || saving"
-          aria-describedby="wt-auto-interaction-hint"
-          data-test="wt-auto-interaction"
-          @change="changeAutoInteraction"
-        />
-        <p id="wt-auto-interaction-hint" class="wt-hint">{{ t('wtAutomaticInteractionsHint') }}</p>
-      </div>
-      <div class="wt-floating-group">
-        <UiSwitch
-          :checked="floatingButtonEnabled"
-          :label="t('wtFloatingButton')"
-          :disabled="!ready || saving"
-          data-test="wt-floating-toggle"
-          @change="changeFloatingButton"
-        />
-        <p class="wt-hint">{{ t('wtFloatingHint') }}</p>
-        <UiButton
-          v-if="floatingButtonEnabled"
-          size="sm"
-          class="wt-floating-grant"
-          :disabled="!ready || saving || grantingAccess || allSitesGranted"
-          data-test="wt-floating-grant"
-          @click="grantFloatingSites"
-        >
-          {{ allSitesGranted ? t('wtFloatingGranted') : t('wtFloatingGrant') }}
-        </UiButton>
-      </div>
-      <div class="wt-floating-group">
-        <UiSwitch
-          :checked="videoSubtitlesEnabled"
-          :label="t('wtVideoSubtitles')"
-          :disabled="!ready || saving"
-          aria-describedby="wt-video-subtitles-hint"
-          data-test="wt-video-subtitles-toggle"
-          @change="changeVideoSubtitles"
-        />
-        <p id="wt-video-subtitles-hint" class="wt-hint">{{ t('wtVideoSubtitlesHint') }}</p>
-      </div>
-      <div class="wt-floating-group">
-        <UiSwitch
-          :checked="inputTranslationEnabled"
-          :label="t('wtInputTranslation')"
-          :disabled="!ready || saving"
-          aria-describedby="wt-input-translation-hint"
-          data-test="wt-input-translation-toggle"
-          @change="changeInputTranslation"
-        />
-        <p id="wt-input-translation-hint" class="wt-hint">{{ t('wtInputTranslationHint') }}</p>
-        <div class="wt-subpanel" :class="{ 'is-inactive': !inputTranslationEnabled }" data-test="wt-input-subpanel">
-          <div class="wt-language-pair">
-            <label class="wt-field">
-              <span id="wt-input-source-language-label" class="wt-label">{{ t('wtInputSourceLanguage') }}</span>
-              <UiSelect
-                :model-value="inputSourceLanguage"
-                :disabled="!ready || saving"
-                :options="sourceLanguageOptions"
-                aria-labelledby="wt-input-source-language-label"
-                aria-describedby="wt-input-source-language-hint"
-                data-test="wt-input-source-language"
-                @update:model-value="changeInputSourceLanguage($event as SourceLanguage)"
-              />
-              <span id="wt-input-source-language-hint" class="wt-hint">{{ t('wtInputSourceLanguageHint') }}</span>
-            </label>
-            <label class="wt-field">
-              <span id="wt-input-target-language-label" class="wt-label">{{ t('wtInputTargetLanguage') }}</span>
-              <UiSelect
-                :model-value="inputTargetLanguage"
-                :disabled="!ready || saving"
-                :options="languageOptions"
-                aria-labelledby="wt-input-target-language-label"
-                aria-describedby="wt-input-target-language-hint"
-                data-test="wt-input-target-language"
-                @update:model-value="changeInputTargetLanguage($event as TargetLanguage)"
-              />
-              <span id="wt-input-target-language-hint" class="wt-hint">{{ t('wtInputTargetLanguageHint') }}</span>
-            </label>
-          </div>
-          <p
-            v-if="inputSourceLanguage !== 'auto' && inputSourceLanguage === inputTargetLanguage"
-            class="wt-hint wt-status-error"
-            role="status"
-            data-test="wt-input-same-language-hint"
-          >{{ t('wtInputSameLanguageHint') }}</p>
-          <div class="wt-language-pair">
-            <label class="wt-field">
-              <span id="wt-input-replace-mode-label" class="wt-label">{{ t('wtInputReplaceMode') }}</span>
-              <UiSelect
-                :model-value="inputReplaceMode"
-                :disabled="!ready || saving"
-                :options="inputReplaceModeOptions"
-                aria-labelledby="wt-input-replace-mode-label"
-                aria-describedby="wt-input-replace-mode-hint"
-                data-test="wt-input-replace-mode"
-                @update:model-value="changeInputReplaceMode($event as InputReplaceMode)"
-              />
-              <span id="wt-input-replace-mode-hint" class="wt-hint">{{ t('wtInputReplaceModeHint') }}</span>
-            </label>
-            <div v-if="inputReplaceMode === 'auto'" class="wt-field">
-              <span id="wt-input-auto-delay-label" class="wt-label">{{ t('wtInputAutoReplaceDelay') }}</span>
-              <div class="wt-delay-row" :class="{ 'has-custom': autoReplaceDelaySelectValue === 'custom' }">
+    <div v-show="props.view === 'all' || props.view === 'general'" class="wt-general-groups" data-test="wt-general-view">
+      <div class="ui-group">
+        <h3 class="ui-subtitle">{{ t('wtGroupFeatures') }}</h3>
+        <div class="ui-panel">
+          <UiSwitch
+            :checked="autoInteractionEnabled"
+            :label="t('wtAutomaticInteractions')"
+            :disabled="!ready || saving"
+            aria-describedby="wt-auto-interaction-hint"
+            data-test="wt-auto-interaction"
+            @change="changeAutoInteraction"
+          />
+          <p id="wt-auto-interaction-hint" class="ui-hint">{{ t('wtAutomaticInteractionsHint') }}</p>
+        </div>
+        <div class="ui-panel">
+          <UiSwitch
+            :checked="floatingButtonEnabled"
+            :label="t('wtFloatingButton')"
+            :disabled="!ready || saving"
+            data-test="wt-floating-toggle"
+            @change="changeFloatingButton"
+          />
+          <p class="ui-hint">{{ t('wtFloatingHint') }}</p>
+          <UiButton
+            v-if="floatingButtonEnabled"
+            size="sm"
+            class="wt-floating-grant"
+            :disabled="!ready || saving || grantingAccess || allSitesGranted"
+            data-test="wt-floating-grant"
+            @click="grantFloatingSites"
+          >
+            {{ allSitesGranted ? t('wtFloatingGranted') : t('wtFloatingGrant') }}
+          </UiButton>
+        </div>
+        <div class="ui-panel">
+          <UiSwitch
+            :checked="videoSubtitlesEnabled"
+            :label="t('wtVideoSubtitles')"
+            :disabled="!ready || saving"
+            aria-describedby="wt-video-subtitles-hint"
+            data-test="wt-video-subtitles-toggle"
+            @change="changeVideoSubtitles"
+          />
+          <p id="wt-video-subtitles-hint" class="ui-hint">{{ t('wtVideoSubtitlesHint') }}</p>
+        </div>
+        <div class="ui-panel">
+          <UiSwitch
+            :checked="inputTranslationEnabled"
+            :label="t('wtInputTranslation')"
+            :disabled="!ready || saving"
+            aria-describedby="wt-input-translation-hint"
+            data-test="wt-input-translation-toggle"
+            @change="changeInputTranslation"
+          />
+          <p id="wt-input-translation-hint" class="ui-hint">{{ t('wtInputTranslationHint') }}</p>
+          <div class="ui-panel-section wt-input-settings" :class="{ 'is-inactive': !inputTranslationEnabled }" data-test="wt-input-subpanel">
+            <div class="wt-language-pair">
+              <label class="wt-field">
+                <span id="wt-input-source-language-label" class="ui-label">{{ t('wtInputSourceLanguage') }}</span>
                 <UiSelect
-                  :model-value="autoReplaceDelaySelectValue"
+                  :model-value="inputSourceLanguage"
                   :disabled="!ready || saving"
-                  :options="autoReplaceDelayOptions"
-                  aria-labelledby="wt-input-auto-delay-label"
-                  data-test="wt-input-auto-delay"
-                  @update:model-value="onAutoReplaceDelaySelect"
+                  :options="sourceLanguageOptions"
+                  aria-labelledby="wt-input-source-language-label"
+                  aria-describedby="wt-input-source-language-hint"
+                  data-test="wt-input-source-language"
+                  @update:model-value="changeInputSourceLanguage($event as SourceLanguage)"
                 />
-                <div v-if="autoReplaceDelaySelectValue === 'custom'" class="wt-delay-custom">
-                  <UiInput
-                    :model-value="customDelaySecondsDraft"
-                    type="number"
-                    min="0.5"
-                    max="10"
-                    step="0.1"
+                <span id="wt-input-source-language-hint" class="ui-hint">{{ t('wtInputSourceLanguageHint') }}</span>
+              </label>
+              <label class="wt-field">
+                <span id="wt-input-target-language-label" class="ui-label">{{ t('wtInputTargetLanguage') }}</span>
+                <UiSelect
+                  :model-value="inputTargetLanguage"
+                  :disabled="!ready || saving"
+                  :options="languageOptions"
+                  aria-labelledby="wt-input-target-language-label"
+                  aria-describedby="wt-input-target-language-hint"
+                  data-test="wt-input-target-language"
+                  @update:model-value="changeInputTargetLanguage($event as TargetLanguage)"
+                />
+                <span id="wt-input-target-language-hint" class="ui-hint">{{ t('wtInputTargetLanguageHint') }}</span>
+              </label>
+            </div>
+            <p
+              v-if="inputSourceLanguage !== 'auto' && inputSourceLanguage === inputTargetLanguage"
+              class="ui-hint is-danger"
+              role="status"
+              data-test="wt-input-same-language-hint"
+            >{{ t('wtInputSameLanguageHint') }}</p>
+            <div class="wt-language-pair">
+              <label class="wt-field">
+                <span id="wt-input-replace-mode-label" class="ui-label">{{ t('wtInputReplaceMode') }}</span>
+                <UiSelect
+                  :model-value="inputReplaceMode"
+                  :disabled="!ready || saving"
+                  :options="inputReplaceModeOptions"
+                  aria-labelledby="wt-input-replace-mode-label"
+                  aria-describedby="wt-input-replace-mode-hint"
+                  data-test="wt-input-replace-mode"
+                  @update:model-value="changeInputReplaceMode($event as InputReplaceMode)"
+                />
+                <span id="wt-input-replace-mode-hint" class="ui-hint">{{ t('wtInputReplaceModeHint') }}</span>
+              </label>
+              <div v-if="inputReplaceMode === 'auto'" class="wt-field">
+                <span id="wt-input-auto-delay-label" class="ui-label">{{ t('wtInputAutoReplaceDelay') }}</span>
+                <div class="wt-delay-row" :class="{ 'has-custom': autoReplaceDelaySelectValue === 'custom' }">
+                  <UiSelect
+                    :model-value="autoReplaceDelaySelectValue"
                     :disabled="!ready || saving"
+                    :options="autoReplaceDelayOptions"
                     aria-labelledby="wt-input-auto-delay-label"
-                    :aria-invalid="customDelayError !== '' ? 'true' : undefined"
-                    data-test="wt-input-auto-delay-custom"
-                    @update:model-value="onCustomDelayInput"
-                    @blur="commitCustomAutoReplaceDelay"
-                    @keydown.enter.prevent="commitCustomAutoReplaceDelay"
+                    data-test="wt-input-auto-delay"
+                    @update:model-value="onAutoReplaceDelaySelect"
                   />
-                  <span class="wt-delay-unit" aria-hidden="true">{{ t('wtSecondsUnit') }}</span>
+                  <div v-if="autoReplaceDelaySelectValue === 'custom'" class="wt-delay-custom">
+                    <UiInput
+                      :model-value="customDelaySecondsDraft"
+                      type="number"
+                      min="0.5"
+                      max="10"
+                      step="0.1"
+                      :disabled="!ready || saving"
+                      aria-labelledby="wt-input-auto-delay-label"
+                      :aria-invalid="customDelayError !== '' ? 'true' : undefined"
+                      data-test="wt-input-auto-delay-custom"
+                      @update:model-value="onCustomDelayInput"
+                      @blur="commitCustomAutoReplaceDelay"
+                      @keydown.enter.prevent="commitCustomAutoReplaceDelay"
+                    />
+                    <span class="wt-delay-unit" aria-hidden="true">{{ t('wtSecondsUnit') }}</span>
+                  </div>
                 </div>
+                <span
+                  v-if="customDelayError !== ''"
+                  class="ui-hint is-danger"
+                  role="status"
+                  data-test="wt-input-auto-delay-error"
+                >{{ customDelayError }}</span>
               </div>
-              <span
-                v-if="customDelayError !== ''"
-                class="wt-hint wt-status-error"
-                role="status"
-                data-test="wt-input-auto-delay-error"
-              >{{ customDelayError }}</span>
             </div>
           </div>
         </div>
       </div>
-      <label class="wt-field">
-        <span id="wt-assist-mode-label" class="wt-label">{{ t('wtAssistMode') }}</span>
-        <UiSelect
-          :model-value="assistMode"
-          :disabled="!ready || saving"
-          :options="modeOptions"
-          aria-labelledby="wt-assist-mode-label"
-          aria-describedby="wt-assist-mode-hint"
-          data-test="wt-assist-mode"
-          @update:model-value="changeAssistMode($event as AssistMode)"
-        />
-        <span id="wt-assist-mode-hint" class="wt-hint">{{ assistMode === 'toolbar' ? t('wtToolbarHint') : assistMode === 'smart' ? t('wtSmartInlineHint') : t('wtAssistModeHint') }}</span>
-      </label>
-      <label class="wt-field">
-        <span id="wt-page-limit-label" class="wt-label">{{ t('wtPageLimit') }}</span>
-        <UiSelect
-          :model-value="String(pageCharLimit)"
-          :disabled="!ready || saving"
-          :options="pageLimitOptions"
-          aria-labelledby="wt-page-limit-label"
-          aria-describedby="wt-page-limit-hint"
-          data-test="wt-page-limit"
-          @update:model-value="changePageCharLimit(Number($event))"
-        />
-        <span id="wt-page-limit-hint" class="wt-hint">{{ t('wtPageLimitHint') }}</span>
-      </label>
-    </div>
 
-    <div v-show="props.view === 'all' || props.view === 'general'" class="wt-language-pair">
-      <label class="wt-field">
-        <span id="wt-source-language-label" class="wt-label">{{ t('wtSourceLanguage') }}</span>
-        <UiSelect
-          :model-value="sourceLanguage"
-          :disabled="!ready || saving"
-          :options="sourceLanguageOptions"
-          aria-labelledby="wt-source-language-label"
-          aria-describedby="wt-source-language-hint"
-          data-test="wt-source-language"
-          @update:model-value="changeSourceLanguage($event as SourceLanguage)"
-        />
-        <span id="wt-source-language-hint" class="wt-hint">{{ t('wtSourceLanguageHint') }}</span>
-      </label>
-      <label class="wt-field">
-        <span id="wt-target-language-label" class="wt-label">{{ t('wtTargetLanguage') }}</span>
-        <UiSelect
-          :model-value="targetLanguage"
-          :disabled="!ready || saving"
-          :options="languageOptions"
-          aria-labelledby="wt-target-language-label"
-          aria-describedby="wt-target-language-hint"
-          data-test="wt-target-language"
-          @update:model-value="changeTargetLanguage($event as TargetLanguage)"
-        />
-        <span id="wt-target-language-hint" class="wt-hint">{{ t('wtTargetLanguageHint') }}</span>
-      </label>
-    </div>
-
-    <div v-show="props.view === 'all' || props.view === 'general'" class="wt-shortcuts" data-test="wt-shortcuts">
-      <span class="wt-label">{{ t('wtShortcuts') }}</span>
-      <ul class="wt-shortcut-list">
-        <li v-for="item in shortcuts" :key="item.name"><span>{{ t(item.labelKey) }}</span><kbd>{{ item.shortcut || t('wtShortcutUnset') }}</kbd></li>
-        <li class="wt-shortcut-custom" data-test="wt-replace-key-row">
-          <span>{{ t('wtShortcutReplaceDraft') }}</span>
-          <kbd data-test="wt-replace-key-value" :class="{ 'is-recording': recordingHotkey }">{{ recordingHotkey ? '…' : inputReplaceKey === '' ? t('wtShortcutDisabled') : formatHotkey(inputReplaceKey, isMacPlatform) }}</kbd>
-          <div class="wt-shortcut-actions">
-            <UiButton
-              size="sm"
+      <div class="ui-group">
+        <h3 class="ui-subtitle">{{ t('wtGroupPageTranslation') }}</h3>
+        <div class="wt-language-pair">
+          <label class="wt-field">
+            <span id="wt-assist-mode-label" class="ui-label">{{ t('wtAssistMode') }}</span>
+            <UiSelect
+              :model-value="assistMode"
               :disabled="!ready || saving"
-              data-test="wt-replace-key-record"
-              @click="toggleRecordingHotkey"
-              @keydown="onRecordKeyDown"
-              @blur="cancelRecordingHotkey"
-            >
-              {{ recordingHotkey ? t('wtShortcutRecording') : t('wtShortcutChange') }}
-            </UiButton>
-            <UiButton
-              size="sm"
-              :disabled="!ready || saving || (inputReplaceKey === 'Tab' && !recordingHotkey)"
-              data-test="wt-replace-key-reset"
-              @click="resetReplaceHotkey"
-            >
-              {{ t('wtShortcutResetDefault') }}
-            </UiButton>
-            <UiButton
-              size="sm"
-              :disabled="!ready || saving || (inputReplaceKey === '' && !recordingHotkey)"
-              data-test="wt-replace-key-disable"
-              @click="disableReplaceHotkey"
-            >
-              {{ t('wtShortcutDisable') }}
-            </UiButton>
-          </div>
-        </li>
-      </ul>
-      <p v-if="hotkeyError" class="wt-hint wt-status-error" role="status" data-test="wt-replace-key-error">{{ hotkeyError }}</p>
-      <p class="wt-hint">{{ t('wtShortcutsHint') }}</p>
-      <UiButton size="sm" data-test="wt-shortcuts-manage" @click="openShortcuts">{{ t('wtShortcutsManage') }}</UiButton>
+              :options="modeOptions"
+              aria-labelledby="wt-assist-mode-label"
+              aria-describedby="wt-assist-mode-hint"
+              data-test="wt-assist-mode"
+              @update:model-value="changeAssistMode($event as AssistMode)"
+            />
+            <span id="wt-assist-mode-hint" class="ui-hint">{{ assistMode === 'toolbar' ? t('wtToolbarHint') : assistMode === 'smart' ? t('wtSmartInlineHint') : t('wtAssistModeHint') }}</span>
+          </label>
+          <label class="wt-field">
+            <span id="wt-page-limit-label" class="ui-label">{{ t('wtPageLimit') }}</span>
+            <UiSelect
+              :model-value="String(pageCharLimit)"
+              :disabled="!ready || saving"
+              :options="pageLimitOptions"
+              aria-labelledby="wt-page-limit-label"
+              aria-describedby="wt-page-limit-hint"
+              data-test="wt-page-limit"
+              @update:model-value="changePageCharLimit(Number($event))"
+            />
+            <span id="wt-page-limit-hint" class="ui-hint">{{ t('wtPageLimitHint') }}</span>
+          </label>
+        </div>
+        <div class="wt-language-pair">
+          <label class="wt-field">
+            <span id="wt-source-language-label" class="ui-label">{{ t('wtSourceLanguage') }}</span>
+            <UiSelect
+              :model-value="sourceLanguage"
+              :disabled="!ready || saving"
+              :options="sourceLanguageOptions"
+              aria-labelledby="wt-source-language-label"
+              aria-describedby="wt-source-language-hint"
+              data-test="wt-source-language"
+              @update:model-value="changeSourceLanguage($event as SourceLanguage)"
+            />
+            <span id="wt-source-language-hint" class="ui-hint">{{ t('wtSourceLanguageHint') }}</span>
+          </label>
+          <label class="wt-field">
+            <span id="wt-target-language-label" class="ui-label">{{ t('wtTargetLanguage') }}</span>
+            <UiSelect
+              :model-value="targetLanguage"
+              :disabled="!ready || saving"
+              :options="languageOptions"
+              aria-labelledby="wt-target-language-label"
+              aria-describedby="wt-target-language-hint"
+              data-test="wt-target-language"
+              @update:model-value="changeTargetLanguage($event as TargetLanguage)"
+            />
+            <span id="wt-target-language-hint" class="ui-hint">{{ t('wtTargetLanguageHint') }}</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="ui-group wt-shortcuts" data-test="wt-shortcuts">
+        <h3 class="ui-subtitle">{{ t('wtShortcuts') }}</h3>
+        <ul class="ui-list wt-shortcut-list">
+          <li v-for="item in shortcuts" :key="item.name" class="ui-row"><span>{{ t(item.labelKey) }}</span><kbd>{{ item.shortcut || t('wtShortcutUnset') }}</kbd></li>
+          <li class="ui-row wt-shortcut-custom" data-test="wt-replace-key-row">
+            <span>{{ t('wtShortcutReplaceDraft') }}</span>
+            <div class="wt-shortcut-actions">
+              <kbd data-test="wt-replace-key-value" :class="{ 'is-recording': recordingHotkey }">{{ recordingHotkey ? '…' : inputReplaceKey === '' ? t('wtShortcutDisabled') : formatHotkey(inputReplaceKey, isMacPlatform) }}</kbd>
+              <UiButton
+                size="sm"
+                :disabled="!ready || saving"
+                data-test="wt-replace-key-record"
+                @click="toggleRecordingHotkey"
+                @keydown="onRecordKeyDown"
+                @blur="cancelRecordingHotkey"
+              >
+                {{ recordingHotkey ? t('wtShortcutRecording') : t('wtShortcutChange') }}
+              </UiButton>
+              <UiButton
+                size="sm"
+                :disabled="!ready || saving || (inputReplaceKey === 'Tab' && !recordingHotkey)"
+                data-test="wt-replace-key-reset"
+                @click="resetReplaceHotkey"
+              >
+                {{ t('wtShortcutResetDefault') }}
+              </UiButton>
+              <UiButton
+                size="sm"
+                :disabled="!ready || saving || (inputReplaceKey === '' && !recordingHotkey)"
+                data-test="wt-replace-key-disable"
+                @click="disableReplaceHotkey"
+              >
+                {{ t('wtShortcutDisable') }}
+              </UiButton>
+            </div>
+          </li>
+        </ul>
+        <p v-if="hotkeyError" class="ui-hint is-danger" role="status" data-test="wt-replace-key-error">{{ hotkeyError }}</p>
+        <p class="ui-hint">{{ t('wtShortcutsHint') }}</p>
+        <UiButton size="sm" data-test="wt-shortcuts-manage" @click="openShortcuts">{{ t('wtShortcutsManage') }}</UiButton>
+      </div>
     </div>
 
-    <div v-show="props.view === 'all' || props.view === 'sites'" data-test="wt-sites-view">
-      <div class="wt-details-body" data-test="wt-site-auto-details">
-        <div class="wt-site-group">
-          <h3 id="wt-site-scope-label" class="wt-subtitle">{{ t('wtSiteScope') }}</h3>
+    <div v-show="props.view === 'all' || props.view === 'sites'" class="wt-site-groups" data-test="wt-sites-view">
+      <div class="wt-site-groups-inner" data-test="wt-site-auto-details">
+        <div class="ui-group">
+          <h3 id="wt-site-scope-label" class="ui-subtitle">{{ t('wtSiteScope') }}</h3>
           <UiSelect
             :model-value="siteScopeMode"
             :disabled="!ready || saving"
             :options="scopeModeOptions"
             aria-labelledby="wt-site-scope-label"
+            class="wt-scope-select"
             data-test="wt-site-scope-mode"
             @update:model-value="changeSiteScopeMode($event as SiteScopeMode)"
           />
-          <p class="wt-hint">{{ t('wtScopeHint') }}</p>
+          <p class="ui-hint">{{ t('wtScopeHint') }}</p>
           <template v-if="siteScopeMode !== 'all'">
-            <ul v-if="siteScopeHosts.length" class="wt-sites">
-              <li v-for="host in siteScopeHosts" :key="host" class="wt-site">
+            <ul v-if="siteScopeHosts.length" class="ui-list">
+              <li v-for="host in siteScopeHosts" :key="host" class="ui-row">
                 <span class="wt-origin" data-test="wt-scope-host">{{ host }}</span>
                 <UiButton size="sm" :disabled="saving" data-test="wt-scope-remove" @click="removeScopeHost(host)">
                   {{ t('wtRemove') }}
                 </UiButton>
               </li>
             </ul>
-            <p v-else class="wt-hint" data-test="wt-scope-empty">
+            <p v-else class="ui-hint" data-test="wt-scope-empty">
               {{ siteScopeMode === 'include' ? t('wtScopeEmptyInclude') : t('wtScopeEmpty') }}
             </p>
             <div class="wt-add">
-              <label class="wt-scope-field">
-                {{ t('wtScopeHost') }}
-                <UiInput v-model="newScopeHost" :disabled="!ready || saving" placeholder="example.org" data-test="wt-scope-input" />
-              </label>
+              <UiInput v-model="newScopeHost" :disabled="!ready || saving" :aria-label="t('wtScopeHost')" placeholder="example.org" data-test="wt-scope-input" />
               <UiButton :disabled="!ready || saving" data-test="wt-scope-add" @click="addScopeHost">{{ t('wtAddSite') }}</UiButton>
             </div>
           </template>
         </div>
-        <div class="wt-site-group">
-          <h3 class="wt-subtitle">{{ t('wtAutoSites') }}</h3>
-          <p class="wt-hint">{{ t('wtModelInlineHint') }}</p>
-          <ul v-if="origins.length" class="wt-sites">
-            <li v-for="origin in origins" :key="origin" class="wt-site">
+        <div class="ui-group">
+          <h3 class="ui-subtitle">{{ t('wtAutoSites') }}</h3>
+          <p class="ui-hint">{{ t('wtModelInlineHint') }}</p>
+          <ul v-if="origins.length" class="ui-list">
+            <li v-for="origin in origins" :key="origin" class="ui-row">
               <span class="wt-origin" data-test="wt-origin">{{ origin }}</span>
               <UiButton size="sm" :disabled="saving" data-test="wt-remove" @click="removeSite(origin)">
                 {{ t('wtRemove') }}
               </UiButton>
             </li>
           </ul>
-          <p v-else class="wt-hint">{{ t('wtNoSites') }}</p>
+          <p v-else class="ui-hint">{{ t('wtNoSites') }}</p>
           <div class="wt-add">
             <UiInput v-model="newSite" :disabled="!ready || saving" :placeholder="t('wtSitePlaceholder')" />
             <UiButton :disabled="!ready || saving" data-test="wt-add" @click="addSite">{{ t('wtAddSite') }}</UiButton>
           </div>
         </div>
-        <div class="wt-site-group">
-          <h3 class="wt-subtitle">{{ t('wtExcludedSites') }}</h3>
-          <p class="wt-hint">{{ t('wtExcludedHint') }}</p>
-          <ul v-if="excludedHosts.length" class="wt-sites">
-            <li v-for="host in excludedHosts" :key="host" class="wt-site">
+        <div class="ui-group">
+          <h3 class="ui-subtitle">{{ t('wtExcludedSites') }}</h3>
+          <p class="ui-hint">{{ t('wtExcludedHint') }}</p>
+          <ul v-if="excludedHosts.length" class="ui-list">
+            <li v-for="host in excludedHosts" :key="host" class="ui-row">
               <span class="wt-origin" data-test="wt-excluded-host">{{ host }}</span>
               <UiButton size="sm" :disabled="saving" data-test="wt-excluded-remove" @click="removeExcluded(host)">
                 {{ t('wtRemove') }}
               </UiButton>
             </li>
           </ul>
-          <p v-else class="wt-hint">{{ t('wtExcludedEmpty') }}</p>
+          <p v-else class="ui-hint">{{ t('wtExcludedEmpty') }}</p>
           <div class="wt-add">
             <UiInput v-model="newExcludedHost" :disabled="!ready || saving" :placeholder="t('wtExcludedPlaceholder')" data-test="wt-excluded-input" />
             <UiButton :disabled="!ready || saving" data-test="wt-excluded-add" @click="addExcluded">{{ t('wtAddExcluded') }}</UiButton>
@@ -488,7 +494,7 @@
       {{ statusMessage }}
     </p>
 
-    <p class="wt-hint wt-privacy-note">{{ t('wtPrivacyNote') }}</p>
+    <p class="ui-hint wt-privacy-note">{{ t('wtPrivacyNote') }}</p>
   </section>
 </template>
 
@@ -1702,18 +1708,6 @@ onBeforeUnmount(() => {
   }
 }
 
-.wt-label {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--gcn-fg);
-}
-
-.wt-hint {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--gcn-fg-muted);
-}
-
 .wt-endpoint-preview {
   overflow-wrap: anywhere;
   font-family: var(--gcn-font-mono);
@@ -1781,45 +1775,6 @@ onBeforeUnmount(() => {
   color: var(--gcn-danger-fg, #cf222e);
 }
 
-.wt-reading-group {
-  display: grid;
-  gap: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--gcn-border-muted);
-}
-
-.wt-floating-group {
-  display: grid;
-  gap: 4px;
-}
-
-.wt-subtitle {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--gcn-fg);
-}
-
-.wt-sites {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.wt-site {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: var(--gcn-control-sm, 28px);
-  padding: 6px 10px;
-  background: var(--gcn-bg-muted);
-  border: 1px solid var(--gcn-border-muted);
-  border-radius: var(--gcn-radius);
-}
-
 .wt-origin {
   overflow-wrap: anywhere;
   font-size: 13px;
@@ -1836,20 +1791,18 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.wt-scope-field {
-  display: grid;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 500;
+/* 范围下拉：与网站组内容同宽，最长 380px（叠合 .ui-select 类提升优先级） */
+.wt-scope-select.ui-select {
+  width: 100%;
+  max-width: 380px;
 }
 
+/* 高级设置面板：旧版 Chromium 不支持修改 <details> 的 display，视觉值写在本类上 */
 .wt-details {
-  border: 1px solid var(--gcn-border-muted);
-  border-radius: var(--gcn-radius-lg, 8px);
-  padding: 12px 16px;
-  background: var(--gcn-bg-muted);
+  padding: 12px 14px;
+  background: var(--gcn-card-bg);
+  border: 1px solid var(--gcn-card-border);
+  border-radius: var(--gcn-card-radius);
 }
 
 .wt-details > summary {
@@ -1860,61 +1813,34 @@ onBeforeUnmount(() => {
 
 .wt-details-body {
   display: grid;
-  gap: 16px;
-  margin-top: 14px;
-  padding-top: 14px;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px solid var(--gcn-border-muted);
 }
 
-.wt-site-group {
+.wt-general-groups,
+.wt-site-groups-inner {
   display: grid;
-  gap: 8px;
-}
-
-.wt-site-group + .wt-site-group {
-  padding-top: 14px;
-  border-top: 1px solid var(--gcn-border-muted);
-}
-
-.wt-site-group :deep(.ui-select) {
-  width: 100%;
-  max-width: 380px;
+  gap: 16px;
 }
 
 .wt-shortcuts {
-  display: grid;
-  gap: 8px;
   justify-items: start;
 }
 
 .wt-shortcut-list {
-  display: grid;
-  gap: 6px;
   width: 100%;
-  margin: 0;
-  padding: 0;
-  list-style: none;
 }
 
-.wt-shortcut-list > li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
-  padding: 8px 12px;
-  background: var(--gcn-bg-muted);
-  border: 1px solid var(--gcn-border-muted);
-  border-radius: var(--gcn-radius);
-}
-
+/* 替换草稿行：名称在左，kbd 与三个按钮整体靠右，放不下时整组换到下一行右侧 */
 .wt-shortcut-actions {
   display: flex;
   flex-wrap: wrap;
-  flex-basis: 100%;
   justify-content: flex-end;
   align-items: center;
   gap: 6px;
+  margin-left: auto;
 }
 
 .wt-shortcut-list kbd.is-recording {
@@ -1922,25 +1848,13 @@ onBeforeUnmount(() => {
   border-color: var(--gcn-accent);
 }
 
-/* 输入翻译的子设置：缩进并以左边线归属到上方开关 */
-.wt-subpanel {
-  display: grid;
-  gap: 12px;
-  margin-top: 8px;
-  padding: 12px 14px;
-  background: var(--gcn-bg-muted);
-  border: 1px solid var(--gcn-border-muted);
-  border-left: 3px solid var(--gcn-accent);
-  border-radius: var(--gcn-radius);
+/* 输入翻译关闭时子设置淡出 */
+.wt-input-settings {
   transition: opacity var(--gcn-duration-base) var(--gcn-ease);
 }
 
-.wt-subpanel.is-inactive {
+.wt-input-settings.is-inactive {
   opacity: 0.6;
-}
-
-.wt-subpanel > .wt-hint {
-  margin: 0;
 }
 
 .wt-delay-row {
@@ -1987,11 +1901,6 @@ onBeforeUnmount(() => {
 .wt-settings-view {
   display: grid;
   gap: 16px;
-}
-.wt-settings-view > .wt-reading-group {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: 0;
 }
 .wt-floating-grant {
   justify-self: start;
