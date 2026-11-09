@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/s-silt/web-chinese-translator/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/s-silt/web-chinese-translator/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/s-silt/web-chinese-translator/releases/latest">最新版本</a> &nbsp;·&nbsp; Chrome / Edge（MV3）&nbsp;·&nbsp; Firefox 140+（仅 GitHub 汉化）&nbsp;·&nbsp; <a href="LICENSE">MIT</a>
+  <a href="https://github.com/s-silt/web-chinese-translator/releases/latest">最新版本</a> &nbsp;·&nbsp; <a href="https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe">Chrome 应用商店</a> &nbsp;·&nbsp; Chrome / Edge（MV3）&nbsp;·&nbsp; Firefox 140+（仅 GitHub 汉化）&nbsp;·&nbsp; <a href="LICENSE">MIT</a>
 </p>
 
 <p align="center"><img src="docs/images/popup.png" width="760" alt="弹出页：经典浅色、毛玻璃深色、赛博、GitHub 页面未配置模型"></p>
@@ -32,12 +32,12 @@
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/s-silt/web-chinese-translator/releases/latest) 下载 `web-chinese-translator-<版本>-chrome.zip` 并解压。
-2. 打开 `chrome://extensions`，开启「开发者模式」，「加载已解压的扩展程序」，选择解压出的文件夹。
+1. Chrome 从 [Chrome 应用商店](https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe) 安装，商店版自动更新。
+2. 也可以手动安装：从 [Releases](https://github.com/s-silt/web-chinese-translator/releases/latest) 下载 `web-chinese-translator-<版本>-chrome.zip` 并解压，打开 `chrome://extensions`，开启「开发者模式」，「加载已解压的扩展程序」，选择解压出的文件夹。
 3. 点弹出页「1 分钟完成配置」：选服务商预设，填 API Key 和模型名，点「保存并连接」。连接徽章显示延迟，失败时写明原因。
 4. 打开任意英文网页，点弹出页「翻译本页」；常去的网站打开「本站自动翻译」。
 
-Edge 用 `-edge.zip`，在 `edge://extensions` 加载；Firefox 安装 `-firefox.xpi`。更新时替换原目录文件并点「重新加载」，换目录会丢失配置。发布页附 `SHA256SUMS.txt` 供核对。
+Edge 用 `-edge.zip`，在 `edge://extensions` 加载；Firefox 安装 `-firefox.xpi`。手动安装的版本更新时替换原目录文件并点「重新加载」，换目录会丢失配置。发布页附 `SHA256SUMS.txt` 供核对。
 
 | 任务 | 入口 |
 | --- | --- |
