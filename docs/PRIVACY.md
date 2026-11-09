@@ -1,5 +1,7 @@
 # 隐私说明
 
+简体中文 · [English](PRIVACY.en.md)
+
 适用于浏览器扩展「网页汉化助手」。Chrome、Edge 提供固定词库、模型翻译与阅读辅助；Firefox 版本仅启用 GitHub 本地汉化，不运行模型与阅读辅助。扩展在无痕（隐私）窗口中不运行（`incognito: 'not_allowed'`），无痕窗口不会记录或附带页面标题。
 
 ## 处理的数据
