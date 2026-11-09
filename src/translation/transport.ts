@@ -22,7 +22,7 @@ export class CompletionCancelledError extends Error {
 }
 
 const MAX_RESPONSE_BYTES = 1048576
-const FENCE_PATTERN = /^```(?:json)?\s*\n([\s\S]*)\n?```$/
+const FENCE_OPEN = /^```(?:json)?[^\S\n]*\n/
 
 export function invalidCompletion(): TranslationError {
   return new TranslationError('翻译服务返回格式不正确', 'bad_output')
@@ -30,11 +30,8 @@ export function invalidCompletion(): TranslationError {
 
 export function unwrapFence(content: string): string {
   const trimmed = content.trim()
-  const match = FENCE_PATTERN.exec(trimmed)
-  if (match === null) return trimmed
-  const inner = match[1]
-  if (inner === undefined) return trimmed
-  return inner.trim()
+  if (!trimmed.endsWith('```') || !FENCE_OPEN.test(trimmed)) return trimmed
+  return trimmed.slice(trimmed.indexOf('\n') + 1, trimmed.length - 3).trim()
 }
 
 function httpError(status: number, retryAfterMs: number | undefined): TranslationError {
