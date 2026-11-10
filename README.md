@@ -5,8 +5,8 @@
 <p align="center">简体中文 · <a href="README.en.md">English</a></p>
 
 <p align="center">
-  用你自己的模型接口，把任意网页翻译成中文<br>
-  <sub>整页翻译、划词、字幕、输入框和搜索框翻译；常用网站和 GitHub 另有离线界面词典。内容只在你配置接口并授权的站点上发送。</sub>
+  用你自己的模型接口翻译网页、草稿和字幕<br>
+  <sub>译文可以写回原网页或输入框。GitHub 和常用网站的界面还可通过本地词典汉化。</sub>
 </p>
 
 <p align="center">
@@ -14,7 +14,11 @@
   <a href="https://github.com/s-silt/web-chinese-translator/releases/latest">最新版本</a> &nbsp;·&nbsp; <a href="https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe">Chrome 应用商店</a> &nbsp;·&nbsp; Chrome / Edge（MV3）&nbsp;·&nbsp; Firefox 140+（仅 GitHub 汉化）&nbsp;·&nbsp; <a href="LICENSE">MIT</a>
 </p>
 
-<p align="center"><img src="docs/images/popup.png" width="760" alt="弹出页：经典浅色、毛玻璃深色、赛博、GitHub 页面未配置模型"></p>
+## 功能演示
+
+<p align="center"><img src="docs/demos/zh-CN/01-input.gif" width="840" alt="在评论和网页搜索框预览译文并原位替换，支持快捷键和停顿后自动替换"></p>
+
+译文可先预览，再按 Tab 写回同一个输入框。[查看整页翻译、划词字幕、多语言输入和本地词典演示](docs/DEMOS.md)。
 
 | 核心能力 | 说明 |
 | --- | --- |
@@ -26,7 +30,7 @@
 ```text
 页面文字 ──► 已授权站点 + 已配置接口 ──► 你的模型接口 ──► 原位替换    按需发送
     │                    │
-    │         敏感页面、排除网站、无痕窗口：不发送
+    │         敏感页跳过自动处理；排除站点禁用模型；无痕窗口不运行
     │
     └──► 界面词典（常用网站 / GitHub / 自定义）──► 原位替换        不联网
 ```
@@ -36,7 +40,7 @@
 1. Chrome 从 [Chrome 应用商店](https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe) 安装，商店版自动更新。
 2. 也可以手动安装：从 [Releases](https://github.com/s-silt/web-chinese-translator/releases/latest) 下载 `web-chinese-translator-<版本>-chrome.zip` 并解压，打开 `chrome://extensions`，开启「开发者模式」，「加载已解压的扩展程序」，选择解压出的文件夹。
 3. 点弹出页「1 分钟完成配置」：选服务商预设，填 API Key 和模型名，点「保存并连接」。连接徽章显示延迟，失败时写明原因。
-4. 打开任意英文网页，点弹出页「翻译本页」；常去的网站打开「本站自动翻译」。
+4. 打开支持的英文网页，点弹出页「翻译本页」。常去的网站可开启「本站自动翻译」。
 
 Edge 用 `-edge.zip`，在 `edge://extensions` 加载；Firefox 安装 `-firefox.xpi`。手动安装的版本更新时替换原目录文件并点「重新加载」，换目录会丢失配置。发布页附 `SHA256SUMS.txt` 供核对。
 

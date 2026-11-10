@@ -5,8 +5,8 @@
 <p align="center"><a href="README.md">简体中文</a> · English</p>
 
 <p align="center">
-  Translate any webpage into Chinese using your own model endpoint<br>
-  <sub>Full-page translation, selection, subtitles, input fields, and search boxes; plus offline UI dictionaries for popular sites and GitHub. Content is sent only on sites you authorize after configuring an endpoint.</sub>
+  Translate webpages, drafts, and captions with your own model endpoint<br>
+  <sub>Read translations in place, replace drafts in the same field, and use offline UI dictionaries for GitHub and popular sites.</sub>
 </p>
 
 <p align="center">
@@ -14,7 +14,11 @@
   <a href="https://github.com/s-silt/web-chinese-translator/releases/latest">Latest Release</a> &nbsp;·&nbsp; <a href="https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe">Chrome Web Store</a> &nbsp;·&nbsp; Chrome / Edge (MV3)&nbsp;·&nbsp; Firefox 140+ (GitHub localization only)&nbsp;·&nbsp; <a href="LICENSE">MIT</a>
 </p>
 
-<p align="center"><img src="docs/images/popup.png" width="760" alt="Popup: Classic light, Apple glass dark, Cyber, and GitHub page without model configured"></p>
+## Feature demos
+
+<p align="center"><img src="docs/demos/en-US/01-input.gif" width="840" alt="Translate English drafts and search queries into Chinese and replace them in place"></p>
+
+Preview a translation and press Tab to replace the draft in the same field. [See webpage translation, reading and captions, multilingual input, and local dictionaries](docs/DEMOS.en.md).
 
 | Core Capability | Description |
 | --- | --- |
@@ -26,7 +30,7 @@
 ```text
 Page text ──► Authorized site + Configured endpoint ──► Your model endpoint ──► In-place replacement    Sent on demand
     │                         │
-    │         Sensitive pages, excluded sites, incognito windows: Never sent
+    │         Sensitive pages skip automatic processing. Excluded sites disable model features. Incognito is unsupported.
     │
     └──► UI dictionaries (popular sites / GitHub / custom) ──► In-place replacement        Offline
 ```
@@ -36,7 +40,7 @@ Page text ──► Authorized site + Configured endpoint ──► Your model e
 1. Install on Chrome from the [Chrome Web Store](https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe) for automatic updates.
 2. Or install manually: download `web-chinese-translator-<version>-chrome.zip` from [Releases](https://github.com/s-silt/web-chinese-translator/releases/latest) and extract it, open `chrome://extensions`, enable "Developer mode", click "Load unpacked", and select the extracted folder.
 3. Click "Set up in 1 minute" in the popup: choose a provider preset, enter your API Key and model name, and click "Save & connect". The connection badge shows latency or the reason for failure.
-4. Open any English webpage and click "Translate this page" in the popup; enable "Auto-translate this site" for sites you visit often.
+4. Open a supported English webpage and click "Translate this page" in the popup. Enable "Auto-translate this site" for sites you visit often.
 
 For Edge, use `-edge.zip` and load it at `edge://extensions`; for Firefox, install `-firefox.xpi`. When updating a manually installed version, replace the files in the original directory and click "Reload"—changing directories will lose your configuration. Each release includes `SHA256SUMS.txt` for verification.
 
