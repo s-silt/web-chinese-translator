@@ -27,6 +27,12 @@ function trustedKeydown(target: EventTarget, init: KeyboardEventInit = {}, compo
   target.dispatchEvent(event)
 }
 
+function trustedEvent(target: EventTarget, type: string): void {
+  const event = new Event(type, { bubbles: true, composed: true, cancelable: true })
+  Object.defineProperty(event, 'isTrusted', { value: true, configurable: true })
+  target.dispatchEvent(event)
+}
+
 function trustedFocusIn(target: Element): void {
   const event = new FocusEvent('focusin', { bubbles: true, composed: true })
   Object.defineProperty(event, 'isTrusted', { value: true, configurable: true })
@@ -69,7 +75,7 @@ interface Harness {
   editorCalls: DocumentEditorRequest[]
   translateCalls: string[][]
   cancelCalls: string[]
-  setRead: (result: DocumentEditorResult) => void
+  setRead: (result: DocumentEditorResult | (() => DocumentEditorResult | Promise<DocumentEditorResult>)) => void
   setReplace: (result: DocumentEditorResult) => void
   setTranslate: (reply: TranslationReply<'wt:translate'> | (() => TranslationReply<'wt:translate'>)) => void
 }
@@ -87,7 +93,11 @@ function setup(
   const editorCalls: DocumentEditorRequest[] = []
   const translateCalls: string[][] = []
   const cancelCalls: string[] = []
-  let readResult: DocumentEditorResult = { status: 'ok', text: '源文本', canReplace: true }
+  let readResult: DocumentEditorResult | (() => DocumentEditorResult | Promise<DocumentEditorResult>) = {
+    status: 'ok',
+    text: '源文本',
+    canReplace: true,
+  }
   let replaceResult: DocumentEditorResult = { status: 'ok', text: '译文', canReplace: true }
   let translateReply: TranslationReply<'wt:translate'> | (() => TranslationReply<'wt:translate'>) = {
     ok: true,
@@ -104,7 +114,8 @@ function setup(
     },
     editor: async (request) => {
       editorCalls.push(request)
-      return request.action === 'read' ? readResult : replaceResult
+      if (request.action !== 'read') return replaceResult
+      return typeof readResult === 'function' ? readResult() : readResult
     },
     t: (key) => key,
     ...(options.appearance !== undefined ? { appearance: options.appearance } : {}),
@@ -810,7 +821,7 @@ describe('createDocumentInputTranslation', () => {
   })
 
   it('旧预览的延迟复制完成不会在新预览显示已复制', async () => {
-    makeEditorRoot()
+    const { editable } = makeEditorRoot()
     const { watcher } = setup()
     await watcher.translate()
     const copyButton = requireButton('copy')
@@ -823,6 +834,8 @@ describe('createDocumentInputTranslation', () => {
     try {
       trustedClick(copyButton)
       await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('译文'))
+      trustedInput(editable)
+      expect(isPopoverOpen()).toBe(false)
       await watcher.translate()
       expect(isPopoverOpen()).toBe(true)
       expect(copyButton.textContent).toBe('wtToolbarCopy')
@@ -838,5 +851,262 @@ describe('createDocumentInputTranslation', () => {
       }
       watcher.dispose()
     }
+  })
+
+  it('编辑器内的按键未派发 input 时复读内容：已变化则会话失效，旧替换不再可用', async () => {
+    const { editable } = makeEditorRoot()
+    const { watcher, editorCalls, setRead } = setup()
+    await watcher.translate()
+    expect(requireButton('replace').style.display).toBe('')
+    setRead({ status: 'ok', text: '源文', canReplace: true })
+    trustedKeydown(editable, { key: 'Backspace' })
+    await vi.waitFor(() => expect(isPopoverOpen()).toBe(false))
+    expect(editorCalls.filter((call) => call.action === 'read')).toHaveLength(2)
+    expect(editorCalls.filter((call) => call.action === 'replace')).toHaveLength(0)
+    watcher.dispose()
+  })
+
+  it('按键后内容未变则保留预览；修饰键、纯导航键与编辑器外的按键不触发复读', async () => {
+    const { editable } = makeEditorRoot()
+    const { watcher, editorCalls } = setup()
+    const reads = (): number => editorCalls.filter((call) => call.action === 'read').length
+    await watcher.translate()
+    trustedKeydown(editable, { key: 'F8' })
+    await vi.waitFor(() => expect(reads()).toBe(2))
+    expect(isPopoverOpen()).toBe(true)
+    expect(requireButton('replace').style.display).toBe('')
+    for (const key of ['Shift', 'Control', 'Alt', 'Meta']) trustedKeydown(editable, { key })
+    for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown']) {
+      trustedKeydown(editable, { key })
+      trustedKeydown(editable, { key, shiftKey: true })
+    }
+    trustedKeydown(document.body, { key: 'Backspace' })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(reads()).toBe(2)
+    expect(isPopoverOpen()).toBe(true)
+    trustedKeydown(editable, { key: 'ArrowUp', altKey: true })
+    await vi.waitFor(() => expect(reads()).toBe(3))
+    trustedKeydown(editable, { key: 'End', ctrlKey: true })
+    await vi.waitFor(() => expect(reads()).toBe(4))
+    watcher.dispose()
+  })
+
+  it.each(['paste', 'cut', 'drop'])('替换后的 %s 经复读发现内容变化，旧的还原记录失效且不写回', async (type) => {
+    const { editable } = makeEditorRoot()
+    const { watcher, editorCalls, setRead } = setup()
+    const reads = (): number => editorCalls.filter((call) => call.action === 'read').length
+    await watcher.translate()
+    trustedClick(requireButton('replace'))
+    await vi.waitFor(() => expect(requireButton('restore').style.display).toBe(''))
+    setRead({ status: 'ok', text: '译文', canReplace: true })
+    trustedEvent(editable, type)
+    await vi.waitFor(() => expect(reads()).toBe(2))
+    expect(requireButton('restore').style.display).toBe('')
+    setRead({ status: 'ok', text: '译文已改', canReplace: true })
+    trustedEvent(editable, type)
+    await vi.waitFor(() => expect(isPopoverOpen()).toBe(false))
+    expect(editorCalls.filter((call) => call.action === 'replace')).toHaveLength(1)
+    watcher.dispose()
+  })
+
+  it('复读失败：焦点已离开编辑器时不下结论，焦点仍在编辑器时会话失效', async () => {
+    const { editable } = makeEditorRoot()
+    const { watcher, editorCalls, setRead } = setup()
+    const reads = (): number => editorCalls.filter((call) => call.action === 'read').length
+    await watcher.translate()
+    setRead({ status: 'unsupported' })
+    editable.blur()
+    trustedKeydown(editable, { key: 'Backspace' })
+    await vi.waitFor(() => expect(reads()).toBe(2))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(isPopoverOpen()).toBe(true)
+    editable.focus()
+    trustedKeydown(editable, { key: 'Backspace' })
+    await vi.waitFor(() => expect(isPopoverOpen()).toBe(false))
+    expect(reads()).toBe(3)
+    watcher.dispose()
+  })
+
+  it('复读在途时发生了写入：过期的复读结果被丢弃，不误伤刚建立的还原记录', async () => {
+    const { editable } = makeEditorRoot()
+    const { watcher, editorCalls, setRead } = setup()
+    const reads = (): number => editorCalls.filter((call) => call.action === 'read').length
+    await watcher.translate()
+    const pending = deferred<DocumentEditorResult>()
+    setRead(() => pending.promise)
+    trustedKeydown(editable, { key: 'F8' })
+    await vi.waitFor(() => expect(reads()).toBe(2))
+    trustedClick(requireButton('replace'))
+    await vi.waitFor(() => expect(requireButton('restore').style.display).toBe(''))
+    pending.resolve({ status: 'ok', text: '译文', canReplace: true })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(isPopoverOpen()).toBe(true)
+    expect(requireButton('restore').style.display).toBe('')
+    watcher.dispose()
+  })
+
+  it('取得原文快照之前的按键在快照返回后补一次复读', async () => {
+    const { editable } = makeEditorRoot()
+    const { watcher, editorCalls, setRead } = setup()
+    const first = deferred<DocumentEditorResult>()
+    let calls = 0
+    setRead(() => {
+      calls += 1
+      return calls === 1 ? first.promise : { status: 'ok', text: '源文本后来改了', canReplace: true }
+    })
+    const started = watcher.translate()
+    await vi.waitFor(() => expect(editorCalls).toHaveLength(1))
+    trustedKeydown(editable, { key: 'Backspace' })
+    first.resolve({ status: 'ok', text: '源文本', canReplace: true })
+    await started
+    await vi.waitFor(() => expect(isPopoverOpen()).toBe(false))
+    expect(calls).toBe(2)
+    watcher.dispose()
+  })
+
+  it('译文就绪后再次触发：不重新翻译，焦点移入面板的首个可用操作；焦点在面板内时再触发保持不变', async () => {
+    const { editable } = makeEditorRoot()
+    const { watcher, editorCalls, translateCalls } = setup()
+    await watcher.translate()
+    const keyHint = popoverShadow()?.querySelector<HTMLElement>('[data-action="key-hint"]')
+    expect(keyHint?.textContent).toBe('wtInputPanelKeyHint')
+    expect(popoverShadow()?.querySelector('.popover')?.getAttribute('aria-describedby')).toBe(keyHint?.id)
+    expect(requireButton('replace').classList.contains('is-key-focus')).toBe(false)
+    await expect(watcher.translate()).resolves.toBe(true)
+    expect(popoverShadow()?.activeElement).toBe(requireButton('replace'))
+    expect(requireButton('replace').classList.contains('is-key-focus')).toBe(true)
+    await expect(watcher.translate()).resolves.toBe(true)
+    expect(isPopoverOpen()).toBe(true)
+    expect(translateCalls).toHaveLength(1)
+    expect(editorCalls).toHaveLength(1)
+    trustedClick(requireButton('replace'))
+    await vi.waitFor(() => expect(requireButton('restore').style.display).toBe(''))
+    editable.focus()
+    expect(requireButton('replace').classList.contains('is-key-focus')).toBe(false)
+    await expect(watcher.translate()).resolves.toBe(true)
+    expect(popoverShadow()?.activeElement).toBe(requireButton('restore'))
+    expect(requireButton('restore').classList.contains('is-key-focus')).toBe(true)
+    expect(translateCalls).toHaveLength(1)
+    watcher.dispose()
+  })
+
+  it('仅预览时再次触发聚焦复制；出错状态下再次触发照常重新翻译', async () => {
+    makeEditorRoot()
+    const preview = setup()
+    preview.setRead({ status: 'ok', text: '源文本', canReplace: false })
+    await preview.watcher.translate()
+    await expect(preview.watcher.translate()).resolves.toBe(true)
+    expect(popoverShadow()?.activeElement).toBe(requireButton('copy'))
+    expect(preview.translateCalls).toHaveLength(1)
+    preview.watcher.dispose()
+
+    document.body.innerHTML = ''
+    const { editable } = makeEditorRoot()
+    const failing = setup()
+    await failing.watcher.translate()
+    failing.setReplace({ status: 'changed' })
+    trustedClick(requireButton('replace'))
+    await vi.waitFor(() => expect(statusText()).toBe('wtInputTextChanged'))
+    expect(popoverShadow()?.querySelector<HTMLElement>('[data-action="key-hint"]')?.style.display).toBe('none')
+    editable.focus()
+    await expect(failing.watcher.translate()).resolves.toBe(true)
+    expect(failing.translateCalls).toHaveLength(2)
+    failing.watcher.dispose()
+  })
+
+  it('替换返回 unsupported（未写入）时退回仅预览：保留译文与复制，不提示内容可能已改变', async () => {
+    makeEditorRoot()
+    const { watcher, setReplace } = setup()
+    await watcher.translate()
+    setReplace({ status: 'unsupported' })
+    trustedClick(requireButton('replace'))
+    await vi.waitFor(() => expect(requireButton('replace').style.display).toBe('none'))
+    const status = popoverShadow()?.querySelector('[role="status"]')
+    expect(status?.textContent).toBe('译文')
+    expect(status?.className).toBe('status')
+    expect(requireButton('restore').style.display).toBe('none')
+    expect(requireButton('copy').style.display).toBe('')
+    expect(requireButton('copy-original').style.display).toBe('')
+    expect(popoverShadow()?.querySelector('[data-action="hint"]')?.textContent).toBe('wtInputEditorUnsupported')
+    watcher.dispose()
+  })
+
+  it('还原返回 unsupported 时仍给出可恢复原文的说明', async () => {
+    makeEditorRoot()
+    const { watcher, setReplace } = setup()
+    await watcher.translate()
+    trustedClick(requireButton('replace'))
+    await vi.waitFor(() => expect(requireButton('restore').style.display).toBe(''))
+    setReplace({ status: 'unsupported' })
+    trustedClick(requireButton('restore'))
+    await vi.waitFor(() => expect(statusText()).toBe('wtInputReplacePartial'))
+    expect(requireButton('copy-original').style.display).toBe('')
+    watcher.dispose()
+  })
+
+  it('替换失败并显示恢复说明后，编辑器内的按键不再复读，也不会关掉带复制原文的面板', async () => {
+    const { editable } = makeEditorRoot()
+    const { watcher, editorCalls, setRead, setReplace } = setup()
+    const reads = (): number => editorCalls.filter((call) => call.action === 'read').length
+    await watcher.translate()
+    setReplace({ status: 'failed' })
+    trustedClick(requireButton('replace'))
+    await vi.waitFor(() => expect(statusText()).toBe('wtInputReplacePartial'))
+    setRead({ status: 'ok', text: '部分写入的内容', canReplace: true })
+    trustedKeydown(editable, { key: 'c', ctrlKey: true })
+    trustedEvent(editable, 'paste')
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(reads()).toBe(1)
+    expect(isPopoverOpen()).toBe(true)
+    expect(statusText()).toBe('wtInputReplacePartial')
+    expect(requireButton('copy-original').style.display).toBe('')
+    watcher.dispose()
+  })
+
+  it('替换成功但不可还原时，复读按实际写入的文本比对', async () => {
+    const { editable } = makeEditorRoot()
+    const { watcher, editorCalls, setRead, setReplace } = setup()
+    const reads = (): number => editorCalls.filter((call) => call.action === 'read').length
+    await watcher.translate()
+    setReplace({ status: 'ok', text: '实际写入', canReplace: false })
+    trustedClick(requireButton('replace'))
+    await vi.waitFor(() => expect(requireButton('replace').style.display).toBe('none'))
+    expect(requireButton('restore').style.display).toBe('none')
+    setRead({ status: 'ok', text: '实际写入', canReplace: false })
+    trustedKeydown(editable, { key: 'c', ctrlKey: true })
+    await vi.waitFor(() => expect(reads()).toBe(2))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(isPopoverOpen()).toBe(true)
+    setRead({ status: 'ok', text: '实际写入后又改了', canReplace: false })
+    trustedKeydown(editable, { key: 'Backspace' })
+    await vi.waitFor(() => expect(isPopoverOpen()).toBe(false))
+    watcher.dispose()
+  })
+
+  it('旧会话仍在途的复读不阻塞新会话的复读，迟到后也不影响新会话', async () => {
+    const { editable } = makeEditorRoot()
+    const { watcher, editorCalls, setRead } = setup()
+    const reads = (): number => editorCalls.filter((call) => call.action === 'read').length
+    await watcher.translate()
+    const stale = deferred<DocumentEditorResult>()
+    setRead(() => stale.promise)
+    trustedKeydown(editable, { key: 'F8' })
+    await vi.waitFor(() => expect(reads()).toBe(2))
+    trustedInput(editable)
+    expect(isPopoverOpen()).toBe(false)
+    setRead({ status: 'ok', text: '源文本', canReplace: true })
+    await watcher.translate()
+    expect(isPopoverOpen()).toBe(true)
+    trustedKeydown(editable, { key: 'F8' })
+    await vi.waitFor(() => expect(reads()).toBe(4))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(isPopoverOpen()).toBe(true)
+    stale.resolve({ status: 'ok', text: '旧会话读到的别的内容', canReplace: true })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(isPopoverOpen()).toBe(true)
+    setRead({ status: 'ok', text: '源文本被改了', canReplace: true })
+    trustedKeydown(editable, { key: 'Backspace' })
+    await vi.waitFor(() => expect(isPopoverOpen()).toBe(false))
+    watcher.dispose()
   })
 })

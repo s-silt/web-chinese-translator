@@ -288,7 +288,7 @@ function createInstance(inputOnly = false): Instance {
       pageOn: t('wtPageOn'),
       restored: t('wtFloatingRestored'),
       paused: t('wtFloatingPaused'),
-      loading: t('wtPanelLoading'),
+      loading: t('wtProcessing'),
       positionFailed: t('wtFloatingPositionFailed'),
     }
   }

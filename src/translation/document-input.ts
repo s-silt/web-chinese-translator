@@ -29,6 +29,17 @@ export interface DocumentInputWatcher {
 const EDITOR_ROOT_SELECTOR = '.cm-editor,.CodeMirror,.ck-editor__editable,.mce-content-body'
 const TOKEN_ATTRIBUTE = 'data-wt-document-input'
 const COPY_FEEDBACK_MS = 1400
+const EDIT_VERIFY_DELAY_MS = 60
+const NAVIGATION_KEYS = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'Home',
+  'End',
+  'PageUp',
+  'PageDown',
+])
 
 export function createDocumentInputTranslation(options: DocumentInputOptions): DocumentInputWatcher {
   let disposed = false
@@ -42,6 +53,14 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   let busy = false
   let replacing = false
   let copyTimer: ReturnType<typeof setTimeout> | undefined
+  let verifyTimer: ReturnType<typeof setTimeout> | undefined
+  let verifying = false
+  let verifyAgain = false
+  let editedBeforeSnapshot = false
+  let writeCount = 0
+  let verifyRun = 0
+  let knownText: string | undefined
+  let statusFailed = false
 
   let host: HTMLElement | undefined
   let shadow: ShadowRoot | undefined
@@ -54,6 +73,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   let copyButton: HTMLButtonElement | undefined
   let copyOriginalButton: HTMLButtonElement | undefined
   let hintNode: HTMLElement | undefined
+  let keyHintNode: HTMLElement | undefined
 
   function ensureDom(): void {
     if (host !== undefined) return
@@ -119,7 +139,12 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     const hint = document.createElement('span')
     hint.className = 'auto-hint'
     hint.dataset.action = 'hint'
-    actions.append(replace, restore, copy, copyOriginal, hint)
+    const keyHint = document.createElement('span')
+    keyHint.className = 'auto-hint'
+    keyHint.id = 'wt-document-input-key-hint'
+    keyHint.dataset.action = 'key-hint'
+    panel.setAttribute('aria-describedby', keyHint.id)
+    actions.append(replace, restore, copy, copyOriginal, hint, keyHint)
     panel.append(header, status, actions)
     closed.append(style, panel)
     panel.addEventListener('pointerdown', (event) => {
@@ -146,6 +171,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     copyButton = copy
     copyOriginalButton = copyOriginal
     hintNode = hint
+    keyHintNode = keyHint
   }
 
   function syncLabels(): void {
@@ -190,6 +216,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     if (statusNode === undefined) return
     statusNode.textContent = text
     statusNode.className = isError ? 'status is-error' : 'status'
+    statusFailed = isError
   }
 
   function syncActions(): void {
@@ -219,6 +246,11 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
             ? options.t('wtInputEditorUnsupported')
             : options.t('wtInputPreviewHint')
     }
+    if (keyHintNode !== undefined) {
+      const focusable = hasTranslation && !statusFailed
+      keyHintNode.textContent = focusable ? options.t('wtInputPanelKeyHint') : ''
+      keyHintNode.style.display = focusable ? '' : 'none'
+    }
   }
 
   function clearCopyTimer(): void {
@@ -226,6 +258,61 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
       clearTimeout(copyTimer)
       copyTimer = undefined
     }
+  }
+
+  function clearVerify(): void {
+    if (verifyTimer !== undefined) clearTimeout(verifyTimer)
+    verifyTimer = undefined
+    verifyAgain = false
+    editedBeforeSnapshot = false
+    verifyRun += 1
+    verifying = false
+  }
+
+  function scheduleVerify(): void {
+    if (verifying) {
+      verifyAgain = true
+      return
+    }
+    if (verifyTimer !== undefined) return
+    verifyTimer = setTimeout(() => {
+      verifyTimer = undefined
+      void verifyEditorText()
+    }, EDIT_VERIFY_DELAY_MS)
+  }
+
+  async function verifyEditorText(): Promise<void> {
+    const current = token
+    const expected = knownText
+    if (disposed || current === undefined || expected === undefined) return
+    if (replacing) {
+      scheduleVerify()
+      return
+    }
+    const epoch = sessionEpoch
+    const writes = writeCount
+    const run = ++verifyRun
+    verifying = true
+    let snapshot: DocumentEditorResult
+    try {
+      snapshot = await options.editor({ elementId: current.id, action: 'read' })
+    } catch {
+      snapshot = { status: 'failed' }
+    }
+    if (run !== verifyRun) return
+    verifying = false
+    const again = verifyAgain
+    verifyAgain = false
+    if (disposed) return
+    if (epoch === sessionEpoch && token?.id === current.id && !replacing && writes === writeCount) {
+      const unchanged =
+        snapshot.status === 'ok' ? snapshot.text === expected : candidateRoot() !== current.root
+      if (!unchanged) {
+        invalidateSession()
+        return
+      }
+    }
+    if (again && token !== undefined) scheduleVerify()
   }
 
   function releaseToken(): void {
@@ -265,13 +352,16 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     originalText = ''
     translationText = ''
     insertedText = undefined
+    knownText = undefined
     canReplaceDocument = false
     clearCopyTimer()
+    clearVerify()
     hidePanel()
     if (statusNode !== undefined) {
       statusNode.textContent = ''
       statusNode.className = 'status'
     }
+    statusFailed = false
     syncActions()
     if (returnRoot?.isConnected === true) focusEditor(returnRoot)
   }
@@ -313,6 +403,20 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     if (!event.isTrusted || disposed) return
     if (token === undefined && translationText === '' && originalText === '') return
     invalidateSession()
+  }
+
+  function onEditorGesture(event: Event): void {
+    if (!event.isTrusted || disposed || token === undefined) return
+    if (event instanceof KeyboardEvent) {
+      if (event.key === 'Shift' || event.key === 'Control' || event.key === 'Alt' || event.key === 'Meta') return
+      if (NAVIGATION_KEYS.has(event.key) && !event.ctrlKey && !event.altKey && !event.metaKey) return
+    }
+    if (!event.composedPath().includes(token.root)) return
+    if (originalText === '') {
+      editedBeforeSnapshot = true
+      return
+    }
+    scheduleVerify()
   }
 
   function onFocusChange(event: Event): void {
@@ -359,6 +463,10 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   document.addEventListener('compositionstart', onTrustedEdit, true)
   document.addEventListener('focusin', onFocusChange, true)
   document.addEventListener('keydown', onEscapeKey, true)
+  document.addEventListener('keydown', onEditorGesture, true)
+  document.addEventListener('paste', onEditorGesture, true)
+  document.addEventListener('cut', onEditorGesture, true)
+  document.addEventListener('drop', onEditorGesture, true)
   document.addEventListener('visibilitychange', onVisibilityChange)
   window.addEventListener('pagehide', onPageHide)
   window.addEventListener('blur', onWindowBlur)
@@ -401,6 +509,16 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     }
   }
 
+  function focusPanel(): void {
+    const target = [restoreButton, replaceButton, copyButton, copyOriginalButton, closeButtonNode].find(
+      (button) => button !== undefined && button.style.display !== 'none' && !button.disabled,
+    )
+    if (target === undefined) return
+    target.classList.add('is-key-focus')
+    target.addEventListener('blur', () => target.classList.remove('is-key-focus'), { once: true })
+    target.focus({ preventScroll: true })
+  }
+
   async function onReplace(restore = false): Promise<void> {
     if (disposed || !options.enabled()) {
       closeSession()
@@ -412,6 +530,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     if (!current.root.isConnected) {
       canReplaceDocument = false
       insertedText = undefined
+      knownText = undefined
       setStatus(options.t('wtInputTextChanged'), true)
       syncActions()
       return
@@ -422,6 +541,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     focusEditor(current.root)
     replacing = true
     busy = true
+    writeCount += 1
     syncActions()
     let result: DocumentEditorResult
     try {
@@ -447,11 +567,16 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
         return
       }
       translationText = result.text
+      knownText = result.text
       insertedText = result.canReplace ? result.text : undefined
       canReplaceDocument = result.canReplace
       setStatus(result.text)
+    } else if (result.status === 'unsupported' && !restore) {
+      canReplaceDocument = false
+      setStatus(translationText)
     } else {
       insertedText = undefined
+      knownText = undefined
       canReplaceDocument = false
       setStatus(options.t(result.status === 'changed' ? 'wtInputTextChanged' : 'wtInputReplacePartial'), true)
     }
@@ -461,8 +586,13 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   async function translate(): Promise<boolean> {
     if (disposed || !options.enabled()) return false
     if (replacing) return true
+    if (token !== undefined && host !== undefined && document.activeElement === host) return true
     const root = candidateRoot()
     if (root === undefined) return false
+    if (token?.root === root && !busy && translationText !== '' && !statusFailed) {
+      focusPanel()
+      return true
+    }
     ensureDom()
     invalidateSession()
     const epoch = sessionEpoch
@@ -516,7 +646,12 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     }
 
     originalText = snapshot.text
+    knownText = snapshot.text
     canReplaceDocument = snapshot.canReplace
+    if (editedBeforeSnapshot) {
+      editedBeforeSnapshot = false
+      scheduleVerify()
+    }
     let reply: Awaited<ReturnType<DocumentInputOptions['translate']>> | undefined
     try {
       reply = await options.translate([snapshot.text], request)
@@ -556,6 +691,10 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
       document.removeEventListener('compositionstart', onTrustedEdit, true)
       document.removeEventListener('focusin', onFocusChange, true)
       document.removeEventListener('keydown', onEscapeKey, true)
+      document.removeEventListener('keydown', onEditorGesture, true)
+      document.removeEventListener('paste', onEditorGesture, true)
+      document.removeEventListener('cut', onEditorGesture, true)
+      document.removeEventListener('drop', onEditorGesture, true)
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('blur', onWindowBlur)
@@ -571,6 +710,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
       copyButton = undefined
       copyOriginalButton = undefined
       hintNode = undefined
+      keyHintNode = undefined
     },
   }
 }

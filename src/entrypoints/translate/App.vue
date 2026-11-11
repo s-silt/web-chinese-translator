@@ -104,14 +104,24 @@
 
       <UiNotice v-if="error !== ''" tone="error" :live="'assertive'" class="translate-notice">
         <p><span data-test="wt-text-error">{{ error }}</span></p>
-        <p class="ui-hint">{{ t('textTranslateErrorHint') }}</p>
-        <UiButton variant="default" :disabled="submitDisabled" data-test="wt-text-retry" @click="submit">
-          {{ t('uiRetry') }}
-        </UiButton>
+        <template v-if="requestFailed">
+          <p class="ui-hint" data-test="wt-text-error-hint">{{ t(errorHintKey) }}</p>
+          <UiButton
+            ref="retryButton"
+            variant="default"
+            :disabled="submitDisabled"
+            :aria-describedby="SUBMIT_HINT_ID"
+            data-test="wt-text-retry"
+            @click="submit"
+          >
+            {{ t('uiRetry') }}
+          </UiButton>
+        </template>
       </UiNotice>
 
       <footer class="translate-actions">
         <UiButton
+          ref="translateButton"
           variant="primary"
           :disabled="submitDisabled"
           :aria-busy="busy"
@@ -121,10 +131,19 @@
         >
           {{ t('wtToolbarTranslate') }}
         </UiButton>
-        <UiButton v-if="busy" variant="default" data-test="wt-text-cancel" @click="cancel">{{ t('cancel') }}</UiButton>
-        <UiButton variant="default" :disabled="result === ''" data-test="wt-text-copy" @click="copy">
+        <UiButton v-if="busy" ref="cancelButton" variant="default" data-test="wt-text-cancel" @click="cancel">
+          {{ t('cancel') }}
+        </UiButton>
+        <UiButton
+          variant="default"
+          :disabled="result === ''"
+          :aria-describedby="result === '' ? COPY_HINT_ID : undefined"
+          data-test="wt-text-copy"
+          @click="copy"
+        >
           {{ t('wtToolbarCopy') }}
         </UiButton>
+        <span :id="COPY_HINT_ID" hidden>{{ t('textTranslateResultEmpty') }}</span>
         <UiButton variant="invisible" data-test="wt-text-clear" @click="clear">{{ t('textTranslateClear') }}</UiButton>
         <ToastHost class="translate-feedback" />
         <p :id="SUBMIT_HINT_ID" class="translate-submit-hint ui-hint" data-test="wt-text-submit-hint">{{ submitHintText }}</p>
@@ -134,7 +153,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue'
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  shallowRef,
+  useTemplateRef,
+  watch,
+  type ComponentPublicInstance,
+} from 'vue'
 import { browser } from 'wxt/browser'
 import ToastHost from '../../components/ToastHost.vue'
 import UiButton from '../../components/ui/UiButton.vue'
@@ -148,7 +177,9 @@ import { useSettings } from '../../components/useSettings'
 import { copySelectionText } from '../../translation/clipboard'
 import { closePageSession, sendTranslationMessage } from '../../translation/client'
 import type { TranslationConfig } from '../../translation/config'
+import type { FailureCode } from '../../translation/failure'
 import { createId } from '../../translation/id'
+import type { TranslationFailure } from '../../translation/messages'
 import {
   TARGET_LANGUAGES,
   TARGET_LANGUAGE_NATIVE_LABEL,
@@ -162,7 +193,27 @@ const INPUT_ID = 'wt-text-input'
 const RESULT_ID = 'wt-text-result'
 const COUNT_ID = 'wt-text-count'
 const SUBMIT_HINT_ID = 'wt-text-submit-hint'
+const COPY_HINT_ID = 'wt-text-copy-hint'
 const LOGO_URL = '/icon/48.png'
+const FAILURE_KEYS: Partial<Record<FailureCode, MessageKey>> = {
+  auth: 'wtConnAuth',
+  timeout: 'wtConnTimeout',
+  queue_timeout: 'wtConnTimeout',
+  network: 'wtConnNetwork',
+  disconnected: 'wtConnNetwork',
+  not_found: 'wtConnNotFound',
+  rate_limited: 'wtConnRateLimited',
+  queue_full: 'wtConnRateLimited',
+  queue_paused: 'wtConnRateLimited',
+  bad_output: 'wtAssistInvalidResult',
+}
+const RECOVERY_KEYS: Partial<Record<FailureCode, MessageKey>> = {
+  auth: 'wtConnRecoveryAuth',
+  not_found: 'wtConnRecoveryNotFound',
+  rate_limited: 'wtConnRecoveryRateLimited',
+  queue_full: 'wtConnRecoveryRateLimited',
+  queue_paused: 'wtConnRecoveryRateLimited',
+}
 
 useUiPreferencesSync()
 const { t, language } = useI18n()
@@ -174,11 +225,16 @@ const source = ref<SourceLanguage>('auto')
 const target = ref<TargetLanguage>('zh-CN')
 const error = ref('')
 const busy = ref(false)
+const requestFailed = ref(false)
+const errorHintKey = ref<MessageKey>('textTranslateErrorHint')
 const loadFailed = ref(false)
 const loadingConfig = ref(false)
 const config = shallowRef<TranslationConfig>()
 const toast = createToastSource()
 const textInput = useTemplateRef<{ focus(): void }>('textInput')
+const translateButton = useTemplateRef<ComponentPublicInstance>('translateButton')
+const retryButton = useTemplateRef<ComponentPublicInstance>('retryButton')
+const cancelButton = useTemplateRef<ComponentPublicInstance>('cancelButton')
 
 let epoch = 0
 let configEpoch = 0
@@ -235,6 +291,21 @@ function invalidate(): void {
   busy.value = false
   result.value = ''
   error.value = ''
+  requestFailed.value = false
+}
+
+function failureText(reply: TranslationFailure): string {
+  if (language.value === 'zh-CN') return reply.error
+  const key = reply.code === undefined ? undefined : FAILURE_KEYS[reply.code]
+  if (key !== undefined) return t(key)
+  return reply.code === 'server' || reply.error === ''
+    ? t('wtRetryBubbleTitle')
+    : `${t('wtRetryBubbleTitle')}: ${reply.error}`
+}
+
+function buttonOf(target: ComponentPublicInstance | null): HTMLButtonElement | undefined {
+  const element: unknown = target?.$el
+  return element instanceof HTMLButtonElement ? element : undefined
 }
 
 function onInput(): void {
@@ -274,11 +345,18 @@ async function submit(): Promise<void> {
   if (disposed || busy.value || loadFailed.value) return
   const value = text.value
   if (value.trim() === '') {
+    requestFailed.value = false
     error.value = t('textTranslateEmpty')
     return
   }
-  if (value.length > MAX_TEXT || config.value === undefined) return
+  if (value.length > MAX_TEXT) {
+    requestFailed.value = false
+    error.value = t('textTranslateTooLong')
+    return
+  }
+  if (config.value === undefined) return
   if (modelMissing.value) {
+    requestFailed.value = false
     error.value = t('wtNotConfigured')
     return
   }
@@ -287,6 +365,7 @@ async function submit(): Promise<void> {
   requestId = id
   busy.value = true
   error.value = ''
+  requestFailed.value = false
   result.value = ''
   const reply = await sendTranslationMessage({
     type: 'wt:translate-text',
@@ -299,7 +378,11 @@ async function submit(): Promise<void> {
   busy.value = false
   requestId = undefined
   if (reply.ok) result.value = reply.texts[0] ?? ''
-  else error.value = reply.error
+  else {
+    error.value = failureText(reply)
+    errorHintKey.value = (reply.code === undefined ? undefined : RECOVERY_KEYS[reply.code]) ?? 'textTranslateErrorHint'
+    requestFailed.value = true
+  }
 }
 
 async function copy(): Promise<void> {
@@ -346,6 +429,22 @@ watch(
   },
   { immediate: true },
 )
+
+watch(busy, (now) => {
+  const active = document.activeElement
+  if (active === null) return
+  if (now) {
+    if (active !== buttonOf(translateButton.value) && active !== buttonOf(retryButton.value)) return
+    void nextTick(() => buttonOf(cancelButton.value)?.focus())
+    return
+  }
+  if (active !== buttonOf(cancelButton.value)) return
+  void nextTick(() => {
+    const next = buttonOf(translateButton.value)
+    if (next !== undefined && !next.disabled) next.focus()
+    else textInput.value?.focus()
+  })
+})
 
 onMounted(() => {
   window.addEventListener('focus', onFocus)

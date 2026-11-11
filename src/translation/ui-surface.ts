@@ -84,5 +84,6 @@ button:focus-visible, input:focus-visible, summary:focus-visible {
     --gcn-shadow-overlay: none;
   }
   * { box-shadow: none !important; }
+  .floating-primary, .actions button[data-action='replace'], .selection-toolbar button[data-action='translate'] { forced-color-adjust: none; }
 }
 `

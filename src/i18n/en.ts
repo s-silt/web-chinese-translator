@@ -353,7 +353,7 @@ export default {
   wtInputReplaceMode: 'Replacement mode',
   wtInputReplaceModeHotkey: 'Preview and replace with shortcut',
   wtInputReplaceModeAuto: 'Auto-replace after typing stops',
-  wtInputReplaceModeHint: 'Auto replacement updates supported plain inputs or chat drafts after the idle delay without sending the message, even when automatic popups are off. Restore original undoes the replacement. Document editors still require a manual trigger and confirmation.',
+  wtInputReplaceModeHint: 'Auto replacement updates supported plain inputs or chat drafts after the idle delay without sending the message, even when automatic popups are off. Use Restore to undo the replacement. Document editors still require a manual trigger and confirmation.',
   wtInputAutoReplaceDelay: 'Auto-replace wait time',
   wtInputAutoReplaceDelaySeconds: '{seconds}s',
   wtInputAutoReplaceDelayCustom: 'Custom',
@@ -375,6 +375,7 @@ export default {
   wtInputReplaceFailed: 'Could not update this input field',
   wtInputReplacePartial: 'Replacement did not finish. The draft may have changed. Copy the original to recover it, or copy and paste the translation.',
   wtInputEditorUnsupported: 'This editor cannot be safely replaced yet. Copy the translation and paste it.',
+  wtInputPanelKeyHint: 'Press the shortcut again to focus this panel; Esc closes it.',
 
   wtEngineDict: 'Dictionary',
   wtEngineModel: 'Model',

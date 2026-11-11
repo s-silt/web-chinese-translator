@@ -22,7 +22,8 @@
       <UiButton
         variant="invisible"
         size="sm"
-        :disabled="busy || host === '' || !configurationReady"
+        :disabled="excludeDisabled"
+        :aria-describedby="excludeDisabled && primaryReason !== '' ? 'wt-primary-reason' : undefined"
         data-test="wt-exclude-site"
         @click="excludeSite(!siteExcluded)"
       >
@@ -140,6 +141,8 @@ const primaryDisabled = computed(() => {
   if (sensitive.value) return !restoreOnly.value
   return !canTranslate.value && !canRestore.value && !canResume.value
 })
+
+const excludeDisabled = computed(() => busy.value || host.value === '' || !configurationReady.value)
 
 const primaryReason = computed<MessageKey | ''>(() => {
   if (!primaryDisabled.value) return ''

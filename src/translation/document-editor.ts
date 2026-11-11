@@ -70,6 +70,7 @@ interface TinyEditor {
   setContent?(html: string): void
   undoManager?: { transact?(fn: () => void): void }
   fire?(name: string): void
+  dispatch?(name: string): void
   save?(): void
 }
 
@@ -451,8 +452,17 @@ export function documentEditorInMainWorld(request: DocumentEditorRequest): Docum
   function tinyEditors(): TinyEditor[] {
     const found: TinyEditor[] = []
     const collect = (tiny: unknown): void => {
-      if (!isRecord(tiny) || !Array.isArray(tiny.editors)) return
-      for (const editor of tiny.editors) {
+      if (!isRecord(tiny)) return
+      let editors: unknown = tiny.editors
+      if (!Array.isArray(editors) && typeof tiny.get === 'function') {
+        try {
+          editors = (tiny.get as () => unknown).call(tiny)
+        } catch {
+          return
+        }
+      }
+      if (!Array.isArray(editors)) return
+      for (const editor of editors) {
         if (isRecord(editor)) found.push(editor as unknown as TinyEditor)
       }
     }
@@ -544,6 +554,10 @@ export function documentEditorInMainWorld(request: DocumentEditorRequest): Docum
     return { embedded, formatted }
   }
 
+  function tinyCollapsesWhitespace(text: string): boolean {
+    return /\t| {2,}|\n | \n/.test(text.trim())
+  }
+
   function readTiny(root: Element): { text: string; canReplace: boolean } | 'unsupported' {
     const editor = tinyEditorFor(root)
     if (editor === undefined || tinyReadOnly(editor) || typeof editor.getContent !== 'function') {
@@ -584,14 +598,16 @@ export function documentEditorInMainWorld(request: DocumentEditorRequest): Docum
       return 'failed'
     }
     if (before !== expected) return 'changed'
+    if (tinyCollapsesWhitespace(next)) return 'unsupported'
     if (!focusedWithin(root) || !candidateUsable(root)) return 'failed'
     const escaped = next.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     try {
       transact.call(editor.undoManager, () => {
         editor.setContent!(`<p>${escaped.replace(/\n/g, '<br>')}</p>`)
       })
-      editor.fire?.('input')
-      editor.fire?.('change')
+      const emit = typeof editor.dispatch === 'function' ? editor.dispatch : editor.fire
+      emit?.call(editor, 'input')
+      emit?.call(editor, 'change')
       editor.save?.()
     } catch {
       return 'failed'

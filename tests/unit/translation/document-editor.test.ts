@@ -484,6 +484,85 @@ describe('documentEditorInMainWorld', () => {
     expect(calls[0]).toBe('<p>a&lt;b&gt;&amp;<br>c</p>')
   })
 
+  it('TinyMCE 6 起没有 tinymce.editors：经 tinymce.get() 找到实例后可读取、替换并还原', () => {
+    const root = document.createElement('body')
+    root.className = 'mce-content-body'
+    root.contentEditable = 'true'
+    document.body.append(root)
+    tokened(root)
+    const { editor, calls } = tinyStub(root, 'original', '<p>original</p>')
+    const dispatched: string[] = []
+    const fired: string[] = []
+    Object.assign(editor, {
+      dispatch: (name: string) => { dispatched.push(name) },
+      fire: (name: string) => { fired.push(name) },
+    })
+    ;(window as unknown as { tinymce?: unknown }).tinymce = { get: () => [editor] }
+    focus(root)
+    expect(documentEditorInMainWorld({ elementId: TOKEN, action: 'read' })).toEqual({
+      status: 'ok',
+      text: 'original',
+      canReplace: true,
+    })
+    expect(
+      documentEditorInMainWorld({ elementId: TOKEN, action: 'replace', expectedText: 'original', text: 'translated' }),
+    ).toEqual({ status: 'ok', text: 'translated', canReplace: true })
+    expect(
+      documentEditorInMainWorld({ elementId: TOKEN, action: 'replace', expectedText: 'translated', text: 'original' }),
+    ).toEqual({ status: 'ok', text: 'original', canReplace: true })
+    expect(calls).toEqual(['<p>translated</p>', '<p>original</p>'])
+    expect(dispatched).toEqual(['input', 'change', 'input', 'change'])
+    expect(fired).toEqual([])
+  })
+
+  it('TinyMCE 的 get() 抛错或返回非数组时按不支持处理', () => {
+    const root = document.createElement('body')
+    root.className = 'mce-content-body'
+    root.contentEditable = 'true'
+    document.body.append(root)
+    tokened(root)
+    tinyStub(root, 'original', '<p>original</p>')
+    focus(root)
+    ;(window as unknown as { tinymce?: unknown }).tinymce = { get: () => { throw new Error('x') } }
+    expect(documentEditorInMainWorld({ elementId: TOKEN, action: 'read' })).toEqual({ status: 'unsupported' })
+    ;(window as unknown as { tinymce?: unknown }).tinymce = { get: () => null }
+    expect(documentEditorInMainWorld({ elementId: TOKEN, action: 'read' })).toEqual({ status: 'unsupported' })
+  })
+
+  it.each([
+    ['连续空格', 'A.  B'],
+    ['制表符', 'A\tB'],
+    ['行首空格', '一\n  二'],
+    ['行尾空格', '一 \n二'],
+  ])('TinyMCE 译文含会被 HTML 折叠的空白（%s）时不写入，原文保持不变', (_name, text) => {
+    const root = document.createElement('body')
+    root.className = 'mce-content-body'
+    root.contentEditable = 'true'
+    document.body.append(root)
+    tokened(root)
+    const { editor, calls } = tinyStub(root, 'original', '<p>original</p>')
+    focus(root)
+    expect(documentEditorInMainWorld({ elementId: TOKEN, action: 'replace', expectedText: 'original', text })).toEqual({
+      status: 'unsupported',
+    })
+    expect(calls).toEqual([])
+    expect(editor.getContent({ format: 'text' })).toBe('original')
+  })
+
+  it('TinyMCE 译文含不间断空格与换行时照常写入', () => {
+    const root = document.createElement('body')
+    root.className = 'mce-content-body'
+    root.contentEditable = 'true'
+    document.body.append(root)
+    tokened(root)
+    const { calls } = tinyStub(root, 'original', '<p>original</p>')
+    focus(root)
+    expect(
+      documentEditorInMainWorld({ elementId: TOKEN, action: 'replace', expectedText: 'original', text: 'A\u00a0 B\nC' }).status,
+    ).toBe('ok')
+    expect(calls).toEqual(['<p>A\u00a0 B<br>C</p>'])
+  })
+
   it('TinyMCE formatted markup previews but cannot replace', () => {
     const root = document.createElement('body')
     root.className = 'mce-content-body'

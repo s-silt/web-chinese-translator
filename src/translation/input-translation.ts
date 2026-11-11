@@ -92,6 +92,7 @@ export const INPUT_POPOVER_CSS = `${SURFACE_CSS}
 .actions button[data-action='replace'] { color: var(--gcn-primary-fg); background: var(--gcn-primary-bg); border-color: var(--gcn-primary-border); font-weight: 600; }
 .actions button[data-action='replace']:hover:not(:disabled) { background: var(--gcn-primary-hover-bg); }
 .actions button:disabled { color: var(--gcn-fg-disabled); background: var(--gcn-bg-disabled); cursor: default; }
+.popover button.is-key-focus:focus { outline: 2px solid var(--gcn-focus); outline-offset: 2px; }
 .auto-hint { flex-basis: 100%; font-size: 12px; color: var(--gcn-fg-muted); }
 `
 
@@ -323,6 +324,7 @@ function applyFieldReplacement(
       ? planNativeVideoChatDraft(normalizedNext)
       : undefined
   if (nativeVideoField !== undefined && plan === undefined) return 'failed'
+  if (field instanceof HTMLInputElement && normalizedNext.includes('\n')) return 'failed'
 
   const beforeInput = new InputEvent('beforeinput', {
     bubbles: true,
@@ -430,7 +432,9 @@ function applyFieldReplacement(
     data: normalizedNext,
   })
   field.dispatchEvent(inputEvent)
-  if (!isCurrentEditable(field) || readFieldValue(field) !== normalizedNext) return 'failed'
+  if (!isCurrentEditable(field) || readFieldValue(field) !== normalizedNext) {
+    return readFieldValue(field) === expectedBefore ? 'failed' : 'failed-modified'
+  }
   try {
     field.focus({ preventScroll: true })
   } catch {

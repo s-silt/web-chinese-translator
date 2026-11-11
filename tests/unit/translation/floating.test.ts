@@ -569,6 +569,102 @@ describe('悬浮入口', () => {
     expect(ui.entry.isMenuOpen()).toBe(false)
   })
 
+  it('键盘触发的操作结束后焦点回到原按钮；期间用户移走焦点则不抢回', async () => {
+    const ui = mount()
+    await frames()
+    trustedClick(ui.button(), 0)
+    const translate = ui.root.querySelector('.floating-translate') as HTMLButtonElement
+    const close = ui.root.querySelector('.floating-close') as HTMLButtonElement
+    expect(ui.root.activeElement).toBe(translate)
+    ui.update(view({ busy: true }))
+    expect(ui.root.activeElement).toBe(close)
+    ui.update(view({ busy: true, error: '仍在进行' }))
+    expect(ui.root.activeElement).toBe(close)
+    ui.update(view())
+    expect(ui.root.activeElement).toBe(translate)
+    expect(ui.entry.isMenuOpen()).toBe(true)
+
+    ui.update(view({ busy: true }))
+    expect(ui.root.activeElement).toBe(close)
+    ui.button().focus()
+    ui.update(view())
+    expect(ui.root.activeElement).toBe(ui.button())
+
+    translate.focus()
+    ui.update(view({ busy: true }))
+    trustedClick(close, 0)
+    expect(ui.entry.isMenuOpen()).toBe(false)
+    ui.update(view())
+    expect(ui.root.activeElement).toBe(ui.button())
+  })
+
+  it('聚焦的操作被隐藏时焦点移到关闭按钮；操作结束时原按钮已隐藏则留在关闭按钮', async () => {
+    const ui = mount()
+    await frames()
+    trustedClick(ui.button(), 0)
+    const restore = ui.root.querySelector('.floating-page') as HTMLButtonElement
+    const close = ui.root.querySelector('.floating-close') as HTMLButtonElement
+    restore.focus()
+    ui.update(view({ restored: true, resumable: true }))
+    expect(restore.hidden).toBe(true)
+    expect(ui.root.activeElement).toBe(close)
+
+    ui.update(view())
+    restore.focus()
+    ui.update(view({ busy: true }))
+    expect(ui.root.activeElement).toBe(close)
+    ui.update(view({ restored: true, resumable: true }))
+    expect(restore.hidden).toBe(true)
+    expect(ui.root.activeElement).toBe(close)
+  })
+
+  it('忙碌或检查中显示可见的原因文字并与禁用按钮关联，空闲与未配置时隐藏', async () => {
+    const ui = mount()
+    await frames()
+    trustedClick(ui.button())
+    const translate = ui.root.querySelector('.floating-translate') as HTMLButtonElement
+    const auto = ui.root.querySelector('.floating-auto') as HTMLButtonElement
+    const reason = ui.root.getElementById('wt-floating-disabled-reason') as HTMLElement
+    expect(reason.hidden).toBe(true)
+    ui.update(view({ busy: true }))
+    expect(reason.hidden).toBe(false)
+    expect(reason.textContent).toBe('加载')
+    expect(translate.disabled).toBe(true)
+    expect(translate.getAttribute('aria-describedby')).toBe(reason.id)
+    ui.update(view({ checking: true }))
+    expect(reason.hidden).toBe(false)
+    ui.update(view())
+    expect(reason.hidden).toBe(true)
+    expect(translate.hasAttribute('aria-describedby')).toBe(false)
+    ui.update(view({ configured: false }))
+    expect(reason.hidden).toBe(true)
+    expect(translate.textContent).toBe('请先配置模型')
+    expect(auto.disabled).toBe(true)
+    expect(auto.getAttribute('aria-describedby')).toBe(reason.id)
+  })
+
+  it('强制高对比度下开关拨钮保留：渐变不被系统配色移除，并按状态使用系统色', () => {
+    const ui = mount()
+    const css = ui.root.querySelector('style')?.textContent ?? ''
+    const forced = css.slice(css.lastIndexOf('.floating-auto::after { forced-color-adjust'))
+    expect(css.slice(0, css.length - forced.length).trimEnd().endsWith('@media (forced-colors: active) {')).toBe(true)
+    expect(forced).toContain('.floating-auto::after { forced-color-adjust: none; --gcn-knob: ButtonText; --gcn-switch-off: Canvas;')
+    expect(forced).toContain(".floating-auto[aria-checked='true']::after { --gcn-knob: HighlightText; --gcn-switch-on: Highlight;")
+    expect(forced).toContain('.floating-auto:disabled::after { --gcn-knob: GrayText;')
+  })
+
+  it('强制高对比度下主按钮退出系统改色，避免文字底板盖住 HighlightText 文字', () => {
+    const ui = mount()
+    const css = ui.root.querySelector('style')?.textContent ?? ''
+    const start = css.indexOf('@media (forced-colors: active) {\n  :host, :host([data-style])')
+    expect(start).toBeGreaterThan(-1)
+    const block = css.slice(start, css.indexOf('.floating-entry, .floating-menu'))
+    expect(block).toContain('--gcn-primary-fg: HighlightText; --gcn-primary-bg: Highlight;')
+    expect(block).toContain(
+      ".floating-primary, .actions button[data-action='replace'], .selection-toolbar button[data-action='translate'] { forced-color-adjust: none; }",
+    )
+  })
+
   it('未配置模型仍允许打开空白文本窗口', async () => {
     const ui = mount()
     ui.update(view({ configured: false }))

@@ -370,8 +370,9 @@ export default {
   wtInputCopyOriginal: '複製原文',
   wtInputTextChanged: '輸入框內容已變更，請確認後重試',
   wtInputReplaceFailed: '無法寫入目前輸入框',
-  wtInputReplacePartial: '替換未完成，輸入框內容可能已改變。可複製原文復原，或複製譯文後貼上。',
+  wtInputReplacePartial: '取代未完成，輸入框內容可能已改變。可複製原文復原，或複製譯文後貼上。',
   wtInputEditorUnsupported: '此編輯器暫不能安全取代，請複製譯文後貼上。',
+  wtInputPanelKeyHint: '再按一次快速鍵可切換至此面板；Esc 關閉。',
 
   wtEngineDict: '詞典',
   wtEngineModel: '模型',

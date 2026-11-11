@@ -104,10 +104,10 @@ const FLOATING_CSS = `${SURFACE_CSS}
 .floating-menu[hidden], .floating-consent[hidden], .floating-menu [hidden] { display: none !important; }
 .floating-head { display: grid; grid-template-columns: calc(24px / var(--wt-floating-scale)) minmax(0,1fr) calc(28px / var(--wt-floating-scale)); align-items: center; gap: calc(8px / var(--wt-floating-scale)); }
 .floating-brand { grid-column: 1; grid-row: 1; width: calc(24px / var(--wt-floating-scale)); height: calc(24px / var(--wt-floating-scale)); border-radius: calc(6px / var(--wt-floating-scale)); }
-.floating-title { grid-column: 2; grid-row: 1; min-width: 0; font-size: calc(13px / var(--wt-floating-scale)); font-weight: 600; line-height: 1.5; }
+.floating-title { grid-column: 2; grid-row: 1; min-width: 0; font-size: calc(13px / var(--wt-floating-scale)); font-weight: 600; line-height: 1.5; text-wrap: balance; }
 .floating-host { grid-column: 1 / -1; }
 /* 深色底上的辅助说明不能沿用浅色主题的灰字（对比度不足） */
-.floating-host, .floating-disclosure, .floating-fixed { margin: 0; color: var(--gcn-fg-muted); font-size: calc(12px / var(--wt-floating-scale)); line-height: 1.5; }
+.floating-host, .floating-disclosure, .floating-fixed, .floating-reason { margin: 0; color: var(--gcn-fg-muted); font-size: calc(12px / var(--wt-floating-scale)); line-height: 1.5; }
 .floating-error { color: var(--gcn-danger-fg); font-size: calc(12px / var(--wt-floating-scale)); line-height: 1.5; }
 .floating-actions-main, .floating-actions-sub { display: grid; gap: calc(6px / var(--wt-floating-scale)); }
 .floating-menu button { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; min-height: calc(var(--gcn-control-md) / var(--wt-floating-scale)); min-width: 0; padding: calc(6px / var(--wt-floating-scale)) calc(10px / var(--wt-floating-scale)); font: inherit; font-size: calc(12px / var(--wt-floating-scale)); font-weight: 500; line-height: 1.5; text-align: center; white-space: normal; overflow-wrap: anywhere; color: var(--gcn-btn-fg); background: var(--gcn-btn-bg); border: 1px solid var(--gcn-btn-border); border-radius: calc(var(--gcn-radius) / var(--wt-floating-scale)); cursor: pointer; }
@@ -118,6 +118,12 @@ const FLOATING_CSS = `${SURFACE_CSS}
 .floating-menu .floating-auto { justify-content: space-between; gap: calc(8px / var(--wt-floating-scale)); padding-left: 0; padding-right: 0; text-align: start; background: transparent; border-color: transparent; }
 .floating-auto::after { content: ''; flex: none; box-sizing: border-box; width: calc(32px / var(--wt-floating-scale)); height: calc(18px / var(--wt-floating-scale)); border: 1px solid var(--gcn-border); border-radius: calc(12px / var(--wt-floating-scale)); background: radial-gradient(circle at calc(8px / var(--wt-floating-scale)) 50%, var(--gcn-knob) 0 calc(6px / var(--wt-floating-scale)), transparent calc(6.5px / var(--wt-floating-scale))), var(--gcn-switch-off); }
 .floating-auto[aria-checked='true']::after { background: radial-gradient(circle at calc(22px / var(--wt-floating-scale)) 50%, var(--gcn-knob) 0 calc(6px / var(--wt-floating-scale)), transparent calc(6.5px / var(--wt-floating-scale))), var(--gcn-switch-on); }
+@media (forced-colors: active) {
+  .floating-auto::after { forced-color-adjust: none; --gcn-knob: ButtonText; --gcn-switch-off: Canvas; border-color: ButtonText; }
+  .floating-auto[aria-checked='true']::after { --gcn-knob: HighlightText; --gcn-switch-on: Highlight; border-color: Highlight; }
+  .floating-auto:disabled::after { --gcn-knob: GrayText; border-color: GrayText; }
+  .floating-auto[aria-checked='true']:disabled::after { --gcn-knob: Canvas; --gcn-switch-on: GrayText; }
+}
 /* 主题的主按钮配色比通用禁用规则更具体：禁用态要单独压回灰色，否则未配置模型时仍像可点 */
 .floating-menu button:disabled, .floating-menu button[aria-disabled='true'], .floating-menu .floating-primary:disabled, .floating-menu .floating-primary[aria-disabled='true'] { color: var(--gcn-fg-disabled); background: var(--gcn-bg-disabled); border-color: var(--gcn-border); cursor: default; }
 /* 空间不够时菜单会压在入口上：此时入口让位（仍可聚焦，Escape 能把焦点还回来） */
@@ -265,6 +271,7 @@ export function createFloatingEntry(
   const error = document.createElement('div')
   const disabledReason = document.createElement('p')
   disabledReason.id = 'wt-floating-disabled-reason'
+  disabledReason.className = 'floating-reason'
   disabledReason.hidden = true
   error.className = 'floating-error'
   error.setAttribute('role', 'status')
@@ -295,6 +302,7 @@ export function createFloatingEntry(
   let raf = 0
   let writing = false
   let pendingWrite: FloatingPosition | undefined
+  let focusReturn: HTMLButtonElement | undefined
   let viewport: Viewport = { width: 1, height: 1, scale: 1 }
   const menuObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(() => reposition()) : undefined
 
@@ -389,8 +397,28 @@ export function createFloatingEntry(
   }
 
   function setActionDisabled(button: HTMLButtonElement, disabled: boolean): void {
-    if (disabled && menuOpen && shadow.activeElement === button) closeButton.focus({ preventScroll: true })
+    if (disabled && menuOpen && shadow.activeElement === button) {
+      focusReturn = button
+      closeButton.focus({ preventScroll: true })
+    }
     button.disabled = disabled
+  }
+
+  function setActionHidden(button: HTMLButtonElement, hidden: boolean): void {
+    if (hidden && menuOpen && shadow.activeElement === button) closeButton.focus({ preventScroll: true })
+    setHidden(button, hidden)
+  }
+
+  function restoreActionFocus(): void {
+    const target = focusReturn
+    if (target === undefined) return
+    if (!menuOpen || shadow.activeElement !== closeButton) {
+      focusReturn = undefined
+      return
+    }
+    if (target.disabled) return
+    focusReturn = undefined
+    if (!target.hidden) target.focus({ preventScroll: true })
   }
 
   function render(): void {
@@ -412,12 +440,12 @@ export function createFloatingEntry(
     else primary.removeAttribute('aria-disabled')
     setText(pageButton, labels.restore)
     setActionDisabled(pageButton, !view.canRestore || view.checking || view.busy)
-    setHidden(pageButton, !view.canRestore || view.restored)
+    setActionHidden(pageButton, !view.canRestore || view.restored)
     if (view.busy) pageButton.setAttribute('aria-disabled', 'true')
     else pageButton.removeAttribute('aria-disabled')
     setText(resumeButton, labels.resume)
     setActionDisabled(resumeButton, !view.resumable || view.checking || view.busy)
-    setHidden(resumeButton, !view.resumable)
+    setActionHidden(resumeButton, !view.resumable)
     if (view.busy) resumeButton.setAttribute('aria-disabled', 'true')
     else resumeButton.removeAttribute('aria-disabled')
     setText(textButton, labels.textTranslate)
@@ -430,6 +458,7 @@ export function createFloatingEntry(
       button.title = busyTitle
     }
     setText(disabledReason, view.busy || view.checking ? labels.loading : labels.configure)
+    setHidden(disabledReason, !view.busy && !view.checking)
     for (const button of [translateButton, primary, pageButton, resumeButton, textButton, settingsButton]) {
       if (button.disabled && !button.hidden) button.setAttribute('aria-describedby', disabledReason.id)
       else button.removeAttribute('aria-describedby')
@@ -439,6 +468,7 @@ export function createFloatingEntry(
     const errorText = [positionFailed ? labels.positionFailed : '', view.error].filter((item) => item !== '').join('\n')
     setText(error, errorText)
     setHidden(error, errorText === '')
+    restoreActionFocus()
     const entryLabel = position.collapsed ? labels.expand : menuOpen ? labels.close : labels.open
     if (entry.getAttribute('aria-label') !== entryLabel) entry.setAttribute('aria-label', entryLabel)
     entry.setAttribute('aria-expanded', menuOpen ? 'true' : 'false')
@@ -483,6 +513,7 @@ export function createFloatingEntry(
       return
     }
     menuOpen = false
+    focusReturn = undefined
     menu.hidden = true
     entry.classList.remove('is-covered')
     menuObserver?.unobserve(menu)

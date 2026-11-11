@@ -3,7 +3,11 @@ import { fakeBrowser } from 'wxt/testing/fake-browser'
 import { clearToasts, useToasts } from '../../../src/components/toast'
 import { DEFAULT_TRANSLATION_CONFIG, type TranslationConfig } from '../../../src/translation/config'
 import { importSfc, required } from './sfc'
-import { seedChineseUi, settle } from './helpers'
+import { applyUiPreferences } from '../../../src/components/ui-preferences'
+import en from '../../../src/i18n/en'
+import zhTW from '../../../src/i18n/zh-TW'
+import { settingsItem } from '../../../src/shared/settings'
+import { seedChineseUi, settle, ZH_SETTINGS } from './helpers'
 
 const App = await importSfc(() => import('../../../src/entrypoints/translate/App.vue'))
 
@@ -501,6 +505,146 @@ describe.skipIf(!App)('文本翻译窗口', () => {
     await settle()
     expect((document.activeElement as HTMLElement | null)?.dataset.test).toBe('wt-text-input')
     wrapper.unmount()
+  })
+
+  it('空文本或超长时按 Ctrl+Enter：只提示原因，不出现重试与检查连接的说明，也不发送', async () => {
+    const wrapper = await render()
+    const input = wrapper.get('[data-test="wt-text-input"]')
+    await input.trigger('keydown', { key: 'Enter', ctrlKey: true })
+    await settle()
+    expect(wrapper.get('[data-test="wt-text-error"]').text()).toContain('粘贴')
+    expect(wrapper.find('[data-test="wt-text-retry"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('检查连接')
+
+    await input.setValue('中'.repeat(6001))
+    await settle()
+    expect(wrapper.find('[data-test="wt-text-error"]').exists()).toBe(false)
+    await input.trigger('keydown', { key: 'Enter', ctrlKey: true })
+    await settle()
+    expect(wrapper.get('[data-test="wt-text-error"]').text()).toContain('6000')
+    expect(wrapper.find('[data-test="wt-text-retry"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('检查连接')
+    expect(translateCalls()).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('请求失败才显示重试与连接说明；重试与复制的禁用原因用稳定 ID 关联', async () => {
+    translateReplies.push(() => ({ ok: false, error: '服务失败' }))
+    const wrapper = await render()
+    const copy = wrapper.get('[data-test="wt-text-copy"]')
+    expect((copy.element as HTMLButtonElement).disabled).toBe(true)
+    expect(copy.attributes('aria-describedby')).toBe('wt-text-copy-hint')
+    expect(wrapper.get('#wt-text-copy-hint').text()).toBe('译文将显示在这里')
+
+    await wrapper.get('[data-test="wt-text-input"]').setValue('Hello')
+    await wrapper.get('[data-test="wt-text-translate"]').trigger('click')
+    await settle()
+    expect(wrapper.get('[data-test="wt-text-error"]').text()).toBe('服务失败')
+    expect(wrapper.text()).toContain('检查连接')
+    const retry = wrapper.get('[data-test="wt-text-retry"]')
+    expect(retry.attributes('aria-describedby')).toBe('wt-text-submit-hint')
+    expect((retry.element as HTMLButtonElement).disabled).toBe(false)
+
+    translateReplies.push(() => ({ ok: true, texts: ['译文'] }))
+    await retry.trigger('click')
+    await settle()
+    expect((copy.element as HTMLButtonElement).disabled).toBe(false)
+    expect(copy.attributes('aria-describedby')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('焦点在翻译按钮上发起翻译：焦点移到取消，完成或取消后回到翻译按钮', async () => {
+    const first = deferred()
+    const second = deferred()
+    translateReplies.push(() => first.promise, () => second.promise)
+    const wrapper = mount(required(App), { attachTo: document.body })
+    await settle()
+    const focused = (): string | undefined => (document.activeElement as HTMLElement | null)?.dataset.test
+    await wrapper.get('[data-test="wt-text-input"]').setValue('Hello')
+    const translate = wrapper.get('[data-test="wt-text-translate"]')
+    ;(translate.element as HTMLButtonElement).focus()
+    await translate.trigger('click')
+    await settle()
+    expect((translate.element as HTMLButtonElement).disabled).toBe(true)
+    expect(focused()).toBe('wt-text-cancel')
+    first.resolve({ ok: true, texts: ['译文'] })
+    await settle()
+    expect(wrapper.find('[data-test="wt-text-cancel"]').exists()).toBe(false)
+    expect(focused()).toBe('wt-text-translate')
+
+    await translate.trigger('click')
+    await settle()
+    expect(focused()).toBe('wt-text-cancel')
+    await wrapper.get('[data-test="wt-text-cancel"]').trigger('click')
+    await settle()
+    expect(focused()).toBe('wt-text-translate')
+    second.resolve({ ok: true, texts: ['迟到'] })
+    await settle()
+    expect(focused()).toBe('wt-text-translate')
+    wrapper.unmount()
+  })
+
+  it('焦点在重试按钮上重试时焦点移到取消；焦点在输入框时不移动焦点', async () => {
+    const retried = deferred()
+    const typed = deferred()
+    translateReplies.push(() => ({ ok: false, error: '服务失败' }), () => retried.promise, () => typed.promise)
+    const wrapper = mount(required(App), { attachTo: document.body })
+    await settle()
+    const focused = (): string | undefined => (document.activeElement as HTMLElement | null)?.dataset.test
+    const input = wrapper.get('[data-test="wt-text-input"]')
+    await input.setValue('Hello')
+    await wrapper.get('[data-test="wt-text-translate"]').trigger('click')
+    await settle()
+    const retry = wrapper.get('[data-test="wt-text-retry"]')
+    ;(retry.element as HTMLButtonElement).focus()
+    await retry.trigger('click')
+    await settle()
+    expect(focused()).toBe('wt-text-cancel')
+    retried.resolve({ ok: true, texts: ['译文'] })
+    await settle()
+    expect(focused()).toBe('wt-text-translate')
+
+    ;(input.element as HTMLTextAreaElement).focus()
+    await input.trigger('keydown', { key: 'Enter', ctrlKey: true })
+    await settle()
+    expect(wrapper.find('[data-test="wt-text-cancel"]').exists()).toBe(true)
+    expect(focused()).toBe('wt-text-input')
+    typed.resolve({ ok: true, texts: ['译文'] })
+    await settle()
+    expect(focused()).toBe('wt-text-input')
+    wrapper.unmount()
+  })
+
+  it('繁英日韩界面按失败类别显示本地化文案，无法归类时附原始说明；简体界面仍显示后台原文', async () => {
+    const failing = async (uiLanguage: 'en' | 'ja' | 'ko' | 'zh-TW' | 'zh-CN', reply: unknown): Promise<string> => {
+      const settings = { ...ZH_SETTINGS, uiLanguage }
+      applyUiPreferences(settings)
+      await settingsItem.setValue(settings)
+      translateReplies.push(() => reply)
+      const wrapper = await render()
+      await wrapper.get('[data-test="wt-text-input"]').setValue('Hello')
+      await wrapper.get('[data-test="wt-text-translate"]').trigger('click')
+      await settle()
+      const text = wrapper.get('[data-test="wt-text-error"]').text()
+      expect(wrapper.find('[data-test="wt-text-retry"]').exists()).toBe(true)
+      lastHint = wrapper.get('[data-test="wt-text-error-hint"]').text()
+      wrapper.unmount()
+      return text
+    }
+    let lastHint = ''
+    const raw = '请求过于频繁，请稍后重试'
+    expect(await failing('en', { ok: false, error: raw, code: 'rate_limited' })).toBe('Too many requests')
+    expect(lastHint).toBe(en.wtConnRecoveryRateLimited)
+    expect(await failing('ja', { ok: false, error: '凭证无效或没有访问权限', code: 'auth' })).toBe('API キーが無効です')
+    expect(await failing('ko', { ok: false, error: '无法连接翻译服务', code: 'network' })).not.toMatch(/[\u4e00-\u9fff]/)
+    expect(await failing('en', { ok: false, error: '模型服务暂时不可用，请稍后重试', code: 'server' })).toBe('Translation failed')
+    expect(lastHint).toBe(en.textTranslateErrorHint)
+    expect(await failing('en', { ok: false, error: '总开关已关闭' })).toBe('Translation failed: 总开关已关闭')
+    expect(await failing('zh-TW', { ok: false, error: raw, code: 'rate_limited' })).toBe(zhTW.wtConnRateLimited)
+    expect(await failing('zh-CN', { ok: false, error: raw, code: 'rate_limited' })).toBe(raw)
+    expect(lastHint).toBe('请稍后再试，并检查服务商的额度或频率限制。')
+    expect(await failing('zh-CN', { ok: false, error: '凭证无效或没有访问权限', code: 'auth' })).toBe('凭证无效或没有访问权限')
+    expect(lastHint).toBe('检查 API Key 和服务商的访问权限后重试。')
   })
 
   it('卸载时断开页面会话端口', async () => {

@@ -363,6 +363,7 @@ const messages: Messages = {
   wtInputReplaceFailed: '現在の入力欄に書き込めませんでした',
   wtInputReplacePartial: '置換が完了せず、入力内容が変わった可能性があります。原文をコピーして復元するか、訳文をコピーして貼り付けてください。',
   wtInputEditorUnsupported: 'このエディターは安全に置換できないため、訳文をコピーして貼り付けてください。',
+  wtInputPanelKeyHint: 'もう一度ショートカットを押すとパネルを操作できます。Esc で閉じます。',
   wtEngineDict: '辞書',
   wtEngineModel: 'モデル',
   wtMoreFeatures: 'その他の機能',

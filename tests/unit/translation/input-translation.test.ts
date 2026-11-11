@@ -456,6 +456,83 @@ describe('预览替换、还原、复制与安全并发保护', () => {
 
     watcher.dispose()
   })
+
+  it('单行输入框遇到含换行的译文时不写入、不派发事件，原文保持不变', async () => {
+    const input = document.createElement('input')
+    input.type = 'text'
+    document.body.append(input)
+    const watcher = createInputTranslation({
+      translate: vi.fn(async () => ({ ok: true as const, texts: ['Hello\nworld'] })),
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+    })
+    try {
+      trustedInput(input, '你好世界')
+      await vi.advanceTimersByTimeAsync(650)
+      await Promise.resolve()
+      const events: string[] = []
+      input.addEventListener('beforeinput', () => events.push('beforeinput'))
+      input.addEventListener('input', () => events.push('input'))
+      trustedClick(requirePopoverButton('replace'))
+      expect(input.value).toBe('你好世界')
+      expect(events).toEqual([])
+      expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplaceFailed)
+      expect(popoverShadow()?.querySelector('button[data-action="copy-original"]')).toBeNull()
+    } finally {
+      watcher.dispose()
+    }
+  })
+
+  it('页面在 input 事件里改写了写入内容：按已修改处理，提示可恢复并能复制原文，不提供还原', async () => {
+    const area = document.createElement('textarea')
+    document.body.append(area)
+    const watcher = createInputTranslation({
+      translate: vi.fn(async () => ({ ok: true as const, texts: ['Hello wonderful world'] })),
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+    })
+    try {
+      trustedInput(area, '你好世界啊')
+      await vi.advanceTimersByTimeAsync(650)
+      await Promise.resolve()
+      area.addEventListener('input', () => {
+        area.value = area.value.slice(0, 12)
+      })
+      trustedClick(requirePopoverButton('replace'))
+      expect(area.value).toBe('Hello wonder')
+      expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplacePartial)
+      expect(popoverShadow()?.querySelector('button[data-action="restore"]')).toBeNull()
+      trustedClick(requirePopoverButton('copy-original'))
+      await Promise.resolve()
+      expect(clipboard.copySelectionText).toHaveBeenCalledWith('你好世界啊')
+    } finally {
+      watcher.dispose()
+    }
+  })
+
+  it('页面在 input 事件里把内容改回原文：按未写入处理，不提示内容可能已改变', async () => {
+    const area = document.createElement('textarea')
+    document.body.append(area)
+    const watcher = createInputTranslation({
+      translate: vi.fn(async () => ({ ok: true as const, texts: ['English result'] })),
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+    })
+    try {
+      trustedInput(area, '原始中文')
+      await vi.advanceTimersByTimeAsync(650)
+      await Promise.resolve()
+      area.addEventListener('input', () => {
+        area.value = '原始中文'
+      })
+      trustedClick(requirePopoverButton('replace'))
+      expect(area.value).toBe('原始中文')
+      expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplaceFailed)
+      expect(popoverShadow()?.querySelector('button[data-action="copy-original"]')).toBeNull()
+    } finally {
+      watcher.dispose()
+    }
+  })
 })
 
 function setPageUrl(url: string): void {

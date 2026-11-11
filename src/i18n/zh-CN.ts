@@ -370,6 +370,7 @@ const zhCN = {
   wtInputReplaceFailed: '无法写入当前输入框',
   wtInputReplacePartial: '替换未完成，输入框内容可能已改变。可复制原文恢复，或复制译文后粘贴。',
   wtInputEditorUnsupported: '此编辑器暂不能安全替换，请复制译文后粘贴。',
+  wtInputPanelKeyHint: '再按一次快捷键可切换到此面板；Esc 关闭。',
 
   wtEngineDict: '词典',
   wtEngineModel: '模型',

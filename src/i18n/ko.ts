@@ -363,6 +363,7 @@ const messages: Messages = {
   wtInputReplaceFailed: '현재 입력란을 수정할 수 없습니다',
   wtInputReplacePartial: '교체가 완료되지 않아 입력 내용이 바뀌었을 수 있습니다. 원문을 복사해 복원하거나 번역문을 복사해 붙여 넣으세요.',
   wtInputEditorUnsupported: '이 편집기는 아직 안전하게 바꿀 수 없습니다. 번역문을 복사해 붙여 넣으세요.',
+  wtInputPanelKeyHint: '단축키를 다시 누르면 이 패널로 이동합니다. Esc로 닫습니다.',
   wtEngineDict: '사전',
   wtEngineModel: '모델',
   wtMoreFeatures: '기타 기능',

@@ -1614,6 +1614,32 @@ describe('弹出页站点控制', () => {
     }
   })
 
+  it('排除本站按钮禁用时关联同一条原因，可用时不关联', async () => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [] as never)
+    replies({ 'wt:get-config': () => ({ ok: true, config: { ...CONFIG } }) })
+    const unsupported = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    const disabled = unsupported.get('[data-test="wt-exclude-site"]')
+    expect((disabled.element as HTMLButtonElement).disabled).toBe(true)
+    expect(disabled.attributes('aria-describedby')).toBe('wt-primary-reason')
+    expect(unsupported.get('#wt-primary-reason').text()).not.toBe('')
+    unsupported.unmount()
+
+    tabAndStatus('https://example.com/path', {
+      ok: true,
+      status: { supported: true, fixed: false, auto: false, paused: false, capped: false, failed: 0, error: '' },
+    })
+    const supported = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    const enabled = supported.get('[data-test="wt-exclude-site"]')
+    expect((enabled.element as HTMLButtonElement).disabled).toBe(false)
+    expect(enabled.attributes('aria-describedby')).toBeUndefined()
+    supported.unmount()
+  })
+
   it('排除本站发送 wt:set-site-excluded 并提示成功', async () => {
     clearToasts()
     await settingsItem.setValue(DEFAULT_SETTINGS)
