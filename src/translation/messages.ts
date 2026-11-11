@@ -9,12 +9,13 @@ import {
 import { BUILTIN_DICTIONARY_META, MAX_FIXED_ENTRIES } from './dictionaries/index'
 import { normalizeHotkey } from './input-hotkey'
 import { isSiteScopeMode } from './site-scope'
-import { isSourceLanguage, isTargetLanguage } from './target-language'
+import { isSourceLanguage, isTargetLanguage, type SourceLanguage, type TargetLanguage } from './target-language'
 import { isPageContext, isPageId, type PageContext } from './reading-context'
 import { isAssistInput, parseAssistResult, type AssistInput, type AssistResult } from './intent'
 import { isFailureCode, type FailureCode } from './failure'
 import type { ChatReplacementStatus } from './chat-input'
 import type { DiscordReplacementStatus } from './discord-input'
+import { isDocumentEditorResult, type DocumentEditorResult } from './document-editor'
 import {
   isApiType,
   isTemperature,
@@ -82,6 +83,15 @@ export type TranslationMessage =
   | { type: 'wt:current-site-auto'; enabled: boolean }
   | { type: 'wt:current-page-controls'; action: GitHubPageAction }
   | { type: 'wt:open-options'; section?: 'model' }
+  | { type: 'wt:open-text-window' }
+  | {
+      type: 'wt:translate-text'
+      text: string
+      sourceLanguage: SourceLanguage
+      targetLanguage: TargetLanguage
+      requestId: string
+      pageSession?: string
+    }
   | {
       type: 'wt:assist'
       requestId: string
@@ -103,6 +113,14 @@ export type TranslationMessage =
   | { type: 'wt:translate-page'; tabId?: number; url?: string }
   | { type: 'wt:replace-discord-input'; elementId: string; expectedText: string; text: string }
   | { type: 'wt:replace-chat-input'; elementId: string; expectedText: string; text: string }
+  | { type: 'wt:document-input'; elementId: string; action: 'read' }
+  | {
+      type: 'wt:document-input'
+      elementId: string
+      action: 'replace'
+      expectedText: string
+      text: string
+    }
 
 export type KeyState = 'none' | 'ready' | 'different-origin' | 'legacy' | 'unavailable'
 export type CustomHeadersState = 'none' | 'ready' | 'different-origin' | 'unavailable'
@@ -123,6 +141,7 @@ interface ReplyFields {
   warning?: string
   legacy?: GitHubPageState
   inputReplacement?: DiscordReplacementStatus
+  editor?: DocumentEditorResult
 }
 
 type AckPayload = Record<never, never>
@@ -144,6 +163,7 @@ interface TranslationPayloads {
   'wt:page-modes': { modes: PageModes }
   'wt:test': { texts: string[] }
   'wt:translate': { texts: string[]; cachedChars?: number }
+  'wt:translate-text': { texts: string[] }
   'wt:assist': { result: AssistResult }
   'wt:clear-key': { hasKey: false; keyState?: 'none' }
   'wt:clear-cache': AckPayload
@@ -154,10 +174,12 @@ interface TranslationPayloads {
   'wt:page-context': AckPayload
   'wt:current-site-auto': AckPayload
   'wt:open-options': AckPayload
+  'wt:open-text-window': AckPayload
   'wt:translate-page': AckPayload
   'wt:current-page-controls': { legacy: GitHubPageState }
   'wt:replace-discord-input': { inputReplacement: DiscordReplacementStatus }
   'wt:replace-chat-input': { inputReplacement: ChatReplacementStatus }
+  'wt:document-input': { editor: DocumentEditorResult }
 }
 
 export type TranslationReply<T extends TranslationMessage['type'] = TranslationMessage['type']> =
@@ -399,6 +421,23 @@ function isTranslateMessage(value: Record<string, unknown>): boolean {
   )
 }
 
+const TRANSLATE_TEXT_KEYS = new Set(['type', 'text', 'sourceLanguage', 'targetLanguage', 'requestId', 'pageSession'])
+
+function isTranslateTextMessage(value: Record<string, unknown>): boolean {
+  for (const key of Object.keys(value)) {
+    if (!TRANSLATE_TEXT_KEYS.has(key)) return false
+  }
+  return (
+    typeof value.text === 'string' &&
+    value.text.trim() !== '' &&
+    value.text.length <= 6000 &&
+    isSourceLanguage(value.sourceLanguage) &&
+    isTargetLanguage(value.targetLanguage) &&
+    isRequestId(value.requestId) &&
+    (value.pageSession === undefined || isPageId(value.pageSession))
+  )
+}
+
 function isOptionalPageTarget(value: Record<string, unknown>): boolean {
   return (value.tabId === undefined && value.url === undefined) ||
     (typeof value.tabId === 'number' && Number.isSafeInteger(value.tabId) && value.tabId >= 0 &&
@@ -425,6 +464,8 @@ export function isTranslationMessage(value: unknown): value is TranslationMessag
       return isSetSiteScopeHost(value)
     case 'wt:translate':
       return isTranslateMessage(value)
+    case 'wt:translate-text':
+      return isTranslateTextMessage(value)
     case 'wt:page-action':
       return isPageAction(value.action) && isOptionalPageTarget(value)
     case 'wt:current-site-auto':
@@ -433,6 +474,8 @@ export function isTranslationMessage(value: unknown): value is TranslationMessag
       return value.action === 'status' || value.action === 'restore' || value.action === 'resume'
     case 'wt:open-options':
       return value.section === undefined || value.section === 'model'
+    case 'wt:open-text-window':
+      return Object.keys(value).length === 1
     case 'wt:assist':
       return (
         isRequestId(value.requestId) &&
@@ -460,6 +503,8 @@ export function isTranslationMessage(value: unknown): value is TranslationMessag
     case 'wt:replace-discord-input':
     case 'wt:replace-chat-input':
       return isRichInputReplacementMessage(value)
+    case 'wt:document-input':
+      return isDocumentInputMessage(value)
     default:
       return false
   }
@@ -475,6 +520,29 @@ function isRichInputReplacementMessage(value: Record<string, unknown>): boolean 
   return typeof value.elementId === 'string' && RICH_ELEMENT_ID.test(value.elementId) &&
     typeof value.expectedText === 'string' && value.expectedText.length >= 1 && value.expectedText.length <= 6000 &&
     typeof value.text === 'string' && value.text.length >= 1 && value.text.length <= 6000
+}
+
+function isDocumentInputMessage(value: Record<string, unknown>): boolean {
+  if (typeof value.elementId !== 'string' || !RICH_ELEMENT_ID.test(value.elementId)) return false
+  if (value.action === 'read') {
+    return (
+      Object.keys(value).length === 3 &&
+      value.expectedText === undefined &&
+      value.text === undefined
+    )
+  }
+  if (value.action === 'replace') {
+    return (
+      Object.keys(value).length === 5 &&
+      typeof value.expectedText === 'string' &&
+      value.expectedText.length >= 1 &&
+      value.expectedText.length <= 18000 &&
+      typeof value.text === 'string' &&
+      value.text.length >= 1 &&
+      value.text.length <= 18000
+    )
+  }
+  return false
 }
 
 function isBoundedString(value: unknown, max: number): value is string {
@@ -670,6 +738,7 @@ export function isTranslationReply(value: unknown, message?: TranslationMessage)
     case 'wt:clear-key':
       return value.hasKey === false && (value.keyState === undefined || value.keyState === 'none')
     case 'wt:test':
+    case 'wt:translate-text':
       return (
         Array.isArray(value.texts) &&
         value.texts.length === 1 &&
@@ -700,6 +769,7 @@ export function isTranslationReply(value: unknown, message?: TranslationMessage)
     case 'wt:page-context':
     case 'wt:current-site-auto':
     case 'wt:open-options':
+    case 'wt:open-text-window':
     case 'wt:translate-page':
       return true
     case 'wt:current-page-controls':
@@ -708,6 +778,12 @@ export function isTranslationReply(value: unknown, message?: TranslationMessage)
     case 'wt:replace-chat-input':
       return value.inputReplacement === 'ok' || value.inputReplacement === 'changed' ||
         value.inputReplacement === 'unsupported' || value.inputReplacement === 'failed'
+    case 'wt:document-input': {
+      if (!isDocumentEditorResult(value.editor)) return false
+      if (value.editor.status !== 'ok') return true
+      const limit = message.action === 'read' ? 6000 : 18000
+      return value.editor.text.length <= limit
+    }
   }
 }
 

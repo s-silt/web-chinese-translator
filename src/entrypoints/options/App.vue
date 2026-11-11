@@ -10,7 +10,7 @@
         </div>
       </header>
 
-      <nav class="options-nav" aria-label="Sections">
+      <nav class="options-nav" :aria-label="t('navSections')">
         <div v-for="group in navGroups" :key="group.key" class="options-nav-group">
           <span class="options-nav-group-title">{{ t(group.key) }}</span>
           <a
@@ -94,7 +94,7 @@ const navLinks: readonly { target: string; key: MessageKey; group: NavGroupKey }
   { target: 'appearance-title', key: 'navAppearance', group: 'navGroupGeneral' },
   { target: 'wt-title', key: 'navModel', group: 'navGroupTranslation' },
   { target: 'wt-dictionary-title', key: 'navSites', group: 'navGroupDictionary' },
-  { target: 'github-title', key: 'navGithub', group: 'navGroupDictionary' },
+  { target: 'github-title', key: 'navGithub', group: 'navGroupAdvanced' },
   { target: 'about-title', key: 'navAbout', group: 'navGroupAdvanced' },
 ] : [
   { target: 'github-title', key: 'navGithub', group: 'navGroupDictionary' },
@@ -166,9 +166,93 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange))
 }
 
 .options {
-  max-width: 760px;
+  display: grid;
+  gap: 24px;
+  max-width: 1120px;
   margin: 0 auto;
   padding: 32px 24px 48px;
+}
+
+.options-main {
+  min-width: 0;
+}
+
+.options-side {
+  min-width: 0;
+}
+
+@media (min-width: 900px) {
+  html:root .options {
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+    max-width: 1120px;
+    padding: 32px 24px 48px;
+  }
+
+  html:root .options .options-side {
+    position: sticky;
+    top: 24px;
+    display: flex;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 16px;
+    max-height: calc(100dvh - 48px);
+    overflow-y: auto;
+  }
+
+  html:root .options .options-nav {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+  }
+
+  html:root .options .options-nav a {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  html:root .options .options-title {
+    font-size: 20px;
+  }
+
+  html:root .options .options-nav-group {
+    display: grid;
+    gap: 4px;
+  }
+
+  html:root .options .options-nav-group-title {
+    padding: 0 12px;
+  }
+}
+
+@media (max-width: 899.98px) {
+  html:root .options {
+    padding: 16px;
+  }
+}
+
+html:root .options-main > .section,
+html:root .options-main > .wt-github-group > .section {
+  padding: 20px 24px;
+  background: var(--gcn-surface);
+  border: 1px solid var(--gcn-surface-border);
+  border-radius: var(--gcn-radius-panel);
+  box-shadow: var(--gcn-surface-shadow);
+}
+
+@media (max-width: 599.98px) {
+  html:root .options-main > .section,
+  html:root .options-main > .wt-github-group > .section {
+    padding: 16px;
+  }
+}
+
+.options :deep(.ui-hint) {
+  font-size: 13px;
 }
 
 .options-header {
@@ -196,7 +280,7 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange))
 }
 
 .options-title {
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 600;
 }
 
@@ -277,7 +361,7 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange))
   display: flex;
   flex-wrap: wrap;
   gap: 8px 16px;
-  margin: 0 0 24px;
+  margin: 0;
 }
 
 .options-nav-group {

@@ -41,17 +41,45 @@ const MAX_WAVES = 3
 
 const host = useTemplateRef<HTMLElement>('host')
 const waves = shallowRef<readonly Wave[]>([])
+const timers = new Map<number, ReturnType<typeof setTimeout>>()
 let nextId = 0
 let trigger: HTMLElement | null = null
+let motionQuery: MediaQueryList | undefined
+
+const FALLBACK_MS = 220
 
 function reducedMotion(): boolean {
-  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+  return motionQuery?.matches ?? window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+}
+
+function forcedColors(): boolean {
+  return window.matchMedia?.('(forced-colors: active)').matches ?? false
+}
+
+function clearWaveTimer(id: number): void {
+  const timer = timers.get(id)
+  if (timer !== undefined) {
+    clearTimeout(timer)
+    timers.delete(id)
+  }
 }
 
 /** 在指针位置生成波纹；没有位置或 centered 时从中心 */
 function spawn(point?: Point): void {
   const element = host.value
-  if (!element || (trigger instanceof HTMLButtonElement && trigger.disabled) || reducedMotion()) return
+  if (
+    !element ||
+    document.hidden ||
+    reducedMotion() ||
+    forcedColors() ||
+    (trigger instanceof HTMLButtonElement && trigger.disabled) ||
+    trigger?.getAttribute('aria-disabled') === 'true'
+  ) {
+    return
+  }
+  if (waves.value.length === 0) {
+    watchMotionQuery(window.matchMedia?.('(prefers-reduced-motion: reduce)'))
+  }
   const rect = element.getBoundingClientRect()
   const fromPoint = point !== undefined && !centered
   const x = fromPoint ? point.clientX - rect.left : rect.width / 2
@@ -59,11 +87,30 @@ function spawn(point?: Point): void {
   // 半径取到最远角的距离：扩散结束时覆盖整个宿主
   const radius = Math.hypot(Math.max(x, rect.width - x), Math.max(y, rect.height - y))
   const wave: Wave = { id: nextId++, left: x - radius, top: y - radius, size: radius * 2 }
-  waves.value = [...waves.value, wave].slice(-MAX_WAVES)
+  const next = [...waves.value, wave]
+  for (const dropped of next.slice(0, Math.max(0, next.length - MAX_WAVES))) {
+    clearWaveTimer(dropped.id)
+  }
+  waves.value = next.slice(-MAX_WAVES)
+  timers.set(
+    wave.id,
+    setTimeout(() => {
+      remove(wave.id)
+    }, FALLBACK_MS),
+  )
 }
 
 function remove(id: number): void {
+  clearWaveTimer(id)
   waves.value = waves.value.filter((wave) => wave.id !== id)
+  if (waves.value.length === 0) unwatchMotionQuery()
+}
+
+function clearWaves(): void {
+  for (const timer of timers.values()) clearTimeout(timer)
+  timers.clear()
+  waves.value = []
+  unwatchMotionQuery()
 }
 
 function onPointerdown(event: PointerEvent): void {
@@ -76,6 +123,35 @@ function onClick(event: MouseEvent): void {
   if (event.detail === 0) spawn()
 }
 
+function onMotionChange(): void {
+  clearWaves()
+}
+
+function onPageHide(): void {
+  clearWaves()
+}
+
+function onVisibilityChange(): void {
+  if (document.hidden) clearWaves()
+}
+
+function watchMotionQuery(query: MediaQueryList | undefined): void {
+  motionQuery = query
+  if (typeof query?.addEventListener === 'function') query.addEventListener('change', onMotionChange)
+  else query?.addListener?.(onMotionChange)
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  window.addEventListener('pagehide', onPageHide)
+}
+
+function unwatchMotionQuery(): void {
+  const query = motionQuery
+  motionQuery = undefined
+  if (typeof query?.removeEventListener === 'function') query.removeEventListener('change', onMotionChange)
+  else query?.removeListener?.(onMotionChange)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  window.removeEventListener('pagehide', onPageHide)
+}
+
 onMounted(() => {
   trigger = host.value?.parentElement?.closest<HTMLElement>('button, a') ?? null
   trigger?.addEventListener('pointerdown', onPointerdown)
@@ -86,6 +162,7 @@ onBeforeUnmount(() => {
   trigger?.removeEventListener('pointerdown', onPointerdown)
   trigger?.removeEventListener('click', onClick)
   trigger = null
+  clearWaves()
 })
 </script>
 
@@ -107,8 +184,14 @@ onBeforeUnmount(() => {
   opacity: 0;
   transform: scale(0);
   animation:
-    ui-ripple-grow 600ms cubic-bezier(0.2, 0, 0, 1),
-    ui-ripple-fade 600ms linear;
+    ui-ripple-grow var(--gcn-duration-base) cubic-bezier(0.2, 0, 0, 1),
+    ui-ripple-fade var(--gcn-duration-base) linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-ripple-wave {
+    animation: none;
+  }
 }
 
 /* 高对比度模式下背景色由系统接管，波纹没有意义 */

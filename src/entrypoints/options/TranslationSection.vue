@@ -3,6 +3,15 @@
     <h2 :id="sectionTitle" class="section-title">{{ t(props.view === 'model' ? 'navModel' : props.view === 'sites' ? 'wtSiteSettings' : 'navGeneral') }}</h2>
     <p v-show="props.view === 'all' || props.view === 'general'" class="ui-hint">{{ t('wtGeneralHint') }}</p>
 
+    <div v-show="props.view === 'all' || props.view === 'model'" class="wt-onboarding">
+      <p class="ui-hint">{{ t('wtSetupSteps') }}</p>
+      <UiNotice :title="t('wtModelDisclosureTitle')" data-test="wt-model-disclosure">
+        <p>{{ t('wtModelDisclosureBrief') }}</p>
+        <p>{{ t('wtModelTestDisclosure') }}</p>
+        <p class="ui-hint">{{ t('wtModelRetentionHint') }}</p>
+      </UiNotice>
+    </div>
+
     <ModelPresets
       v-show="props.view === 'all' || props.view === 'model'"
       :base-url="baseUrl"
@@ -15,8 +24,8 @@
       :latency-ms="connection.latencyMs"
       :error="connection.error"
       :testing="testing"
-      :disabled="!ready || saving || testing || fetchingModels || connectionDirty"
-      :disabled-reason="connectionDirty ? t('wtTestSaveFirst') : undefined"
+      :disabled="!ready || saving || testing || fetchingModels || connectionDirty || persistedBase === '' || persistedModel === ''"
+      :disabled-reason="testDisabledReason !== '' ? t(testDisabledReason) : undefined"
       @test="testConnection"
     />
 
@@ -76,6 +85,7 @@
           />
           <UiButton
             :disabled="!ready || saving || testing"
+            :aria-busy="fetchingModels"
             data-test="wt-fetch-models"
             @click="fetchingModels ? cancelModelLookup() : fetchModels()"
           >
@@ -162,7 +172,7 @@
     </details>
 
     <div v-show="props.view === 'all' || props.view === 'model'" class="section-actions">
-      <UiButton variant="primary" :disabled="!ready || saving || testing || fetchingModels" data-test="wt-save" @click="saveAndConnect">
+      <UiButton variant="primary" :disabled="!ready || saving || testing || fetchingModels" :aria-busy="saving || testing" data-test="wt-save" @click="saveAndConnect">
         {{ testing ? t('wtTesting') : t('wtSaveConnect') }}
       </UiButton>
       <UiButton v-if="keyState !== 'none'" size="sm" :disabled="!ready || saving || fetchingModels" data-test="wt-delete-key" @click="deleteKey">
@@ -171,6 +181,13 @@
       <UiButton size="sm" :disabled="!ready || saving" data-test="wt-clear-cache" @click="clearCache">
         {{ t('wtClearCache') }}
       </UiButton>
+    </div>
+
+    <div v-show="showTextTrial" class="wt-trial">
+      <UiNotice tone="success" :title="t('wtConnOk')" data-test="wt-trial">
+        <p>{{ t('wtSetupConnectedHint') }}</p>
+        <UiButton variant="primary" data-test="wt-try-text" @click="openTextWindow">{{ t('textTranslate') }}</UiButton>
+      </UiNotice>
     </div>
 
     <div v-show="props.view === 'all' || props.view === 'general'" class="wt-general-groups" data-test="wt-general-view">
@@ -504,6 +521,7 @@ import { browser } from 'wxt/browser'
 import { createToastSource } from '../../components/toast'
 import UiButton from '../../components/ui/UiButton.vue'
 import UiInput from '../../components/ui/UiInput.vue'
+import UiNotice from '../../components/ui/UiNotice.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
 import UiSwitch from '../../components/ui/UiSwitch.vue'
 import ConnectionStatus from './ConnectionStatus.vue'
@@ -553,6 +571,7 @@ import {
 import { SITE_SCOPE_INVALID_ERROR, SITE_SCOPE_LIMIT_ERROR, type SiteScopeMode } from '../../translation/site-scope'
 import type { TranslationConfig } from '../../translation/config'
 import { sendTranslationMessage as send } from '../../translation/client'
+import { openTextTranslationWindow } from '../../translation/text-window'
 import {
   type CustomHeadersState,
   type KeyState,
@@ -680,6 +699,28 @@ const connectionDirty = computed(() => {
     requestParamsDraft.value !== persistedParams
   )
 })
+
+const testDisabledReason = computed<MessageKey | ''>(() => {
+  void persistedRevision.value
+  if (
+    ready.value && !saving.value && !testing.value && !fetchingModels.value &&
+    !connectionDirty.value && persistedBase !== '' && persistedModel !== ''
+  ) return ''
+  if (!ready.value) return 'stateLoading'
+  if (saving.value || testing.value) return 'wtProcessing'
+  if (fetchingModels.value) return 'wtModelsLoading'
+  if (connectionDirty.value) return 'wtTestSaveFirst'
+  return 'wtNotConfigured'
+})
+
+const showTextTrial = computed(
+  () =>
+    (props.view === 'all' || props.view === 'model') &&
+    connection.value.kind === 'ok' &&
+    !connectionDirty.value &&
+    !testing.value &&
+    !saving.value,
+)
 const requestParamsPlaceholder = computed(() =>
   apiType.value === 'responses'
     ? '{\n  "reasoning": {\n    "effort": "medium"\n  }\n}'
@@ -1083,7 +1124,10 @@ function applyPreset(url: string): void {
 }
 
 async function testConnection(): Promise<void> {
-  if (!ready.value || saving.value || testing.value || fetchingModels.value || connectionDirty.value) return
+  if (
+    !ready.value || saving.value || testing.value || fetchingModels.value ||
+    connectionDirty.value || persistedBase === '' || persistedModel === ''
+  ) return
   testing.value = true
   connection.value = { kind: 'testing' }
   const started = performance.now()
@@ -1209,6 +1253,14 @@ async function saveAndConnect(): Promise<void> {
     }
   } finally {
     saving.value = false
+  }
+}
+
+async function openTextWindow(): Promise<void> {
+  try {
+    await openTextTranslationWindow()
+  } catch {
+    toast.show('danger', 'openFailed')
   }
 }
 
@@ -1661,6 +1713,17 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.wt-onboarding {
+  display: grid;
+  gap: 8px;
+}
+
+.wt-trial :deep(.ui-notice-body) {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+
 .wt-fields {
   display: grid;
   align-items: start;

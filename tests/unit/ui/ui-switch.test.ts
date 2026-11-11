@@ -51,6 +51,29 @@ describe.skipIf(!UiSwitch)('UiSwitch', () => {
     expect(new Set(ids).size).toBe(2)
   })
 
+  it('aria、data-test 与 class 落到正确节点，显式 id 关联标签', () => {
+    const wrapper = mount(required(UiSwitch), {
+      props: { checked: false, label: '启用' },
+      attrs: {
+        id: 'my-switch',
+        'aria-describedby': 'hint-id',
+        'aria-label': '总开关',
+        'data-test': 'wt-thing',
+        class: 'extra-class',
+      },
+    })
+    const root = wrapper.get('.ui-switch')
+    const toggle = wrapper.get('[role="switch"]')
+    expect(root.attributes('data-test')).toBe('wt-thing')
+    expect(root.classes()).toContain('extra-class')
+    expect(toggle.attributes('id')).toBe('my-switch')
+    expect(wrapper.get('label').attributes('for')).toBe('my-switch')
+    expect(toggle.attributes('aria-describedby')).toBe('hint-id')
+    expect(toggle.attributes('aria-label')).toBe('总开关')
+    expect(root.attributes('aria-describedby')).toBeUndefined()
+    expect(root.attributes('aria-label')).toBeUndefined()
+  })
+
   it('水波纹以滑块为中心，不随指针位置；对读屏隐藏', async () => {
     // 光晕层 32 × 32：中心 (16, 16)，半径 hypot(16, 16)
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 100, 32, 32))

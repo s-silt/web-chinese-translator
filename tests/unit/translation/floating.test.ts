@@ -29,6 +29,7 @@ function labels(patch: Partial<FloatingLabels> = {}): FloatingLabels {
     restore: '恢复',
     resume: '继续',
     settings: '设置',
+    textTranslate: '文本翻译',
     configure: '请先配置模型',
     fixedOn: '词库',
     modelOn: '模型开',
@@ -515,5 +516,120 @@ describe('悬浮入口', () => {
     ui.update(view({ configured, busy: true }))
     trustedClick(translate)
     expect(ui.onAction).toHaveBeenCalledTimes(1)
+  })
+
+  it('文本翻译按钮可见、本地化，可信点击派发一次 text-window，不可信点击不派发', async () => {
+    const ui = mount()
+    await frames()
+    trustedClick(ui.button(), 1)
+    const text = ui.root.querySelector('.floating-text') as HTMLButtonElement
+    expect(text).not.toBeNull()
+    expect(text.hidden).toBe(false)
+    expect(text.textContent).toBe('文本翻译')
+    expect(text.disabled).toBe(false)
+    text.click()
+    expect(ui.onAction).not.toHaveBeenCalled()
+    trustedClick(text, 1)
+    expect(ui.onAction).toHaveBeenCalledTimes(1)
+    expect(ui.onAction).toHaveBeenCalledWith('text-window')
+  })
+
+  it('忙碌或 aria-disabled 时文本按钮不派发', async () => {
+    const ui = mount()
+    ui.update(view({ busy: true }))
+    await frames()
+    trustedClick(ui.button(), 1)
+    const text = ui.root.querySelector('.floating-text') as HTMLButtonElement
+    expect(text.getAttribute('aria-disabled')).toBe('true')
+    for (const selector of ['.floating-text', '.floating-settings', '.floating-translate', '.floating-auto']) {
+      const button = ui.root.querySelector(selector) as HTMLButtonElement
+      expect(button.disabled).toBe(true)
+      expect(button.getAttribute('aria-describedby')).toBe('wt-floating-disabled-reason')
+      expect(ui.root.querySelector('#wt-floating-disabled-reason')?.textContent).toBe(labels().loading)
+    }
+    trustedClick(text, 1)
+    expect(ui.onAction).not.toHaveBeenCalled()
+    ui.update(view({ busy: false }))
+    text.setAttribute('aria-disabled', 'true')
+    trustedClick(text, 1)
+    expect(ui.onAction).not.toHaveBeenCalled()
+  })
+
+  it('键盘操作进入忙碌态前将焦点移到关闭按钮，保留原生禁用', async () => {
+    const ui = mount()
+    await frames()
+    trustedClick(ui.button(), 0)
+    const translate = ui.root.querySelector('.floating-translate') as HTMLButtonElement
+    const close = ui.root.querySelector('.floating-close') as HTMLButtonElement
+    expect(ui.root.activeElement).toBe(translate)
+    ui.update(view({ busy: true }))
+    expect(translate.disabled).toBe(true)
+    expect(ui.root.activeElement).toBe(close)
+    trustedClick(close, 0)
+    expect(ui.entry.isMenuOpen()).toBe(false)
+  })
+
+  it('未配置模型仍允许打开空白文本窗口', async () => {
+    const ui = mount()
+    ui.update(view({ configured: false }))
+    await frames()
+    trustedClick(ui.button(), 1)
+    const text = ui.root.querySelector('.floating-text') as HTMLButtonElement
+    expect(text.disabled).toBe(false)
+    expect(text.getAttribute('aria-disabled')).not.toBe('true')
+    trustedClick(text, 1)
+    expect(ui.onAction).toHaveBeenCalledTimes(1)
+    expect(ui.onAction).toHaveBeenCalledWith('text-window')
+  })
+
+  it('文本按钮在键盘焦点序列中可聚焦', async () => {
+    const ui = mount()
+    await frames()
+    trustedClick(ui.button(), 0)
+    const text = ui.root.querySelector('.floating-text') as HTMLButtonElement
+    expect(text.tabIndex).not.toBe(-1)
+    expect(text.disabled).toBe(false)
+    text.focus()
+    expect(ui.root.activeElement).toBe(text)
+  })
+
+  it('页面隐藏取消收起定时器与待执行定位，恢复后重新排程', async () => {
+    const ui = mount()
+    await frames()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const button = ui.button()
+    button.dispatchEvent(trustedPointer('pointerenter', { pointerType: 'mouse' }))
+    button.dispatchEvent(trustedPointer('pointerleave', { pointerType: 'mouse' }))
+    expect(vi.getTimerCount()).toBe(1)
+    ui.entry.reposition()
+    const cancelRaf = vi.spyOn(globalThis, 'cancelAnimationFrame')
+    const visibility = vi.spyOn(document, 'visibilityState', 'get')
+    const setHidden = (hidden: boolean, state: DocumentVisibilityState): void => {
+      Object.defineProperty(document, 'hidden', { value: hidden, configurable: true })
+      visibility.mockReturnValue(state)
+    }
+    try {
+      setHidden(true, 'hidden')
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(cancelRaf).toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+      setHidden(false, 'visible')
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(vi.getTimerCount()).toBe(1)
+    } finally {
+      setHidden(false, 'visible')
+      vi.useRealTimers()
+    }
+  })
+
+  it('dispose 后可见性与指针事件不再排程工作', async () => {
+    const ui = mount()
+    await frames()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    ui.entry.dispose()
+    expect(() => document.dispatchEvent(new Event('visibilitychange'))).not.toThrow()
+    expect(() => window.dispatchEvent(new Event('blur'))).not.toThrow()
+    expect(vi.getTimerCount()).toBe(0)
+    vi.useRealTimers()
   })
 })

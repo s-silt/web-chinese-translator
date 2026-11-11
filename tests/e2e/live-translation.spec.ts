@@ -1,13 +1,10 @@
-import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
-import ts from 'typescript'
 import zhCN from '../../src/i18n/zh-CN'
 import { inspectClosedShadowPage, installClosedShadowInspection } from './closed-shadow'
+import { createTranslationModuleUrls } from './translation-module-fixture'
 
 /** 组件入口；运行时依赖从源码的相对导入自动收集，入口新增依赖时不必手工维护清单 */
 const ENTRY_FILES = ['input-translation.ts', 'subtitles.ts'] as const
-const TRANSLATION_DIR = resolve(import.meta.dirname, '../../src/translation')
 
 interface LiveFixturePageWindow extends Window {
   __wtCalls: Array<{ readonly texts: string[]; readonly requestId: string }>
@@ -17,54 +14,11 @@ interface LiveFixturePageWindow extends Window {
   __wtWatcher?: { dispose(): void }
 }
 
-/** 转译后仍保留的相对导入（仅类型的导入已被擦除），依赖在前、入口在后 */
-async function transpileLiveModules(): Promise<Array<{ readonly spec: string; readonly code: string }>> {
-  const compilerOptions: ts.CompilerOptions = {
-    module: ts.ModuleKind.ESNext,
-    target: ts.ScriptTarget.ES2022,
-  }
-  const ordered: Array<{ readonly spec: string; readonly code: string }> = []
-  const visited = new Set<string>()
-  async function visit(file: string, chain: readonly string[]): Promise<void> {
-    if (visited.has(file)) return
-    visited.add(file)
-    const raw = await readFile(resolve(TRANSLATION_DIR, file), 'utf8')
-    const code = ts.transpileModule(raw, { compilerOptions }).outputText
-    for (const match of code.matchAll(/\bfrom\s+['"](\.[^'"]+)['"]/g)) {
-      const spec = match[1]!
-      // 只支持同目录模块：越出 src/translation 的依赖说明组件不再适合在页面里单独挂载
-      if (!/^\.\/[\w-]+$/.test(spec)) {
-        throw new Error(`${[...chain, file].join(' → ')} 导入了 ${spec}，组件夹具只支持同目录模块`)
-      }
-      await visit(`${spec.slice(2)}.ts`, [...chain, file])
-    }
-    ordered.push({ spec: `./${file.replace(/\.ts$/, '')}`, code })
-  }
-  for (const entry of ENTRY_FILES) await visit(entry, [])
-  return ordered
-}
-
 async function mountLiveTranslationModule(
   page: Page,
   kind: 'input' | 'subtitles',
 ): Promise<void> {
-  const modules = await transpileLiveModules()
-  const blobUrls = await page.evaluate(
-    ({ list }) => {
-      const urlMap: Record<string, string> = {}
-      for (const item of list) {
-        let rewritten = item.code
-        for (const [spec, blobUrl] of Object.entries(urlMap)) {
-          rewritten = rewritten
-            .replaceAll(`from '${spec}'`, `from '${blobUrl}'`)
-            .replaceAll(`from "${spec}"`, `from "${blobUrl}"`)
-        }
-        urlMap[item.spec] = URL.createObjectURL(new Blob([rewritten], { type: 'text/javascript' }))
-      }
-      return urlMap
-    },
-    { list: modules },
-  )
+  const blobUrls = await createTranslationModuleUrls(page, ENTRY_FILES)
 
   const entryUrl = kind === 'input' ? blobUrls['./input-translation']! : blobUrls['./subtitles']!
   const factoryName = kind === 'input' ? 'createInputTranslation' : 'createSubtitleTranslation'
@@ -186,6 +140,13 @@ test.describe('离线 Chromium 组件级真实 DOM 与事件验证（非真实�
     await inspectClosedShadowPage(page)
     const status = page.locator('[data-wt-root] [role="status"]')
     await expect(status).toHaveText('Line one\nLine two')
+    await expect
+      .poll(() =>
+        page
+          .locator('[data-wt-root]')
+          .evaluate((element) => getComputedStyle(element).getPropertyValue('--gcn-font-latin')),
+      )
+      .toContain('Segoe UI')
 
     await page.evaluate(() => {
       const w = window as unknown as { __observedKeyOrSubmit: string[] }
@@ -218,6 +179,9 @@ test.describe('离线 Chromium 组件级真实 DOM 与事件验证（非真实�
     await page.locator('[data-wt-root] button[data-action="restore"]').click()
     await expect(textarea).toHaveValue('第一行\n第二行')
     expect(await page.evaluate(() => document.activeElement?.id)).toBe('draft-area')
+    await page.keyboard.press('Escape')
+    await expect(page.locator('[data-wt-root] .popover')).toBeHidden()
+    await expect(textarea).toBeFocused()
 
     const editable = page.locator('#plain-ce')
     await editable.click()

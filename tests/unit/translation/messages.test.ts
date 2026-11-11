@@ -459,3 +459,164 @@ describe('wt:open-options 固定分区', () => {
     expect(isTranslationReply({ ok: true, inputReplacement: 'changed' }, message)).toBe(true)
   })
 })
+
+describe('wt:open-text-window 消息契约', () => {
+  it('仅接受无附加字段的请求，拒绝 text/url/section 等多余字段与空请求', () => {
+    expect(isTranslationMessage({ type: 'wt:open-text-window' })).toBe(true)
+    expect(isTranslationMessage({})).toBe(false)
+    expect(isTranslationMessage({ type: 'wt:open-text-window', text: 'hi' })).toBe(false)
+    expect(isTranslationMessage({ type: 'wt:open-text-window', url: 'https://x' })).toBe(false)
+    expect(isTranslationMessage({ type: 'wt:open-text-window', section: 'model' })).toBe(false)
+    expect(isTranslationMessage({ type: 'wt:open-text-window', extra: true })).toBe(false)
+  })
+
+  it('确认回复被接受，错误回复需带字符串 error', () => {
+    const message = { type: 'wt:open-text-window' } as const
+    expect(isTranslationReply({ ok: true }, message)).toBe(true)
+    expect(isTranslationReply({ ok: false, error: '失败' }, message)).toBe(true)
+    expect(isTranslationReply({ ok: 'true' }, message)).toBe(false)
+    expect(isTranslationReply({ ok: false }, message)).toBe(false)
+  })
+})
+
+describe('wt:translate-text 消息契约', () => {
+  const valid = {
+    type: 'wt:translate-text',
+    text: 'Hello **world**\n第二行',
+    sourceLanguage: 'auto',
+    targetLanguage: 'zh-CN',
+    requestId: 'req-text-1',
+  } as const
+
+  it('接受合法消息与可选 pageSession', () => {
+    expect(isTranslationMessage(valid)).toBe(true)
+    expect(isTranslationMessage({ ...valid, pageSession: 'page-1' })).toBe(true)
+    expect(isTranslationMessage({ ...valid, sourceLanguage: 'ja', targetLanguage: 'en' })).toBe(true)
+    expect(isTranslationMessage({ ...valid, text: '  padded  ' })).toBe(true)
+    expect(isTranslationMessage({ ...valid, text: 'x'.repeat(6000) })).toBe(true)
+  })
+
+  it('拒绝空白、超长、非法语言、非法 requestId 与未知字段', () => {
+    for (const invalid of [
+      { ...valid, text: '' },
+      { ...valid, text: '   ' },
+      { ...valid, text: 'x'.repeat(6001) },
+      { ...valid, text: 42 },
+      { ...valid, text: undefined },
+      { ...valid, sourceLanguage: 'xx' },
+      { ...valid, sourceLanguage: undefined },
+      { ...valid, targetLanguage: 'zh' },
+      { ...valid, targetLanguage: 'zh-Hans' },
+      { ...valid, requestId: 'bad id!' },
+      { ...valid, requestId: '' },
+      { ...valid, requestId: undefined },
+      { ...valid, pageSession: 'bad id!' },
+      { ...valid, pageSession: 7 },
+      { ...valid, extra: true },
+      { ...valid, texts: ['hi'] },
+      { type: 'wt:translate-text', text: 'hi', sourceLanguage: 'auto', targetLanguage: 'zh-CN' },
+      { type: 'wt:translate-text' },
+    ]) {
+      expect(isTranslationMessage(invalid)).toBe(false)
+    }
+  })
+
+  it('回复要求恰好一条非空译文', () => {
+    expect(isTranslationReply({ ok: true, texts: ['你好'] }, valid)).toBe(true)
+    expect(isTranslationReply({ ok: true, texts: [' 译 '] }, valid)).toBe(true)
+    for (const reply of [
+      { ok: true },
+      { ok: true, texts: [] },
+      { ok: true, texts: ['a', 'b'] },
+      { ok: true, texts: ['   '] },
+      { ok: true, texts: [42] },
+      { ok: true, texts: 'a' },
+      { ok: false },
+    ]) {
+      expect(isTranslationReply(reply, valid)).toBe(false)
+    }
+    expect(isTranslationReply({ ok: false, error: '失败' }, valid)).toBe(true)
+    expect(isTranslationReply({ ok: false, error: '失败', code: 'cancelled' }, valid)).toBe(true)
+  })
+})
+
+describe('wt:document-input 消息契约', () => {
+  const elementId = '123e4567-e89b-42d3-a456-426614174000'
+  const read = { type: 'wt:document-input', elementId, action: 'read' } as const
+  const replace = {
+    type: 'wt:document-input',
+    elementId,
+    action: 'replace',
+    expectedText: '原文',
+    text: '译文',
+  } as const
+
+  it('接受合法 read/replace 消息', () => {
+    expect(isTranslationMessage(read)).toBe(true)
+    expect(isTranslationMessage(replace)).toBe(true)
+    expect(isTranslationMessage({ ...replace, expectedText: 'x'.repeat(6000) })).toBe(true)
+    expect(isTranslationMessage({ ...replace, expectedText: 'x'.repeat(18000) })).toBe(true)
+    expect(isTranslationMessage({ ...replace, text: 'x'.repeat(18000) })).toBe(true)
+  })
+
+  it('拒绝非法 elementId、action、长度与未知字段', () => {
+    for (const invalid of [
+      { ...read, elementId: 'not-a-uuid' },
+      { ...read, elementId: '' },
+      { ...read, elementId: 7 },
+      { ...read, action: 'delete' },
+      { ...read, action: undefined },
+      { ...read, expectedText: 'x' },
+      { ...read, text: 'x' },
+      { ...read, extra: 1 },
+      { ...replace, expectedText: '' },
+      { ...replace, expectedText: 'x'.repeat(18001) },
+      { ...replace, expectedText: undefined },
+      { ...replace, text: '' },
+      { ...replace, text: 'x'.repeat(18001) },
+      { ...replace, text: undefined },
+      { ...replace, extra: true },
+      { type: 'wt:document-input', elementId, action: 'read', text: 'x' },
+    ]) {
+      expect(isTranslationMessage(invalid)).toBe(false)
+    }
+  })
+
+  it('回复按 action 校验 editor 形状、状态与长度', () => {
+    const okRead = { ok: true, editor: { status: 'ok', text: '文本', canReplace: true } }
+    const okReplace = { ok: true, editor: { status: 'ok', text: 'x'.repeat(18000), canReplace: true } }
+    expect(isTranslationReply(okRead, read)).toBe(true)
+    expect(isTranslationReply(okRead, replace)).toBe(true)
+    expect(isTranslationReply(okReplace, replace)).toBe(true)
+    expect(isTranslationReply({ ok: true, editor: { status: 'changed' } }, read)).toBe(true)
+    expect(isTranslationReply({ ok: true, editor: { status: 'unsupported' } }, replace)).toBe(true)
+    expect(isTranslationReply({ ok: true, editor: { status: 'failed' } }, read)).toBe(true)
+    for (const reply of [
+      { ok: true },
+      { ok: true, editor: undefined },
+      { ok: true, editor: 'ok' },
+      { ok: true, editor: { status: 'bogus' } },
+      { ok: true, editor: { status: 'changed', extra: 1 } },
+      { ok: true, editor: { status: 'ok', text: 'x'.repeat(6001), canReplace: true } },
+      { ok: true, editor: { status: 'ok', text: 'ok', canReplace: 'yes' } },
+      { ok: true, editor: { status: 'ok', text: 'ok' } },
+      { ok: true, editor: { status: 'ok', text: 1, canReplace: true } },
+    ]) {
+      expect(isTranslationReply(reply, read)).toBe(false)
+    }
+    expect(
+      isTranslationReply(
+        { ok: true, editor: { status: 'ok', text: 'x'.repeat(6001), canReplace: true } },
+        replace,
+      ),
+    ).toBe(true)
+    expect(
+      isTranslationReply(
+        { ok: true, editor: { status: 'ok', text: 'x'.repeat(18001), canReplace: true } },
+        replace,
+      ),
+    ).toBe(false)
+    expect(isTranslationReply({ ok: false, error: '失败' }, read)).toBe(true)
+    expect(isTranslationReply({ ok: false }, read)).toBe(false)
+  })
+})

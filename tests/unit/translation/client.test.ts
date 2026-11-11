@@ -83,6 +83,17 @@ describe('sendTranslationMessage', () => {
     ['主动辅助', { type: 'wt:assist', requestId: 'r', input: { trigger: 'revisit' } }, AUTO_WATCHDOG_MS],
     ['选区辅助', { type: 'wt:assist', requestId: 'r', input: { trigger: 'selection' } }, INTERACTIVE_WATCHDOG_MS],
     ['连接测试', { type: 'wt:test' }, INTERACTIVE_WATCHDOG_MS],
+    [
+      '文本翻译',
+      {
+        type: 'wt:translate-text',
+        text: 'a',
+        sourceLanguage: 'auto',
+        targetLanguage: 'zh-CN',
+        requestId: 'r',
+      },
+      INTERACTIVE_WATCHDOG_MS,
+    ],
     ['不排队的消息', { type: 'wt:page-modes' }, MAX_REQUEST_TIMEOUT_MS + MARGIN_MS],
   ])('%s 的看门狗时限覆盖其排队上限', async (_name, message, limit) => {
     hangingSend()
@@ -94,6 +105,39 @@ describe('sendTranslationMessage', () => {
     expect(settled).toBe(false)
     await vi.advanceTimersByTimeAsync(1)
     expect(settled).toBe(true)
+  })
+
+  it('wt:translate-text 看门狗超时发送 wt:cancel-assist 并按后台失联上报', async () => {
+    const sent = hangingSend()
+    const promise = sendTranslationMessage({
+      type: 'wt:translate-text',
+      text: 'Hello',
+      sourceLanguage: 'auto',
+      targetLanguage: 'zh-CN',
+      requestId: 'text-1',
+    })
+    await vi.advanceTimersByTimeAsync(INTERACTIVE_WATCHDOG_MS)
+    const reply = await promise
+    expect(reply).toEqual({ ok: false, error: '后台响应超时，请重试', code: 'disconnected' })
+    const cancels = sent.filter((m) => (m as { type: string }).type === 'wt:cancel-assist')
+    expect(cancels).toHaveLength(1)
+    expect((cancels[0] as { requestId: string }).requestId).toBe('text-1')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('wt:translate-text 回复必须恰好一条非空译文', async () => {
+    const message = {
+      type: 'wt:translate-text',
+      text: 'Hello',
+      sourceLanguage: 'auto',
+      targetLanguage: 'zh-CN',
+      requestId: 'text-2',
+    } as const
+    vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockImplementation(async () => ({ ok: true, texts: ['你好', '世界'] }))
+    expect(await sendTranslationMessage(message)).toMatchObject({ ok: false, code: 'unknown' })
+    vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockImplementation(async () => ({ ok: true, texts: ['你好'] }))
+    expect(await sendTranslationMessage(message)).toEqual({ ok: true, texts: ['你好'] })
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('看门狗严格高于后台时限：短内容与最长内容都留有余量', () => {
@@ -328,6 +372,20 @@ describe('页面生命周期端口', () => {
   it('划词辅助也带会话，取消消息不带', async () => {
     await sendTranslationMessage({ type: 'wt:assist', requestId: 'a', input: {} as never }).catch(() => undefined)
     await sendTranslationMessage({ type: 'wt:cancel-assist', requestId: 'a' })
+    expect(sent[0]?.pageSession).toBeDefined()
+    expect(sent[1]?.pageSession).toBeUndefined()
+  })
+
+  it('文本翻译窗口的请求带会话，取消消息不带', async () => {
+    await sendTranslationMessage({
+      type: 'wt:translate-text',
+      text: 'Hello',
+      sourceLanguage: 'auto',
+      targetLanguage: 'zh-CN',
+      requestId: 'text-a',
+    })
+    await sendTranslationMessage({ type: 'wt:cancel-assist', requestId: 'text-a' })
+    expect(sent[0]?.type).toBe('wt:translate-text')
     expect(sent[0]?.pageSession).toBeDefined()
     expect(sent[1]?.pageSession).toBeUndefined()
   })

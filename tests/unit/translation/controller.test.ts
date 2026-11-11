@@ -1596,6 +1596,58 @@ describe('悬浮入口接线', () => {
     await settle(200)
     expect(modelCalls()).toBe(before)
     expect(entry()?.getAttribute('data-style')).toBe('glass')
+
+    const host = (): HTMLElement => document.documentElement.querySelector('[data-wt-root]') as HTMLElement
+    await settingsItem.setValue({ ...DEFAULT_SETTINGS, uiLanguage: 'en', uiStyle: 'glass', theme: 'dark' })
+    await settle(200)
+    expect(modelCalls()).toBe(before)
+    expect(host().dataset.style).toBe('glass')
+    expect(host().dataset.theme).toBe('dark')
+    expect(host().lang).toBe('en')
+    expect(host().style.getPropertyValue('color-scheme')).toBe('dark')
+    expect(host().style.getPropertyPriority('color-scheme')).toBe('important')
+
+    await settingsItem.setValue({ ...DEFAULT_SETTINGS, uiLanguage: 'en', uiStyle: 'glass', theme: 'light' })
+    await settle(200)
+    expect(modelCalls()).toBe(before)
+    expect(host().dataset.theme).toBe('light')
+    expect(host().style.getPropertyValue('color-scheme')).toBe('light')
+  })
+
+  it('悬浮文本窗口入口只发送 wt:open-text-window，不触发页面翻译', async () => {
+    await install((message) => {
+      if (message.type === 'wt:page-modes') return { ok: true, modes: FLOATING_MODES }
+      return { ok: true }
+    })
+    await boot()
+    trustedClick(entry()!)
+    await settle(20)
+    const send = await sender()
+    send.mockClear()
+    const textButton = rootShadow()?.querySelector('.floating-text') as HTMLButtonElement
+    expect(textButton).not.toBeNull()
+    expect(textButton.textContent).toBe(en.textTranslate)
+    trustedClick(textButton)
+    await settle(80)
+    const calls = send.mock.calls.map(([message]) => message)
+    expect(calls.filter((message) => message.type === 'wt:open-text-window')).toEqual([{ type: 'wt:open-text-window' }])
+    expect(calls.some((message) => message.type === 'wt:translate' || message.type === 'wt:translate-text' || message.type === 'wt:translate-page')).toBe(false)
+  })
+
+  it('文本窗口打开被拒绝时经既有失败路径显示错误', async () => {
+    await install((message) => {
+      if (message.type === 'wt:page-modes') return { ok: true, modes: FLOATING_MODES }
+      if (message.type === 'wt:open-text-window') return { ok: false, error: 'WINDOW_BLOCKED' }
+      return { ok: true }
+    })
+    await boot()
+    trustedClick(entry()!)
+    await settle(20)
+    const send = await sender()
+    send.mockClear()
+    trustedClick(rootShadow()?.querySelector('.floating-text') as HTMLButtonElement)
+    await settle(80)
+    expect(shadowText()).toContain('WINDOW_BLOCKED')
   })
 
   it('资格失效后隐藏入口', async () => {
@@ -2482,5 +2534,72 @@ describe('字幕与输入翻译生命周期联动', () => {
       await settle(450)
       expect(input.value).toBe('ZH:Auto replace draft')
     })
+  })
+})
+
+describe('wt:translate-input 文档编辑器回退', () => {
+  function mountCmEditor(): { root: HTMLElement; editable: HTMLElement } {
+    const root = document.createElement('div')
+    root.className = 'cm-editor'
+    const editable = document.createElement('div')
+    editable.className = 'cm-content'
+    editable.contentEditable = 'true'
+    editable.tabIndex = 0
+    root.append(editable)
+    document.body.append(root)
+    editable.focus()
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+    return { root, editable }
+  }
+
+  it('普通输入不可用时经 wt:document-input 读模型并预览译文', async () => {
+    const { sendTranslationMessage } = await import('../../../src/translation/client')
+    vi.mocked(sendTranslationMessage).mockImplementation((async (message: { type: string; action?: string }) => {
+      if (message.type === 'wt:page-modes') {
+        return {
+          ok: true,
+          modes: { enabled: true, fixed: false, auto: false, selection: true, smart: false, input: true },
+        }
+      }
+      if (message.type === 'wt:document-input') {
+        return message.action === 'read'
+          ? { ok: true, editor: { status: 'ok', text: '源文本', canReplace: true } }
+          : { ok: true, editor: { status: 'ok', text: '译文', canReplace: true } }
+      }
+      if (message.type === 'wt:translate') return { ok: true, texts: ['译文'] }
+      return { ok: true }
+    }) as never)
+    await translationConfigItem.setValue({ ...CONFIG, inputTranslationEnabled: true })
+    await startPageTranslation()
+    await settle(50)
+    mountCmEditor()
+    expect(await triggerMessage({ type: 'wt:translate-input' })).toEqual({ ok: true })
+    await settle(50)
+    const calls = vi.mocked(sendTranslationMessage).mock.calls.map(
+      ([m]) => m as { type: string; mode?: string; manualInput?: boolean; action?: string },
+    )
+    expect(calls.some((m) => m.type === 'wt:document-input' && m.action === 'read')).toBe(true)
+    expect(calls.some((m) => m.type === 'wt:translate' && m.mode === 'input' && m.manualInput === true)).toBe(true)
+  })
+
+  it('桥接返回 unsupported 时回包 ok:false 供调用方打开文本窗', async () => {
+    const { sendTranslationMessage } = await import('../../../src/translation/client')
+    vi.mocked(sendTranslationMessage).mockImplementation((async (message: { type: string }) => {
+      if (message.type === 'wt:page-modes') {
+        return {
+          ok: true,
+          modes: { enabled: true, fixed: false, auto: false, selection: true, smart: false, input: true },
+        }
+      }
+      if (message.type === 'wt:document-input') {
+        return { ok: true, editor: { status: 'unsupported' } }
+      }
+      return { ok: true }
+    }) as never)
+    await translationConfigItem.setValue({ ...CONFIG, inputTranslationEnabled: true })
+    await startPageTranslation()
+    await settle(50)
+    mountCmEditor()
+    expect(await triggerMessage({ type: 'wt:translate-input' })).toMatchObject({ ok: false })
   })
 })

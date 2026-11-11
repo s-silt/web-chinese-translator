@@ -38,6 +38,29 @@ function waves(wrapper: VueWrapper): Array<{ left: number; top: number; size: nu
   })
 }
 
+function fakeMediaQueryList(): {
+  mql: MediaQueryList
+  listeners: Set<() => void>
+  removeSpy: ReturnType<typeof vi.fn>
+} {
+  const listeners = new Set<() => void>()
+  const removeSpy = vi.fn()
+  const mql = {
+    matches: false,
+    media: '',
+    onchange: null,
+    addEventListener: (_type: string, cb: () => void) => listeners.add(cb),
+    removeEventListener: (_type: string, cb: () => void) => {
+      removeSpy(_type, cb)
+      listeners.delete(cb)
+    },
+    addListener: (cb: () => void) => listeners.add(cb),
+    removeListener: (cb: () => void) => listeners.delete(cb),
+    dispatchEvent: () => true,
+  } as unknown as MediaQueryList
+  return { mql, listeners, removeSpy }
+}
+
 describe.skipIf(!UiButton)('UiButton', () => {
   beforeEach(() => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(RECT)
@@ -205,6 +228,225 @@ describe.skipIf(!UiButton)('UiButton', () => {
       wrapper.unmount()
       expect(remove).toHaveBeenCalledWith('pointerdown', expect.any(Function))
       expect(remove).toHaveBeenCalledWith('click', expect.any(Function))
+    })
+
+    it('兜底定时器在 220ms 内清除波纹与计时器', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const wrapper = render()
+        pointerdown(wrapper, { clientX: 30, clientY: 30 })
+        await wrapper.vm.$nextTick()
+        expect(waves(wrapper)).toHaveLength(1)
+        expect(vi.getTimerCount()).toBe(1)
+        vi.advanceTimersByTime(219)
+        await wrapper.vm.$nextTick()
+        expect(waves(wrapper)).toHaveLength(1)
+        vi.advanceTimersByTime(1)
+        await wrapper.vm.$nextTick()
+        expect(waves(wrapper)).toEqual([])
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('最多 3 个波纹对应最多 3 个兜底计时器，丢弃最早的', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const wrapper = render()
+        for (const clientX of [10, 20, 30, 40, 50]) pointerdown(wrapper, { clientX, clientY: 20 })
+        await wrapper.vm.$nextTick()
+        expect(waves(wrapper)).toHaveLength(3)
+        expect(vi.getTimerCount()).toBe(3)
+        vi.advanceTimersByTime(220)
+        await wrapper.vm.$nextTick()
+        expect(waves(wrapper)).toEqual([])
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('animationend 移除波纹及其兜底计时器', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const wrapper = render()
+        pointerdown(wrapper, { clientX: 30, clientY: 30 })
+        await wrapper.vm.$nextTick()
+        expect(vi.getTimerCount()).toBe(1)
+        await wrapper.get('.ui-ripple-wave').trigger('animationend')
+        await wrapper.vm.$nextTick()
+        expect(waves(wrapper)).toEqual([])
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('只在波纹存续期间订阅全局事件，多实例分别退订并清理', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const { mql, listeners } = fakeMediaQueryList()
+      const matchMedia = vi.spyOn(window, 'matchMedia').mockImplementation((query) =>
+        (query === '(prefers-reduced-motion: reduce)' ? mql : fakeMediaQueryList().mql) as MediaQueryList,
+      )
+      const docAdd = vi.spyOn(document, 'addEventListener')
+      const winAdd = vi.spyOn(window, 'addEventListener')
+      try {
+        const first = render()
+        const second = render()
+        expect(listeners.size).toBe(0)
+        expect(docAdd.mock.calls.filter(([event]) => event === 'visibilitychange')).toHaveLength(0)
+        expect(winAdd.mock.calls.filter(([event]) => event === 'pagehide')).toHaveLength(0)
+        pointerdown(first, { clientX: 30, clientY: 30 })
+        pointerdown(second, { clientX: 30, clientY: 30 })
+        await first.vm.$nextTick()
+        expect(listeners.size).toBe(2)
+        expect(vi.getTimerCount()).toBe(2)
+        await first.get('.ui-ripple-wave').trigger('animationend')
+        expect(listeners.size).toBe(1)
+        expect(vi.getTimerCount()).toBe(1)
+        first.unmount()
+        expect(listeners.size).toBe(1)
+        Object.defineProperty(document, 'hidden', { value: true, configurable: true })
+        document.dispatchEvent(new Event('visibilitychange'))
+        await second.vm.$nextTick()
+        expect(waves(second)).toEqual([])
+        expect(listeners.size).toBe(0)
+        expect(vi.getTimerCount()).toBe(0)
+        Object.defineProperty(document, 'hidden', { value: false, configurable: true })
+        pointerdown(second, { clientX: 30, clientY: 30 })
+        await second.vm.$nextTick()
+        expect(listeners.size).toBe(1)
+        vi.advanceTimersByTime(220)
+        await second.vm.$nextTick()
+        expect(listeners.size).toBe(0)
+        pointerdown(second, { clientX: 30, clientY: 30 })
+        await second.vm.$nextTick()
+        second.unmount()
+        expect(listeners.size).toBe(0)
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        Object.defineProperty(document, 'hidden', { value: false, configurable: true })
+        vi.useRealTimers()
+        matchMedia.mockRestore()
+      }
+    })
+
+    it('pagehide 清除全部波纹与计时器', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const wrapper = render()
+        pointerdown(wrapper, { clientX: 30, clientY: 30 })
+        await wrapper.vm.$nextTick()
+        expect(vi.getTimerCount()).toBe(1)
+        window.dispatchEvent(new Event('pagehide'))
+        await wrapper.vm.$nextTick()
+        expect(waves(wrapper)).toEqual([])
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('页面隐藏清除波纹与计时器', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const wrapper = render()
+        pointerdown(wrapper, { clientX: 30, clientY: 30 })
+        await wrapper.vm.$nextTick()
+        expect(vi.getTimerCount()).toBe(1)
+        Object.defineProperty(document, 'hidden', { value: true, configurable: true })
+        document.dispatchEvent(new Event('visibilitychange'))
+        await wrapper.vm.$nextTick()
+        expect(waves(wrapper)).toEqual([])
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        Object.defineProperty(document, 'hidden', { value: false, configurable: true })
+        vi.useRealTimers()
+      }
+    })
+
+    it('减少动态效果媒体查询变化清除波纹', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const { mql, listeners } = fakeMediaQueryList()
+      const matchMedia = vi
+        .spyOn(window, 'matchMedia')
+        .mockImplementation((query) => (query === '(prefers-reduced-motion: reduce)' ? mql : fakeMediaQueryList().mql) as MediaQueryList)
+      try {
+        const wrapper = render()
+        pointerdown(wrapper, { clientX: 30, clientY: 30 })
+        await wrapper.vm.$nextTick()
+        expect(waves(wrapper)).toHaveLength(1)
+        expect(vi.getTimerCount()).toBe(1)
+        for (const listener of [...listeners]) listener()
+        await wrapper.vm.$nextTick()
+        expect(waves(wrapper)).toEqual([])
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        vi.useRealTimers()
+        matchMedia.mockRestore()
+      }
+    })
+
+    it('页面隐藏、aria-disabled 与高对比度时不生成波纹', async () => {
+      const hiddenWrapper = render()
+      Object.defineProperty(document, 'hidden', { value: true, configurable: true })
+      try {
+        pointerdown(hiddenWrapper, { clientX: 30, clientY: 30 })
+        keyboardClick(hiddenWrapper)
+        await hiddenWrapper.vm.$nextTick()
+        expect(waves(hiddenWrapper)).toEqual([])
+      } finally {
+        Object.defineProperty(document, 'hidden', { value: false, configurable: true })
+      }
+
+      const disabledWrapper = render()
+      disabledWrapper.element.setAttribute('aria-disabled', 'true')
+      pointerdown(disabledWrapper, { clientX: 30, clientY: 30 })
+      keyboardClick(disabledWrapper)
+      await disabledWrapper.vm.$nextTick()
+      expect(waves(disabledWrapper)).toEqual([])
+
+      const matchMedia = vi
+        .spyOn(window, 'matchMedia')
+        .mockImplementation((query) => ({ matches: query === '(forced-colors: active)' }) as MediaQueryList)
+      try {
+        const forcedWrapper = render()
+        pointerdown(forcedWrapper, { clientX: 30, clientY: 30 })
+        keyboardClick(forcedWrapper)
+        await forcedWrapper.vm.$nextTick()
+        expect(waves(forcedWrapper)).toEqual([])
+      } finally {
+        matchMedia.mockRestore()
+      }
+    })
+
+    it('卸载移除文档/窗口/媒体查询监听并清空计时器', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const { mql, removeSpy } = fakeMediaQueryList()
+      const matchMedia = vi
+        .spyOn(window, 'matchMedia')
+        .mockImplementation((query) => (query === '(prefers-reduced-motion: reduce)' ? mql : fakeMediaQueryList().mql) as MediaQueryList)
+      const docRemove = vi.spyOn(document, 'removeEventListener')
+      const winRemove = vi.spyOn(window, 'removeEventListener')
+      try {
+        const wrapper = render()
+        pointerdown(wrapper, { clientX: 30, clientY: 30 })
+        await wrapper.vm.$nextTick()
+        expect(vi.getTimerCount()).toBe(1)
+        wrapper.unmount()
+        expect(docRemove).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
+        expect(winRemove).toHaveBeenCalledWith('pagehide', expect.any(Function))
+        expect(removeSpy).toHaveBeenCalledWith('change', expect.any(Function))
+        expect(vi.getTimerCount()).toBe(0)
+        window.dispatchEvent(new Event('pagehide'))
+        document.dispatchEvent(new Event('visibilitychange'))
+        await wrapper.vm.$nextTick()
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        vi.useRealTimers()
+        matchMedia.mockRestore()
+      }
     })
   })
 })

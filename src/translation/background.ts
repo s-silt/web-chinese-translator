@@ -101,12 +101,13 @@ import {
 } from './registration'
 import {
   INPUT_FRAME_SCRIPT_FILES,
-  isYouTubeInputFramePair,
-  isYouTubePageUrl,
+  inputFrameUrl,
   parseInputFrameDocument,
   readInputFrameDocuments,
   readInputFrameSnapshot,
 } from './input-frame'
+import { documentEditorInMainWorld, isDocumentEditorResult } from './document-editor'
+import { openTextTranslationWindow } from './text-window'
 import { EXCLUDED_LIMIT_ERROR, isExcludedSite, isSensitivePage, MAX_EXCLUDED_HOSTS, normalizeExcludedHost, sanitizeExcludedHosts } from './page-policy'
 import { isSupportedChatUrl, replaceChatDraftInMainWorld } from './chat-input'
 import { isDiscordChatUrl, replaceDiscordDraftInMainWorld, type DiscordReplacementStatus } from './discord-input'
@@ -165,6 +166,15 @@ function fromExtensionPage(sender: MessageSender): boolean {
   )
 }
 
+function fromTextWindow(sender: MessageSender): boolean {
+  if (!fromExtensionPage(sender)) return false
+  try {
+    return new URL(sender.url!).pathname === '/translate.html'
+  } catch {
+    return false
+  }
+}
+
 function fromOurContent(sender: MessageSender): boolean {
   return (
     sender.id === browser.runtime.id &&
@@ -191,11 +201,12 @@ function fromOurInputFrame(sender: MessageSender): boolean {
     typeof sender.url !== 'string' ||
     typeof sender.tab.url !== 'string' ||
     typeof sender.origin !== 'string' ||
-    !isYouTubeInputFramePair(sender.tab.url, sender.url)
+    inputFrameUrl(sender.tab.url, sender.url) === undefined
   ) {
     return false
   }
-  const expectedOrigin = normalizeOrigin(sender.url)
+  const effective = inputFrameUrl(sender.tab.url, sender.url)
+  const expectedOrigin = normalizeOrigin(effective ?? sender.url)
   return expectedOrigin !== '' && sender.origin === expectedOrigin
 }
 
@@ -212,11 +223,12 @@ async function inputFrameAllowed(sender: MessageSender, config: TranslationConfi
     const currentTab = await tabs.get(tabId)
     if (currentTab.incognito === true || typeof currentTab.url !== 'string') return false
     const topUrl = currentTab.url
-    if (!isYouTubeInputFramePair(topUrl, sourceUrl)) return false
-    if (!isSiteScopeAllowed(topUrl, config) || !isSiteScopeAllowed(sourceUrl, config)) return false
-    if (isExcludedSite(topUrl, config.excludedHosts) || isExcludedSite(sourceUrl, config.excludedHosts)) return false
-    if (isSensitivePage(topUrl) || isSensitivePage(sourceUrl)) return false
-    const origin = normalizeOrigin(sourceUrl)
+    const effectiveUrl = inputFrameUrl(topUrl, sourceUrl)
+    if (effectiveUrl === undefined) return false
+    if (!isSiteScopeAllowed(topUrl, config) || !isSiteScopeAllowed(effectiveUrl, config)) return false
+    if (isExcludedSite(topUrl, config.excludedHosts) || isExcludedSite(effectiveUrl, config.excludedHosts)) return false
+    if (isSensitivePage(topUrl) || isSensitivePage(effectiveUrl)) return false
+    const origin = normalizeOrigin(topUrl)
     if (origin === '' || !(await originAllowed(origin))) return false
     const results: unknown = await scripting.executeScript({
       target: { tabId, documentIds: [documentId] },
@@ -228,7 +240,7 @@ async function inputFrameAllowed(sender: MessageSender, config: TranslationConfi
     return (
       parsed.frameId === frameId &&
       parsed.documentId === documentId &&
-      parsed.snapshot.url === sourceUrl &&
+      inputFrameUrl(topUrl, parsed.snapshot.url) === effectiveUrl &&
       parsed.snapshot.topUrl === topUrl
     )
   } catch {
@@ -803,7 +815,11 @@ function installPageSessions(): void {
     if (!port.name.startsWith(PAGE_PORT_PREFIX)) return
     const session = port.name.slice(PAGE_PORT_PREFIX.length)
     const sender = port.sender
-    if (sender === undefined || (!fromOurContent(sender) && !fromOurInputFrame(sender)) || !isPageId(session)) {
+    if (
+      sender === undefined ||
+      (!fromOurContent(sender) && !fromOurInputFrame(sender) && !fromTextWindow(sender)) ||
+      !isPageId(session)
+    ) {
       port.disconnect()
       return
     }
@@ -1253,6 +1269,48 @@ async function handleTest(sender: MessageSender): Promise<TranslationReply<'wt:t
   }
 }
 
+async function handleTextTranslation(
+  message: Extract<TranslationMessage, { type: 'wt:translate-text' }>,
+  sender: MessageSender,
+): Promise<TranslationReply<'wt:translate-text'>> {
+  const pageSession = pageSessionKey(sender, message.pageSession)
+  if (pageSessionEnded(pageSession)) return failureReply(new CompletionCancelledError())
+  const scope = assistScope(sender)
+  const key = `${scope}:${message.requestId}`
+  if (requests.has(key)) return { ok: false, error: '请求 ID 重复' }
+  const controller = new TrackedRequest('test', '', pageSession)
+  requests.set(key, controller)
+  interactive.add(key)
+  try {
+    const snapshot = await modelSnapshot().catch(() => undefined)
+    if (snapshot === undefined) return unavailableReply(snapshot)
+    const texts = await scheduleModelTask(
+      'interactive',
+      async (signal) => {
+        await assertDispatchAllowed(snapshot, signal)
+        const model = {
+          ...modelRequestConfig(snapshot),
+          sourceLanguage: message.sourceLanguage,
+          targetLanguage: message.targetLanguage,
+        }
+        const result = await translateTexts(model, [message.text], snapshot.apiKey, fetch, signal)
+        checkCurrent(snapshot, signal)
+        await assertDispatchAllowed(snapshot, signal)
+        return result
+      },
+      controller.signal,
+    )
+    return { ok: true, texts }
+  } catch (error) {
+    return failureReply(error)
+  } finally {
+    if (requests.get(key) === controller) {
+      requests.delete(key)
+      interactive.delete(key)
+    }
+  }
+}
+
 function autoTextsValid(texts: readonly string[]): boolean {
   let total = 0
   for (const text of texts) {
@@ -1273,6 +1331,9 @@ async function handleTranslate(
   if (requests.has(key)) return { ok: false, error: '请求 ID 重复' }
   const controller = new TrackedRequest(message.mode, sender.url ?? '', pageSession)
   if (fromOurInputFrame(sender)) controller.sourceUrl = sender.tab?.url
+  const sourceUrl = fromOurInputFrame(sender)
+    ? (inputFrameUrl(sender.tab!.url!, sender.url!) ?? '')
+    : (sender.url ?? '')
   const failed = (error: unknown): TranslationFailure => {
     const reply = failureReply(error)
     if (message.manualSelectionId === undefined || reply.code !== 'cancelled') return reply
@@ -1307,7 +1368,7 @@ async function handleTranslate(
     await restoreAutomaticPause()
     const settings = await getSettings()
     if (!settings.enabled) return { ok: false, error: '总开关已关闭' }
-    const origin = normalizeOrigin(sender.url ?? '')
+    const origin = normalizeOrigin(sourceUrl)
     const snapshot = await modelSnapshot().catch(() => undefined)
     if (controller.signal.aborted) {
       return failed(new CompletionCancelledError())
@@ -1334,7 +1395,7 @@ async function handleTranslate(
         auto: message.mode === 'auto',
         feature,
         manualInput,
-        sensitive: isSensitivePage(sender.url ?? ''),
+        sensitive: isSensitivePage(sourceUrl),
         manualGrant: grant,
       })
     } catch (error) {
@@ -1354,7 +1415,7 @@ async function handleTranslate(
           auto: message.mode === 'auto',
           feature,
           manualInput,
-          sensitive: isSensitivePage(sender.url ?? ''),
+          sensitive: isSensitivePage(sourceUrl),
           manualGrant: currentGrant,
         })
         return true
@@ -1775,6 +1836,90 @@ async function handleRichInputReplacement(
   }
 }
 
+async function handleDocumentInput(
+  message: Extract<TranslationMessage, { type: 'wt:document-input' }>,
+  sender: MessageSender,
+): Promise<TranslationReply<'wt:document-input'>> {
+  const documentId = sender.documentId
+  const tabId = sender.tab?.id
+  const sourceUrl = sender.url
+  const topUrl = sender.tab?.url
+  if (
+    typeof documentId !== 'string' ||
+    documentId === '' ||
+    typeof tabId !== 'number' ||
+    typeof sourceUrl !== 'string' ||
+    typeof topUrl !== 'string'
+  ) {
+    return { ok: false, error: '无权访问' }
+  }
+  const isFrame = sender.frameId !== 0
+  if (isFrame && !fromOurInputFrame(sender)) return { ok: false, error: '无权访问' }
+  const effectiveUrl = isFrame ? inputFrameUrl(topUrl, sourceUrl) : sourceUrl
+  if (effectiveUrl === undefined) return { ok: false, error: '无权访问' }
+  const snapshot = await modelSnapshot().catch(() => undefined)
+  if (snapshot === undefined) return unavailableReply(snapshot)
+  const controller = new AbortController()
+  try {
+    await assertDispatchAllowed(snapshot, controller.signal, {
+      origin: effectiveUrl,
+      sensitive: isSensitivePage(effectiveUrl),
+      feature: 'input',
+      manualInput: true,
+      pageSender: sender,
+    })
+    checkCurrent(snapshot, controller.signal)
+    const request =
+      message.action === 'read'
+        ? { elementId: message.elementId, action: 'read' as const }
+        : {
+            elementId: message.elementId,
+            action: 'replace' as const,
+            expectedText: message.expectedText,
+            text: message.text,
+          }
+    const results: unknown = await browser.scripting.executeScript({
+      target: { tabId, documentIds: [documentId] },
+      world: 'MAIN',
+      func: documentEditorInMainWorld,
+      args: [request],
+    })
+    if (!Array.isArray(results) || results.length !== 1) return { ok: false, error: '编辑器不可用' }
+    const item: unknown = results[0]
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      return { ok: false, error: '编辑器不可用' }
+    }
+    const entry = item as Record<string, unknown>
+    if (entry.frameId !== sender.frameId || entry.documentId !== documentId) {
+      return { ok: false, error: '编辑器不可用' }
+    }
+    if (!isDocumentEditorResult(entry.result)) return { ok: false, error: '编辑器不可用' }
+    const editor = entry.result
+    if (
+      message.action === 'read' &&
+      editor.status === 'ok' &&
+      (editor.text.length > 6000 || editor.text.trim() === '')
+    ) {
+      return { ok: false, error: '编辑器不可用' }
+    }
+    if (message.action === 'read') {
+      const postSnapshot = await modelSnapshot().catch(() => undefined)
+      if (postSnapshot === undefined) return unavailableReply(postSnapshot)
+      await assertDispatchAllowed(postSnapshot, controller.signal, {
+        origin: effectiveUrl,
+        sensitive: isSensitivePage(effectiveUrl),
+        feature: 'input',
+        manualInput: true,
+        pageSender: sender,
+      })
+      checkCurrent(postSnapshot, controller.signal)
+    }
+    return { ok: true, editor }
+  } catch (error) {
+    return failureReply(error)
+  }
+}
+
 async function dispatch(message: TranslationMessage, sender: MessageSender): Promise<TranslationReply> {
   if (sender.tab?.incognito === true) return { ok: false, error: '无痕窗口不启用模型功能' }
   switch (message.type) {
@@ -1913,6 +2058,13 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
       }
       return { ok: true }
     }
+    case 'wt:open-text-window': {
+      if (!fromOurContent(sender)) return { ok: false, error: '无权访问' }
+      const failure = await floatingFailure(await getTranslationConfig(), sender)
+      if (failure !== undefined) return { ok: false, error: failure }
+      await openTextTranslationWindow()
+      return { ok: true }
+    }
     case 'wt:current-page-controls':
       return handleCurrentPageControls(message, sender)
     case 'wt:clear-key': {
@@ -1954,14 +2106,24 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
         return { ok: false, error: '无权访问' }
       }
       return handleTranslate(message, sender)
+    case 'wt:translate-text':
+      if (!fromTextWindow(sender)) return { ok: false, error: '无权访问' }
+      return handleTextTranslation(message, sender)
     case 'wt:replace-discord-input':
     case 'wt:replace-chat-input':
       return handleRichInputReplacement(message, sender)
+    case 'wt:document-input':
+      if (!fromOurContent(sender) && !fromOurInputFrame(sender)) {
+        return { ok: false, error: '无权访问' }
+      }
+      return handleDocumentInput(message, sender)
     case 'wt:assist':
       if (!fromOurContent(sender)) return { ok: false, error: '无权访问' }
       return handleAssist(message, sender)
     case 'wt:cancel-assist':
-      if (!fromOurContent(sender) && !fromOurInputFrame(sender)) return { ok: false, error: '无权访问' }
+      if (!fromOurContent(sender) && !fromOurInputFrame(sender) && !fromTextWindow(sender)) {
+        return { ok: false, error: '无权访问' }
+      }
       return handleCancelAssist(message, sender)
     case 'wt:page-context': {
       if (!fromOurContent(sender)) return { ok: false, error: '无权访问' }
@@ -2421,42 +2583,70 @@ function installCommandListener(): void {
           if (command === 'translate-input') {
             const config = await getTranslationConfig()
             if (!config.inputTranslationEnabled) return
-            if (!isYouTubePageUrl(url)) {
-              await sendToTabMessage(tabId, { type: 'wt:translate-input' }, undefined)
-              return
-            }
             const documents = await readInputFrameDocuments(tabId)
             const candidates = documents.filter(
               (item) =>
                 item.snapshot.focused &&
                 item.snapshot.topUrl === url &&
                 ((item.frameId === 0 && item.snapshot.url === url) ||
-                  (item.frameId > 0 && isYouTubeInputFramePair(url, item.snapshot.url))),
+                  (item.frameId > 0 && inputFrameUrl(url, item.snapshot.url) !== undefined)),
             )
-            if (candidates.length !== 1) return
+            if (candidates.length !== 1) {
+              await openTextTranslationWindow().catch(reportError)
+              return
+            }
             const chosen = candidates[0]!
             if (chosen.frameId > 0) {
+              const effectiveUrl = inputFrameUrl(url, chosen.snapshot.url)
+              if (effectiveUrl === undefined) {
+                await openTextTranslationWindow().catch(reportError)
+                return
+              }
               const candidateSender: MessageSender = {
                 id: browser.runtime.id,
                 tab: { id: tabId, url, incognito: false } as Browser.tabs.Tab,
                 frameId: chosen.frameId,
                 documentId: chosen.documentId,
                 url: chosen.snapshot.url,
-                origin: normalizeOrigin(chosen.snapshot.url),
+                origin: normalizeOrigin(effectiveUrl),
               }
               if (!(await inputFrameAllowed(candidateSender, config))) return
-              if (typeof browser.scripting?.executeScript !== 'function') return
-              await browser.scripting.executeScript({
-                target: { tabId, documentIds: [chosen.documentId] },
-                files: INPUT_FRAME_SCRIPT_FILES,
-                injectImmediately: true,
-              })
+              if (typeof browser.scripting?.executeScript !== 'function') {
+                await openTextTranslationWindow().catch(reportError)
+                return
+              }
+              try {
+                await browser.scripting.executeScript({
+                  target: { tabId, documentIds: [chosen.documentId] },
+                  files: INPUT_FRAME_SCRIPT_FILES,
+                  injectImmediately: true,
+                })
+              } catch {
+                await openTextTranslationWindow().catch(reportError)
+                return
+              }
+            } else if (typeof browser.scripting?.executeScript === 'function') {
+              await browser.scripting
+                .executeScript({
+                  target: { tabId, documentIds: [chosen.documentId] },
+                  files: SITE_SCRIPT_FILES,
+                  injectImmediately: true,
+                })
+                .catch(() => undefined)
             }
-            await browser.tabs.sendMessage(
-              tabId,
-              { type: 'wt:translate-input' } satisfies ContentTranslationMessage,
-              { frameId: chosen.frameId, documentId: chosen.documentId },
-            )
+            const freshTab = await browser.tabs.get(tabId).catch(() => undefined)
+            if (freshTab === undefined || freshTab.url !== url) return
+            if (await shortcutBlocked(url, tabId)) return
+            const reply = await browser.tabs
+              .sendMessage(
+                tabId,
+                { type: 'wt:translate-input' } satisfies ContentTranslationMessage,
+                { frameId: chosen.frameId, documentId: chosen.documentId },
+              )
+              .catch(() => undefined)
+            const accepted =
+              isContentTranslationReply(reply, { type: 'wt:translate-input' }) && reply.ok
+            if (!accepted) await openTextTranslationWindow().catch(reportError)
             return
           }
           if (command === 'toggle-page-translation') {

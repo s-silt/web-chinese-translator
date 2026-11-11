@@ -19,6 +19,7 @@ import { hostPermissionPattern, normalizeOrigin, watchTranslationConfig, type Tr
 import { isExcludedSite, isSensitivePage, normalizeExcludedHost } from '../../translation/page-policy'
 import { isSiteScopeAllowed } from '../../translation/site-scope'
 import { sendTranslationMessage } from '../../translation/client'
+import { openTextTranslationWindow } from '../../translation/text-window'
 import {
   isContentTranslationReply,
   type ContentTranslationMessage,
@@ -124,6 +125,7 @@ export interface UseTranslationControls {
   excludeSite(excluded: boolean): Promise<void>
   openSettings(): Promise<void>
   openOptionsAt(hash: string): Promise<void>
+  openTranslateWindow(): Promise<void>
 }
 
 async function queryActiveTab(): Promise<ActiveTab | undefined> {
@@ -498,6 +500,16 @@ export function useTranslationControls(): UseTranslationControls {
     }
   }
 
+  async function openTranslateWindow(): Promise<void> {
+    try {
+      await openTextTranslationWindow()
+    } catch {
+      toast.show('danger', 'openFailed')
+      return
+    }
+    if (!disposed) window.close()
+  }
+
   async function excludeSite(excluded: boolean): Promise<void> {
     const current = tab.value
     if (disposed || busy.value || current === undefined) return
@@ -598,6 +610,7 @@ export function useTranslationControls(): UseTranslationControls {
     excludeSite,
     openSettings,
     openOptionsAt,
+    openTranslateWindow,
   }
 }
 

@@ -60,6 +60,37 @@ export function currentYouTubeInputFrameTopUrl(): string | undefined {
   }
 }
 
+export function inputFrameUrl(topUrl: string, frameUrl: string): string | undefined {
+  try {
+    const top = new URL(topUrl)
+    if (!['https:', 'http:'].includes(top.protocol) || top.username !== '' || top.password !== '') {
+      return undefined
+    }
+    if (frameUrl === 'about:blank' || frameUrl === 'about:srcdoc') return top.href
+    const frame = new URL(frameUrl)
+    return frame.origin === top.origin &&
+      ['https:', 'http:'].includes(frame.protocol) &&
+      frame.username === '' &&
+      frame.password === ''
+      ? frame.href
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function currentInputFrameTopUrl(): string | undefined {
+  try {
+    if (window.top === null || window.top === window) return undefined
+    const topUrl = window.top.location.href
+    const frameUrl = location.href
+    if (typeof topUrl !== 'string' || typeof frameUrl !== 'string') return undefined
+    return inputFrameUrl(topUrl, frameUrl) === undefined ? undefined : topUrl
+  } catch {
+    return undefined
+  }
+}
+
 export function readInputFrameSnapshot(): InputFrameSnapshot | undefined {
   try {
     const url = typeof location?.href === 'string' ? location.href : ''
@@ -125,10 +156,18 @@ export async function readInputFrameDocuments(tabId: number): Promise<InputFrame
   const scripting = browser.scripting
   if (typeof scripting?.executeScript !== 'function') return []
   try {
-    const results: unknown = await scripting.executeScript({
-      target: { tabId, allFrames: true },
-      func: readInputFrameSnapshot,
-    })
+    let results: unknown
+    try {
+      results = await scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: readInputFrameSnapshot,
+      })
+    } catch {
+      results = await scripting.executeScript({
+        target: { tabId, frameIds: [0] },
+        func: readInputFrameSnapshot,
+      })
+    }
     if (!Array.isArray(results)) return []
     const documents: InputFrameDocument[] = []
     for (const item of results) {

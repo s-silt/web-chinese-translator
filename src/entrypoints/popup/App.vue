@@ -1,7 +1,7 @@
 <template>
   <main class="popup" :class="{ 'is-loading': !settingsReady }">
     <header class="popup-header">
-      <img class="popup-logo" :src="LOGO_URL" width="20" height="20" alt="" />
+      <img class="popup-logo" :src="LOGO_URL" width="24" height="24" alt="" />
       <div class="popup-brand">
         <h1 class="popup-title">{{ t('appName') }}</h1>
         <span v-if="version" class="popup-version" data-test="version">v{{ version }}</span>
@@ -53,6 +53,11 @@
     </header>
 
     <PageStatusCard v-if="translationSupported" class="popup-section" />
+
+    <section v-if="translationSupported" class="popup-text-entry">
+      <UiButton data-test="wt-open-translate" @click="openTranslateWindow">{{ t('textTranslate') }}</UiButton>
+      <p class="ui-hint">{{ t('textTranslateEntryHint') }}</p>
+    </section>
 
     <TranslationControls
       class="popup-section"
@@ -134,6 +139,10 @@ const themeLabel = computed(() => t('appearanceCurrent', { mode: t(THEME_MESSAGE
 function openOptionsAt(hash: string): void {
   void translation.openOptionsAt(hash)
 }
+
+function openTranslateWindow(): void {
+  void translation.openTranslateWindow()
+}
 </script>
 
 <style scoped>
@@ -165,15 +174,16 @@ function openOptionsAt(hash: string): void {
 .popup-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-height: 48px;
-  padding: 10px 12px 10px 16px;
+  padding: 12px 16px;
   background: var(--gcn-bg-muted);
   border-bottom: 1px solid var(--gcn-border-muted);
 }
 
 .popup-header-actions {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 8px;
   margin-left: auto;
@@ -189,6 +199,7 @@ function openOptionsAt(hash: string): void {
 /* 名称与版本号按文字基线对齐 */
 .popup-brand {
   display: flex;
+  flex: 1;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
@@ -198,6 +209,7 @@ function openOptionsAt(hash: string): void {
 .popup-title {
   font-size: 14px;
   font-weight: 600;
+  line-height: 20px;
 }
 
 .popup-version {
@@ -228,6 +240,16 @@ function openOptionsAt(hash: string): void {
   margin: 12px 12px 0;
   padding: 12px;
   border-bottom: 0;
+}
+
+.popup-text-entry {
+  display: grid;
+  gap: 6px;
+  padding: 12px 16px 0;
+}
+
+.popup-text-entry .ui-button {
+  width: 100%;
 }
 
 /* 总开关：标签给读屏，视觉上只留大号开关 */

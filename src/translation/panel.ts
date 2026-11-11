@@ -1,7 +1,15 @@
 import type { UiStyle } from '../shared/settings'
 import { createFloatingEntry, type FloatingCallbacks, type FloatingEntry, type FloatingLabels, type FloatingView } from './floating'
 import type { AssistResult } from './intent'
+import { deepActiveElement } from './input-translation'
 import type { SelectionAnchor } from './selection'
+import {
+  applySurfacePreferences,
+  DEFAULT_SURFACE_PREFERENCES,
+  SURFACE_CSS,
+  syncSurfaceVisibility,
+  type SurfacePreferences,
+} from './ui-surface'
 
 export type ToolbarAction = 'translate' | 'define' | 'explain' | 'copy'
 export type PauseKind = 'error' | 'paused' | 'limit'
@@ -67,6 +75,7 @@ export const DEFAULT_LABELS: Required<PanelLabels> = {
 export interface TranslationPanel {
   /** 内容脚本卡片的界面风格；classic 移除 data-style */
   setStyle(style: 'classic' | 'cyber' | 'glass'): void
+  setPreferences(preferences: SurfacePreferences): void
   setLabels(labels: PanelLabels): void
   showToolbar(anchor: SelectionAnchor, configured: boolean, onAction: (action: ToolbarAction) => void): void
   setToolbarCopyResult(copied: boolean): void
@@ -97,501 +106,77 @@ export interface TranslationPanel {
 
 type PanelState = 'hidden' | 'hint' | 'panel' | 'toolbar'
 
-const PANEL_CSS = `
+const PANEL_CSS = `${SURFACE_CSS}
 .panel, .hint, .pause-status, .selection-toolbar {
-  box-sizing: border-box;
-  font: 13px/1.5 -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  color: #1f2328;
-  background: #ffffff;
-  border: 1px solid #d0d7de;
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  box-sizing: border-box; font: 13px/1.5 var(--gcn-font); color: var(--wt-ink);
 }
-.panel[data-style='cyber'], .hint[data-style='cyber'], .pause-status[data-style='cyber'], .selection-toolbar[data-style='cyber'] {
-  color: #e7f4ff; background: #0a1424; border: 1px solid #264561; border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(6, 16, 30, 0.42), 0 0 18px #1aa6d914;
+.panel, .hint, .selection-toolbar {
+  background: var(--wt-surface); border: 1px solid var(--wt-border);
+  border-radius: var(--gcn-radius-overlay); box-shadow: var(--gcn-shadow-overlay);
+  position: fixed; z-index: 2147483647; pointer-events: auto;
 }
-.panel[data-style='cyber'], .hint[data-style='cyber'] {
-  background-image:
-    linear-gradient(#55e5ff, #55e5ff), linear-gradient(#55e5ff, #55e5ff),
-    linear-gradient(#55e5ff, #55e5ff), linear-gradient(#55e5ff, #55e5ff),
-    linear-gradient(#55e5ff, #55e5ff), linear-gradient(#55e5ff, #55e5ff),
-    linear-gradient(#55e5ff, #55e5ff), linear-gradient(#55e5ff, #55e5ff);
-  background-size: 10px 1px, 1px 10px, 10px 1px, 1px 10px, 10px 1px, 1px 10px, 10px 1px, 1px 10px;
-  background-position: 0 0, 0 0, 100% 0, 100% 0, 0 100%, 0 100%, 100% 100%, 100% 100%;
-  background-repeat: no-repeat;
-  opacity: 1;
+:host([data-style='glass']) .panel, :host([data-style='glass']) .hint, :host([data-style='glass']) .selection-toolbar {
+  backdrop-filter: blur(var(--gcn-surface-blur)); -webkit-backdrop-filter: blur(var(--gcn-surface-blur));
 }
-.panel[data-style='cyber'] .panel-title, .hint[data-style='cyber'] {
-  color: #55e5ff; font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
-}
-.panel[data-style='glass'], .hint[data-style='glass'], .pause-status[data-style='glass'], .selection-toolbar[data-style='glass'] {
-  color: #1d2b43; background: rgba(255,255,255,.84); backdrop-filter: blur(24px) saturate(1.2);
-  border: 1px solid rgba(255,255,255,.88); border-radius: 14px;
-  box-shadow: 0 12px 32px rgba(36,56,92,.16), 0 2px 6px rgba(36,56,92,.06);
-}
-@media (prefers-color-scheme: dark) {
-  .panel[data-style='glass'], .hint[data-style='glass'], .pause-status[data-style='glass'], .selection-toolbar[data-style='glass'] {
-    color: #e6edf7; background: rgba(26,36,55,.84); border-color: rgba(255,255,255,.22);
-    box-shadow: 0 12px 32px rgba(0,0,0,.36);
-  }
-}
-@media (prefers-reduced-transparency: reduce) {
-  .panel[data-style='glass'], .hint[data-style='glass'], .pause-status[data-style='glass'], .selection-toolbar[data-style='glass'] {
-    background: #ffffff; backdrop-filter: none; border-color: #d0d7de;
-  }
-}
-@media (prefers-color-scheme: dark) and (prefers-reduced-transparency: reduce) {
-  .panel[data-style='glass'], .hint[data-style='glass'], .pause-status[data-style='glass'], .selection-toolbar[data-style='glass'] {
-    background: #1c2536; backdrop-filter: none; border-color: #3d444d;
-  }
-}
-@media (prefers-reduced-motion: no-preference) {
-  .panel, .hint, .selection-toolbar { transition: opacity 120ms ease; }
-}
-@media (prefers-color-scheme: dark) {
-  .panel, .hint, .pause-status, .selection-toolbar { color: #e6edf3; background: #1c2128; border-color: #3d444d; }
-}
-.panel {
-  position: fixed;
-  z-index: 2147483647;
-  max-height: min(480px, calc(100vh - 24px));
-  display: flex;
-  flex-direction: column;
-  overflow: auto;
-  pointer-events: auto;
-}
-.hint {
-  position: fixed;
-  z-index: 2147483647;
-  padding: 4px 10px;
-  cursor: pointer;
-  font-size: 12px;
-  pointer-events: auto;
-}
-.hint:hover { background: #f6f8fa; }
-@media (prefers-color-scheme: dark) {
-  .hint:hover { background: #2d333b; }
-}
-.hint[data-style='cyber']:hover { background-color: #102038; }
-.hint[data-style='glass']:hover { background: rgba(255,255,255,.94); }
-@media (prefers-color-scheme: dark) {
-  .hint[data-style='glass']:hover { background: rgba(34,47,70,.9); }
-}
-.selection-toolbar {
-  position: fixed;
-  z-index: 2147483647;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 8px;
-  pointer-events: auto;
-}
-.toolbar-configure-hint {
-  flex-basis: 100%;
-  margin: 0;
-  font-size: 12px;
-  line-height: 18px;
-}
+.panel { max-height: min(480px, calc(100vh - 24px)); display: flex; flex-direction: column; overflow: auto; }
+.hint { padding: 4px 10px; min-height: var(--gcn-control-sm); cursor: pointer; font-size: 12px; }
+.hint:hover { background: var(--gcn-btn-hover-bg); }
+.selection-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px 8px; }
+.toolbar-configure-hint { flex-basis: 100%; margin: 0; color: var(--wt-muted); font-size: 12px; line-height: 18px; }
 .selection-toolbar button {
-  flex: none;
-  padding: 2px 8px;
-  font: inherit;
-  font-size: 12px;
-  color: inherit;
-  cursor: pointer;
-  background: transparent;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
+  box-sizing: border-box; flex: 0 1 auto; min-width: 0; max-width: 100%; min-height: var(--gcn-control-sm);
+  padding: 2px 8px; font: inherit; font-size: 12px; color: var(--gcn-btn-fg); background: var(--gcn-btn-bg);
+  border: 1px solid var(--gcn-btn-border); border-radius: var(--gcn-radius); cursor: pointer; overflow-wrap: anywhere;
 }
-.selection-toolbar button[data-action='translate'] {
-  color: #fff;
-  background: #1f6feb;
-  border-color: #1f6feb;
-}
-.selection-toolbar[data-style='cyber'] button {
-  border-color: #264561;
-}
-.selection-toolbar[data-style='cyber'] button[data-action='translate'] {
-  color: #0b1526;
-  background: #55e5ff;
-  border-color: #55e5ff;
-}
-.selection-toolbar[data-style='glass'] button {
-  border-color: rgba(255,255,255,.8);
-  background: rgba(255,255,255,.35);
-}
-.selection-toolbar[data-style='glass'] button[data-action='translate'] {
-  color: #fff;
-  background: #1f6feb;
-  border-color: #1f6feb;
-}
-@media (prefers-color-scheme: dark) {
-  .selection-toolbar button { border-color: #3d444d; }
-  .selection-toolbar[data-style='glass'] button {
-    border-color: rgba(255,255,255,.2);
-    background: rgba(255,255,255,.08);
-  }
-}
-.selection-toolbar button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
+.selection-toolbar button:hover:not(:disabled) { background: var(--gcn-btn-hover-bg); }
+.selection-toolbar button[data-action='translate'] { color: var(--gcn-primary-fg); background: var(--gcn-primary-bg); border-color: var(--gcn-primary-border); }
+.selection-toolbar button[data-action='translate']:hover:not(:disabled) { background: var(--gcn-primary-hover-bg); }
+.selection-toolbar button:disabled { color: var(--gcn-fg-disabled); background: var(--gcn-bg-disabled); cursor: default; }
 /* 未配置模型时主按钮不能再带主色填充，否则看起来比真正可用的「复制」更像可点 */
-.selection-toolbar button[data-action='translate']:disabled,
-.selection-toolbar[data-style] button[data-action='translate']:disabled {
-  color: inherit;
-  background: transparent;
-  border-color: currentColor;
-}
-.panel button:focus-visible, .panel summary:focus-visible, .hint:focus-visible, .pause-resume:focus-visible, .selection-toolbar button:focus-visible {
-  outline: 2px solid #1f6feb;
-  outline-offset: 2px;
-}
-.selection-toolbar[data-style='cyber'] { background:#101c2e; border-radius:8px; }
-.selection-toolbar[data-style='glass'] { border-color:#c1cddd; border-radius:18px; }
-.panel[data-style='cyber'] button:focus-visible, .panel[data-style='cyber'] summary:focus-visible, .hint[data-style='cyber']:focus-visible, .pause-status[data-style='cyber'] .pause-resume:focus-visible, .selection-toolbar[data-style='cyber'] button:focus-visible {
-  outline-color: #55e5ff;
-}
-@media (prefers-color-scheme: dark) {
-  .selection-toolbar[data-style='glass'] { border-color: rgba(255,255,255,.2); }
-}
-.toolbar-close {
-  padding: 0 6px;
-  background: transparent;
-  border: 0;
-}
-.toolbar-announcement, .panel-announcement {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-}
-.panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 16px;
-  font-weight: 600;
-  border-bottom: 1px solid #d0d7de;
-}
-@media (prefers-color-scheme: dark) {
-  .panel-header { border-color: #3d444d; }
-}
-.panel[data-style='cyber'] .panel-header { border-color: #1f3b54; }
-.panel[data-style='glass'] .panel-header { border-color: rgba(29,43,67,.1); }
-@media (prefers-color-scheme: dark) {
-  .panel[data-style='glass'] .panel-header { border-color: rgba(255,255,255,.14); }
-}
-.panel-title { font-size: 12px; letter-spacing: .02em; }
-.panel[data-style='glass'] .panel-title { color: #344865; }
-@media (prefers-color-scheme: dark) {
-  .panel[data-style='glass'] .panel-title { color: #c8d7ec; }
-}
-.panel-close {
-  flex: none;
-  padding: 2px 6px;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-  background: transparent;
-  border: 0;
-  border-radius: 4px;
-}
-.panel-close:hover { background: rgba(128, 128, 128, 0.2); }
-.panel-body { padding: 12px 16px; overflow-wrap: anywhere; }
-.panel-source {
-  color: #57606a;
-  font-size: 12px;
-  line-height: 1.55;
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-@media (prefers-color-scheme: dark) {
-  .panel-source { color: #8b949e; }
-}
-.panel[data-style='cyber'] .panel-source { color: #9fb8d0; }
-.panel[data-style='glass'] .panel-source { color: #4f627d; }
-@media (prefers-color-scheme: dark) {
-  .panel[data-style='glass'] .panel-source { color: #a5b6cf; }
-}
-.panel-source + .panel-target { margin-top: 8px; }
-.panel-target {
-  color: inherit;
-  font-size: 14px;
-  line-height: 1.65;
-  word-break: break-word;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.panel-note {
-  margin-top: 8px;
-  font-size: 12.5px;
-  line-height: 1.6;
-  color: #57606a;
-  white-space: pre-wrap;
-}
-@media (prefers-color-scheme: dark) {
-  .panel-note { color: #8b949e; }
-}
-.panel[data-style='cyber'] .panel-note { color: #9fb8d0; }
-.panel[data-style='glass'] .panel-note { color: #4a5d79; }
-@media (prefers-color-scheme: dark) {
-  .panel[data-style='glass'] .panel-note { color: #a9bbd4; }
-}
-details.panel-source {
-  margin-top: 10px;
-  padding: 6px 10px;
-  font-size: 12px;
-  background: rgba(128, 128, 128, 0.06);
-  border: 1px solid rgba(128, 128, 128, 0.16);
-  border-radius: 6px;
-}
-.panel[data-style='cyber'] details.panel-source {
-  background: rgba(16, 31, 53, 0.72);
-  border-color: #213e59;
-}
-.panel[data-style='glass'] details.panel-source {
-  background: rgba(255, 255, 255, 0.45);
-  border-color: rgba(255, 255, 255, 0.72);
-}
-@media (prefers-color-scheme: dark) {
-  .panel[data-style='glass'] details.panel-source {
-    background: rgba(15, 23, 38, 0.42);
-    border-color: rgba(255, 255, 255, 0.14);
-  }
-}
-.panel-source summary {
-  cursor: pointer;
-  font-weight: 500;
-  user-select: none;
-}
-.panel[data-style='cyber'] .panel-source summary { color: #7dd8f0; }
-details.panel-source > div { margin-top: 6px; }
-.panel-status { padding: 10px 16px; color: #57606a; font-size: 12px; line-height: 1.55; }
-@media (prefers-color-scheme: dark) {
-  .panel-status { color: #8b949e; }
-}
-.panel[data-style='cyber'] .panel-status { color: #9fb8d0; }
-.panel-status-error { color: #cf222e; }
-@media (prefers-color-scheme: dark) {
-  .panel-status-error { color: #f85149; }
-}
-.panel[data-style='cyber'] .panel-status-error { color: #ff7b72; }
-.panel-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 0 16px 12px;
-}
-.panel-actions button {
-  padding: 3px 10px;
-  font: inherit;
-  font-size: 12px;
-  color: #1f6feb;
-  cursor: pointer;
-  background: transparent;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-}
-.panel-actions button.panel-copy {
-  color: #ffffff;
-  background: #1f6feb;
-  border-color: #1f6feb;
-  font-weight: 500;
-}
-@media (prefers-color-scheme: dark) {
-  .panel-actions button { color: #539bf5; border-color: #3d444d; }
-  .panel-actions button.panel-copy { color: #ffffff; background: #1f6feb; border-color: #1f6feb; }
-}
-.panel[data-style='cyber'] .panel-actions button {
-  color: #9feaff;
-  background: rgba(85, 229, 255, 0.08);
-  border-color: #2b5274;
-}
-.panel[data-style='cyber'] .panel-actions button.panel-copy {
-  color: #081221;
-  background: #55e5ff;
-  border-color: #55e5ff;
-  font-weight: 600;
-}
-.panel[data-style='glass'] .panel-actions button {
-  color: #1d2b43;
-  background: rgba(255, 255, 255, 0.52);
-  border-color: rgba(255, 255, 255, 0.8);
-}
-.panel[data-style='glass'] .panel-actions button.panel-copy {
-  color: #ffffff;
-  background: #1f6feb;
-  border-color: #1f6feb;
-}
-@media (prefers-color-scheme: dark) {
-  .panel[data-style='glass'] .panel-actions button {
-    color: #e6edf7;
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.2);
-  }
-  .panel[data-style='glass'] .panel-actions button.panel-copy {
-    color: #ffffff;
-    background: #1f6feb;
-    border-color: #1f6feb;
-  }
-}
-.pause-status {
-  position: fixed;
-  left: 16px;
-  bottom: 16px;
-  z-index: 2147483647;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  max-width: min(360px, calc(100vw - 32px));
-  padding: 6px 10px;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  pointer-events: auto;
-}
-.pause-reason { color: #cf222e; }
-@media (prefers-color-scheme: dark) {
-  .pause-reason { color: #f85149; }
-}
-.pause-resume {
-  flex: none;
-  padding: 2px 8px;
-  font: inherit;
-  color: #fff;
-  cursor: pointer;
-  background: #1f6feb;
-  border: 1px solid #1f6feb;
-  border-radius: 6px;
-}
-.panel-source details { font-size: 12px; }
-.error-details { min-width: 0; font-size: 11px; line-height: 1.5; color: var(--wt-muted); }
-.error-details > summary { cursor: pointer; width: fit-content; }
-.error-details > summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
-.error-reason { margin-top: 4px; max-height: 6em; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; user-select: text; }
-.panel-error-details { margin: 0 0 8px; }
-.notice-error-details {
-  margin: 0 calc(11px / var(--wt-notice-scale)) calc(8px / var(--wt-notice-scale));
-  font-size: calc(10px / var(--wt-notice-scale));
-}
-.panel, .hint, .pause-status, .selection-toolbar {
-  --wt-surface: #f8fafc;
-  --wt-ink: #24374a;
-  --wt-muted: #63778a;
-  --wt-border: #d4dee8;
-  --wt-soft: #e7eff5;
-  --wt-accent: #355f7c;
-}
-.panel[data-style='cyber'], .hint[data-style='cyber'], .pause-status[data-style='cyber'], .selection-toolbar[data-style='cyber'] {
-  --wt-surface: #101c29;
-  --wt-ink: #dce7ef;
-  --wt-muted: #9aafbf;
-  --wt-border: #304759;
-  --wt-soft: #20384a;
-  --wt-accent: #a9cddd;
-}
-@media (prefers-color-scheme: dark) {
-  .panel:not([data-style='cyber']), .hint:not([data-style='cyber']), .pause-status:not([data-style='cyber']), .selection-toolbar:not([data-style='cyber']) {
-    --wt-surface: #182534;
-    --wt-ink: #dce7ef;
-    --wt-muted: #a6b6c4;
-    --wt-border: #3a4c5d;
-    --wt-soft: #2a4053;
-    --wt-accent: #bad5e5;
-  }
-}
-.panel, .panel[data-style], .hint, .hint[data-style], .selection-toolbar, .selection-toolbar[data-style] {
-  color: var(--wt-ink);
-  background-color: var(--wt-surface);
-  border-color: var(--wt-border);
-  box-shadow: 0 8px 24px #06101e24;
-}
-.panel[data-style='cyber'], .hint[data-style='cyber'] { background-image: none; }
-.panel[data-style='glass'], .hint[data-style='glass'], .selection-toolbar[data-style='glass'] {
-  background-color: color-mix(in srgb, var(--wt-surface) 94%, transparent);
-}
-.panel .panel-header { gap: 8px; padding: 10px 14px 0; border: 0; }
-.panel .panel-title, .panel[data-style] .panel-title {
-  color: var(--wt-muted); font-size: 11px; line-height: 18px; letter-spacing: 0; text-transform: none;
-}
-.panel .panel-body { padding: 10px 14px; }
+.selection-toolbar button[data-action='translate']:disabled { color: var(--gcn-fg-disabled); background: var(--gcn-bg-disabled); border-color: var(--gcn-border); }
+.selection-toolbar .toolbar-close { padding: 0 6px; background: transparent; border: 0; }
+.toolbar-announcement, .panel-announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+.panel-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px 0; font-weight: 600; }
+.panel-title { min-width: 0; overflow-wrap: anywhere; color: var(--wt-muted); font-size: 12px; line-height: 18px; }
+.panel-close { flex: none; min-width: var(--gcn-control-sm); min-height: var(--gcn-control-sm); padding: 2px 6px; font: inherit; color: inherit; cursor: pointer; background: transparent; border: 0; border-radius: var(--gcn-radius); }
+.panel-close:hover { background: var(--gcn-invisible-hover-bg); }
+.panel-body { padding: 10px 14px; overflow-wrap: anywhere; }
 .panel-body:empty, .panel-actions:empty { display: none; }
-.panel .panel-target { font-size: 14px; line-height: 1.6; text-wrap: pretty; }
-.panel .panel-source, .panel[data-style] .panel-source { color: var(--wt-muted); }
-.panel details.panel-source, .panel[data-style] details.panel-source {
-  padding: 0; border: 0; background: transparent; font-size: 11px;
-}
-.panel[data-style] .panel-source summary { color: var(--wt-muted); }
-.panel .panel-actions { gap: 10px; padding: 0 14px 10px; }
-.panel .panel-actions button, .panel[data-style] .panel-actions button,
-.panel .panel-actions button.panel-copy, .panel[data-style] .panel-actions button.panel-copy {
-  padding: 2px 0; color: var(--wt-accent); background: transparent; border-color: transparent; font-weight: 500;
-}
+.panel-source { color: var(--wt-muted); font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.panel-source + .panel-target { margin-top: 8px; }
+.panel-target { color: inherit; font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; text-wrap: pretty; }
+.panel-note { margin-top: 8px; font-size: 12.5px; line-height: 1.6; color: var(--wt-muted); white-space: pre-wrap; }
+details.panel-source { margin-top: 10px; padding: 0; border: 0; background: transparent; font-size: 12px; }
+.panel-source summary { cursor: pointer; font-weight: 500; user-select: none; min-height: var(--gcn-control-sm); }
+details.panel-source > div { margin-top: 6px; }
+.panel-source details { font-size: 12px; }
+.panel-status { padding: 10px 14px; color: var(--wt-muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.panel-status-error { color: var(--gcn-danger-fg); }
+.panel-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 0 14px 10px; }
+.panel-actions button { min-height: var(--gcn-control-sm); padding: 2px 0; font: inherit; font-size: 12px; color: var(--wt-accent); cursor: pointer; background: transparent; border: 1px solid transparent; border-radius: var(--gcn-radius); font-weight: 500; }
+.panel-actions button:hover { background: var(--gcn-invisible-hover-bg); }
 .panel-more { margin-left: auto; color: var(--wt-muted); font-size: 12px; }
-.panel-more summary { cursor: pointer; list-style: none; min-width: 24px; min-height: 24px; text-align: center; }
+.panel-more summary { cursor: pointer; list-style: none; min-width: var(--gcn-control-sm); min-height: var(--gcn-control-sm); text-align: center; }
 .panel-more summary::-webkit-details-marker { display: none; }
 .panel-more > div { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 6px; }
 .panel-mascot { width: 24px; height: 24px; border-radius: 6px; flex: none; }
 .panel.is-feedback .panel-actions { padding-top: 5px; padding-left: 46px; }
-.selection-toolbar button[data-action='translate'], .selection-toolbar[data-style] button[data-action='translate'] {
-  color: var(--wt-accent); background: var(--wt-soft); border-color: var(--wt-border);
-}
-.pause-status, .pause-status[data-style] {
-  --wt-notice-scale: 1;
-  align-items: flex-end;
-  gap: calc(8px / var(--wt-notice-scale));
-  padding: 0; border: 0; background: transparent; box-shadow: none; backdrop-filter: none;
-}
-.notice-mascot {
-  width: calc(40px / var(--wt-notice-scale)); height: calc(40px / var(--wt-notice-scale));
-  flex: none; border-radius: calc(10px / var(--wt-notice-scale));
-}
-.notice-speech {
-  position: relative; flex: 0 1 auto; min-width: 0; box-sizing: border-box;
-  width: calc(176px / var(--wt-notice-scale));
-  color: var(--wt-ink); background: var(--wt-surface); border: 1px solid var(--wt-border);
-  border-radius: calc(12px / var(--wt-notice-scale)); box-shadow: 0 6px 18px #06101e24;
-}
-.notice-speech::before {
-  content: ''; position: absolute; left: calc(-4px / var(--wt-notice-scale)); top: 60%;
-  width: calc(7px / var(--wt-notice-scale)); height: calc(7px / var(--wt-notice-scale));
-  transform: rotate(45deg); background: var(--wt-surface);
-  border-left: 1px solid var(--wt-border); border-bottom: 1px solid var(--wt-border);
-}
-.pause-status[data-side='right'] .notice-speech::before {
-  left: auto; right: calc(-4px / var(--wt-notice-scale)); transform: rotate(225deg);
-}
-.pause-status .pause-resume {
-  box-sizing: border-box; width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
-  padding: calc(10px / var(--wt-notice-scale)) calc(28px / var(--wt-notice-scale)) calc(10px / var(--wt-notice-scale)) calc(10px / var(--wt-notice-scale));
-  font: inherit; font-size: calc(12px / var(--wt-notice-scale)); line-height: 1.5;
-  color: var(--wt-ink); background: transparent; border: 0; text-align: start;
-}
+.error-details { min-width: 0; font-size: 12px; line-height: 1.5; color: var(--wt-muted); }
+.error-details > summary { cursor: pointer; width: fit-content; min-height: var(--gcn-control-sm); }
+.error-reason { margin-top: 4px; max-height: 6em; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; user-select: text; }
+.panel-error-details { margin: 0 0 8px; }
+.notice-error-details { margin: 0 calc(11px / var(--wt-notice-scale)) calc(8px / var(--wt-notice-scale)); font-size: calc(11px / var(--wt-notice-scale)); }
+.pause-status { --wt-notice-scale: 1; position: fixed; left: 16px; bottom: 16px; z-index: 2147483647; display: flex; align-items: flex-end; gap: calc(8px / var(--wt-notice-scale)); max-width: min(360px, calc(100vw - 32px)); padding: 0; border: 0; background: transparent; box-shadow: none; overflow-wrap: anywhere; pointer-events: auto; }
+.notice-mascot { width: calc(40px / var(--wt-notice-scale)); height: calc(40px / var(--wt-notice-scale)); flex: none; border-radius: calc(10px / var(--wt-notice-scale)); }
+.notice-speech { position: relative; flex: 0 1 auto; min-width: 0; box-sizing: border-box; width: calc(176px / var(--wt-notice-scale)); color: var(--wt-ink); background: var(--wt-surface); border: 1px solid var(--wt-border); border-radius: calc(12px / var(--wt-notice-scale)); box-shadow: var(--gcn-shadow-overlay); }
+.notice-speech::before { content: ''; position: absolute; left: calc(-4px / var(--wt-notice-scale)); top: 60%; width: calc(7px / var(--wt-notice-scale)); height: calc(7px / var(--wt-notice-scale)); transform: rotate(45deg); background: var(--wt-surface); border-left: 1px solid var(--wt-border); border-bottom: 1px solid var(--wt-border); }
+.pause-status[data-side='right'] .notice-speech::before { left: auto; right: calc(-4px / var(--wt-notice-scale)); transform: rotate(225deg); }
+.pause-status .pause-resume { box-sizing: border-box; width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: calc(10px / var(--wt-notice-scale)) calc(28px / var(--wt-notice-scale)) calc(10px / var(--wt-notice-scale)) calc(10px / var(--wt-notice-scale)); font: inherit; font-size: calc(12px / var(--wt-notice-scale)); line-height: 1.5; color: var(--wt-ink); background: transparent; border: 0; text-align: start; cursor: pointer; }
 .pause-status .pause-resume:disabled { cursor: default; }
-.pause-status .pause-reason { color: inherit; }
+.pause-reason { color: inherit; }
 .notice-link { color: var(--wt-accent); font-size: calc(11px / var(--wt-notice-scale)); }
-.notice-close {
-  position: absolute; right: calc(3px / var(--wt-notice-scale)); top: calc(3px / var(--wt-notice-scale));
-  width: calc(24px / var(--wt-notice-scale)); height: calc(24px / var(--wt-notice-scale)); padding: 0;
-  color: var(--wt-muted); font: inherit; background: transparent; border: 0; border-radius: 5px; cursor: pointer;
-}
-.notice-close:focus-visible { outline: 2px solid var(--wt-accent); outline-offset: 1px; }
-@media (prefers-reduced-transparency: reduce) {
-  .panel[data-style='glass'], .hint[data-style='glass'], .selection-toolbar[data-style='glass'] { background: var(--wt-surface); }
-}
-@media (forced-colors: active) {
-  .panel, .panel[data-style], .hint, .hint[data-style], .selection-toolbar, .selection-toolbar[data-style], .notice-speech {
-    --wt-ink: CanvasText; --wt-muted: CanvasText; --wt-accent: LinkText;
-    color: CanvasText; background: Canvas; border: 1px solid ButtonText; box-shadow: none;
-  }
-  .notice-speech::before { display: none; }
-}
+.notice-close { position: absolute; right: calc(3px / var(--wt-notice-scale)); top: calc(3px / var(--wt-notice-scale)); width: calc(24px / var(--wt-notice-scale)); height: calc(24px / var(--wt-notice-scale)); padding: 0; color: var(--wt-muted); font: inherit; background: transparent; border: 0; border-radius: 5px; cursor: pointer; }
+@media (forced-colors: active) { .notice-speech::before { display: none; } }
 `
 
 const GAP = 8
@@ -602,6 +187,7 @@ export function createTranslationPanel(): TranslationPanel {
   host.setAttribute('data-wt-root', '')
   host.style.cssText =
     'all: initial !important; position: fixed !important; left: 0 !important; top: 0 !important; width: 0 !important; height: 0 !important; z-index: 2147483647 !important; pointer-events: none !important; display: none !important; contain: style !important;'
+  applySurfacePreferences(host, DEFAULT_SURFACE_PREFERENCES)
   const shadow = host.attachShadow({ mode: 'closed' })
   const style = document.createElement('style')
   style.textContent = PANEL_CSS
@@ -776,12 +362,14 @@ export function createTranslationPanel(): TranslationPanel {
   let copyArmed = false
   let copyResultTimer: ReturnType<typeof setTimeout> | undefined
   let pendingRaf = 0
+  let returnFocus: HTMLElement | undefined
   const resizeObserver =
     typeof ResizeObserver === 'function'
       ? new ResizeObserver(() => {
-          if (pendingRaf !== 0 || (state !== 'panel' && state !== 'toolbar')) return
+          if (pendingRaf !== 0 || document.hidden || (state !== 'panel' && state !== 'toolbar')) return
           pendingRaf = requestAnimationFrame(() => {
             pendingRaf = 0
+            if (document.hidden) return
             if (state === 'panel') positionPanel()
             else if (state === 'toolbar') positionElement(toolbar, 6)
           })
@@ -1065,8 +653,19 @@ export function createTranslationPanel(): TranslationPanel {
     if ((next === 'panel' || next === 'hint' || next === 'toolbar') && floatingEntry?.isMenuOpen() === true) {
       floatingEntry.closeMenu()
     }
+    const fromHidden = state === 'hidden'
     const previousTarget = layoutTarget()
     state = next
+    if (fromHidden && next !== 'hidden') {
+      const active = deepActiveElement()
+      returnFocus = active instanceof HTMLElement && active !== host ? active : undefined
+    } else if (next === 'hidden') {
+      returnFocus = undefined
+      if (pendingRaf !== 0) {
+        cancelAnimationFrame(pendingRaf)
+        pendingRaf = 0
+      }
+    }
     syncHostAttachment()
     panel.style.display = next === 'panel' ? '' : 'none'
     hint.style.display = next === 'hint' ? '' : 'none'
@@ -1110,10 +709,10 @@ export function createTranslationPanel(): TranslationPanel {
   }
 
   function schedulePausePosition(): void {
-    if (disposed || !pauseShown || pauseRaf !== 0) return
+    if (disposed || document.hidden || !pauseShown || pauseRaf !== 0) return
     pauseRaf = requestAnimationFrame(() => {
       pauseRaf = 0
-      if (disposed || !pauseShown) return
+      if (disposed || document.hidden || !pauseShown) return
       if (floatingEntry?.isMenuOpen() === true) {
         pauseStatus.style.display = 'none'
         floatingEntry.setNoticeVisible(false)
@@ -1290,8 +889,10 @@ export function createTranslationPanel(): TranslationPanel {
     literalButton.textContent = labels.literal
   }
 
-  function close(options?: { keepFloatingMenu?: boolean }): void {
+  function close(options?: { keepFloatingMenu?: boolean }, restoreFocus = false): void {
     clearCopyResultTimer()
+    const owned = host === document.activeElement
+    const restoreTarget = returnFocus
     if (options?.keepFloatingMenu !== true) floatingEntry?.closeMenu()
     if (state === 'hidden') return
     onHintOpen = () => undefined
@@ -1305,6 +906,9 @@ export function createTranslationPanel(): TranslationPanel {
     resizeObserver?.unobserve(panel)
     resizeObserver?.unobserve(toolbar)
     onClose()
+    if (restoreFocus && owned && restoreTarget?.isConnected) {
+      restoreTarget.focus({ preventScroll: true })
+    }
   }
 
   function onModalClose(event: Event): void {
@@ -1314,14 +918,15 @@ export function createTranslationPanel(): TranslationPanel {
   }
 
   function onGlobalKeydown(event: KeyboardEvent): void {
+    if (event.isComposing || event.ctrlKey || event.altKey || event.shiftKey || event.metaKey) return
     const menu = floatingEntry?.isMenuOpen() === true
     if (event.key === 'Escape' && (state !== 'hidden' || menu)) {
-      if (modalHost !== undefined) {
+      if (modalHost !== undefined || isEventInside(event)) {
         event.preventDefault()
         event.stopPropagation()
       }
       if (menu) floatingEntry?.closeMenu(true)
-      if (state !== 'hidden') close()
+      if (state !== 'hidden') close(undefined, !menu)
     }
   }
   function dismissOutside(event: Event): void {
@@ -1337,24 +942,46 @@ export function createTranslationPanel(): TranslationPanel {
     dismissOutside(event)
   }
   function onGlobalResize(): void {
+    if (document.hidden) return
     schedulePausePosition()
     if (state === 'panel') positionPanel()
     else if (state === 'hint') positionElement(hint, 6)
     else if (state === 'toolbar') positionElement(toolbar, 6)
     else floatingEntry?.reposition()
   }
+  function onVisibilityChange(): void {
+    syncSurfaceVisibility(host)
+    if (document.hidden) {
+      clearCopyResultTimer()
+      copyArmed = false
+      copyResultButton.textContent = labels.copy
+      panelAnnouncement.textContent = ''
+      if (pendingRaf !== 0) {
+        cancelAnimationFrame(pendingRaf)
+        pendingRaf = 0
+      }
+      if (pauseRaf !== 0) {
+        cancelAnimationFrame(pauseRaf)
+        pauseRaf = 0
+      }
+      return
+    }
+    onGlobalResize()
+  }
   document.addEventListener('keydown', onGlobalKeydown, true)
   document.addEventListener('pointerdown', onGlobalPointerDown, true)
   document.addEventListener('scroll', onGlobalScroll, true)
+  document.addEventListener('visibilitychange', onVisibilityChange)
   window.addEventListener('resize', onGlobalResize)
   function removeGlobalListeners(): void {
     document.removeEventListener('keydown', onGlobalKeydown, true)
     document.removeEventListener('pointerdown', onGlobalPointerDown, true)
     document.removeEventListener('scroll', onGlobalScroll, true)
+    document.removeEventListener('visibilitychange', onVisibilityChange)
     window.removeEventListener('resize', onGlobalResize)
   }
 
-  closeButton.addEventListener('click', () => close())
+  closeButton.addEventListener('click', () => close(undefined, true))
   copyResultButton.addEventListener('click', () => {
     copyArmed = true
     onCopyResult(resultText)
@@ -1386,12 +1013,13 @@ export function createTranslationPanel(): TranslationPanel {
     applyState(state)
   })
   dismissProactiveButton.addEventListener('click', () => {
-    close()
+    close(undefined, true)
     onDismissProactive()
   })
-  hint.addEventListener('click', () => {
+  hint.addEventListener('click', (event) => {
     applyState('panel')
     onHintOpen()
+    if (event.detail === 0) closeButton.focus({ preventScroll: true })
   })
   toolbar.addEventListener('pointerdown', (event) => {
     event.preventDefault()
@@ -1418,16 +1046,23 @@ export function createTranslationPanel(): TranslationPanel {
       toolbarAction?.(action)
     })
   }
-  toolbarClose.addEventListener('click', () => close())
+  toolbarClose.addEventListener('click', () => close(undefined, true))
+
+  function setStyle(style: UiStyle): void {
+    currentUiStyle = style
+    applySurfacePreferences(host, { uiStyle: style })
+    for (const el of [panel, hint, pauseStatus, toolbar]) {
+      if (style === 'classic') el.removeAttribute('data-style')
+      else el.setAttribute('data-style', style)
+    }
+    floatingEntry?.setStyle(style)
+  }
 
   return {
-    setStyle(style) {
-      currentUiStyle = style
-      for (const el of [panel, hint, pauseStatus, toolbar]) {
-        if (style === 'classic') el.removeAttribute('data-style')
-        else el.setAttribute('data-style', style)
-      }
-      floatingEntry?.setStyle(style)
+    setStyle,
+    setPreferences(preferences) {
+      applySurfacePreferences(host, preferences)
+      setStyle(preferences.uiStyle)
     },
     setLabels,
     showToolbar(nextAnchor, configured, onAction) {
@@ -1584,7 +1219,7 @@ export function createTranslationPanel(): TranslationPanel {
       onCopyResult = handler
     },
     setCopyResultFeedback(copied) {
-      if (state !== 'panel' || !actions.contains(copyResultButton) || !copyArmed) return
+      if (document.hidden || state !== 'panel' || !actions.contains(copyResultButton) || !copyArmed) return
       clearCopyResultTimer()
       const message = copied ? labels.copied : labels.copyFailed
       // 反馈写在按钮上；读屏通过隐藏的 live 区域得到同一条消息，不在状态区重复显示

@@ -52,7 +52,10 @@ import type { LiveTranslationWatcher } from './live-translation'
 import { createSubtitleTranslation } from './subtitles'
 import { DEFAULT_INPUT_REPLACE_KEY } from './input-hotkey'
 import { createInputTranslation, type InputTranslationWatcher } from './input-translation'
-import { currentYouTubeInputFrameTopUrl } from './input-frame'
+import { createDocumentInputTranslation, type DocumentInputWatcher } from './document-input'
+import type { DocumentEditorRequest, DocumentEditorResult } from './document-editor'
+import { currentInputFrameTopUrl, inputFrameUrl } from './input-frame'
+import { DEFAULT_SURFACE_PREFERENCES, type SurfacePreferences } from './ui-surface'
 
 const SINGLETON_KEY = Symbol.for('webTranslate.instance')
 const MODES_RETRY_MS = 1000
@@ -95,6 +98,7 @@ function createInstance(inputOnly = false): Instance {
   let reading: { dispose(): void; reset(): void } | undefined
   let subtitles: LiveTranslationWatcher | undefined
   let inputTranslation: InputTranslationWatcher | undefined
+  let documentInput: DocumentInputWatcher | undefined
   let disposed = false
   let suspended = false
   let pageRestored = false
@@ -110,6 +114,7 @@ function createInstance(inputOnly = false): Instance {
   let modesRetries = 0
   let modesRetryTimer: ReturnType<typeof setTimeout> | undefined
   let uiLanguage: UiLanguage = resolveUiLanguage('auto', languageEnvironment())
+  let surfacePreferences: SurfacePreferences = { ...DEFAULT_SURFACE_PREFERENCES, language: uiLanguage }
   let floatingSuppressed = false
   let floatingEpoch = 0
   let copyResultEpoch = 0
@@ -180,9 +185,9 @@ function createInstance(inputOnly = false): Instance {
 
   function inputFrameLiveAllowed(): boolean {
     if (config === undefined || !config.inputTranslationEnabled) return false
-    const topUrl = currentYouTubeInputFrameTopUrl()
+    const topUrl = currentInputFrameTopUrl()
     if (topUrl === undefined) return false
-    const frameUrl = location.href
+    const frameUrl = inputFrameUrl(topUrl, location.href) ?? location.href
     if (!isSiteScopeAllowed(topUrl, config) || !isSiteScopeAllowed(frameUrl, config)) return false
     if (isExcludedSite(topUrl, config.excludedHosts) || isExcludedSite(frameUrl, config.excludedHosts)) return false
     if (isSensitivePage(topUrl) || isSensitivePage(frameUrl)) return false
@@ -275,6 +280,7 @@ function createInstance(inputOnly = false): Instance {
       restore: t('wtRestore'),
       resume: t('wtResume'),
       settings: t('wtOpenSettings'),
+      textTranslate: t('textTranslate'),
       configure: t('wtAssistConfigure'),
       fixedOn: t('wtFloatingFixedOn'),
       modelOn: t('wtFloatingModelOn'),
@@ -363,8 +369,8 @@ function createInstance(inputOnly = false): Instance {
         .finally(finish)
       return
     }
-    if (action === 'settings') {
-      void sendMessage({ type: 'wt:open-options' })
+    if (action === 'settings' || action === 'text-window') {
+      void sendMessage(action === 'settings' ? { type: 'wt:open-options' } : { type: 'wt:open-text-window' })
         .then((reply) => {
           if (!floatingLive(token, page, identity)) return
           if (!reply.ok) floatingError = reply.error || t('wtFloatingActionFailed')
@@ -592,6 +598,8 @@ function createInstance(inputOnly = false): Instance {
         void sendTranslationMessage({ type: 'wt:cancel-assist', requestId })
       },
       t: (key, params) => t(key, params),
+      appearance: () => surfacePreferences,
+      iconUrl: browser.runtime.getURL('/icon/48.png' as Parameters<typeof browser.runtime.getURL>[0]),
       ...(inputOnly
         ? {}
         : {
@@ -605,6 +613,35 @@ function createInstance(inputOnly = false): Instance {
             },
           }),
     })
+    if (documentInput === undefined) {
+      documentInput = createDocumentInputTranslation({
+        enabled: inputTranslationOn,
+        translate: (texts, requestId) =>
+          sendMessage({ type: 'wt:translate', mode: 'input', texts, requestId, manualInput: true }),
+        cancel: (requestId) => {
+          void sendTranslationMessage({ type: 'wt:cancel-assist', requestId })
+        },
+        editor: async (request: DocumentEditorRequest): Promise<DocumentEditorResult> => {
+          const message: TranslationMessage =
+            request.action === 'read'
+              ? { type: 'wt:document-input', elementId: request.elementId, action: 'read' }
+              : {
+                  type: 'wt:document-input',
+                  elementId: request.elementId,
+                  action: 'replace',
+                  expectedText: request.expectedText ?? '',
+                  text: request.text ?? '',
+                }
+          const reply = await sendMessage(message)
+          return reply.ok && reply.editor !== undefined ? reply.editor : { status: 'failed' }
+        },
+        t: (key, params) => t(key, params),
+        appearance: () => surfacePreferences,
+        iconUrl: browser.runtime.getURL('/icon/48.png' as Parameters<typeof browser.runtime.getURL>[0]),
+        sourceLanguage: () => config?.inputSourceLanguage ?? 'auto',
+        targetLanguage: () => config?.inputTargetLanguage ?? 'en',
+      })
+    }
   }
 
   function disposeLiveFeatures(): void {
@@ -612,6 +649,8 @@ function createInstance(inputOnly = false): Instance {
     subtitles = undefined
     inputTranslation?.dispose()
     inputTranslation = undefined
+    documentInput?.dispose()
+    documentInput = undefined
   }
 
   function disposeWatchers(): void {
@@ -640,9 +679,11 @@ function createInstance(inputOnly = false): Instance {
       subtitles = undefined
     }
     if (inputTranslationOn()) ensureInputTranslation()
-    else if (inputTranslation !== undefined) {
-      inputTranslation.dispose()
+    else {
+      inputTranslation?.dispose()
       inputTranslation = undefined
+      documentInput?.dispose()
+      documentInput = undefined
     }
     if (!selectionOn() && !proactiveOn()) cancelAssist()
     tracker.refresh()
@@ -836,6 +877,7 @@ function createInstance(inputOnly = false): Instance {
       if (disposed || suspended || epoch !== reloadEpoch) return false
       const previousUiLanguage = uiLanguage
       uiLanguage = resolveUiLanguage(nextSettings.uiLanguage, languageEnvironment())
+      surfacePreferences = { uiStyle: nextSettings.uiStyle, theme: nextSettings.theme, language: uiLanguage }
       if (previousUiLanguage !== uiLanguage) {
         disposeLiveFeatures()
       }
@@ -928,7 +970,7 @@ function createInstance(inputOnly = false): Instance {
         : undefined
       config = nextConfig
       modes = nextModes
-      panel.setStyle(nextSettings.uiStyle)
+      panel.setPreferences(surfacePreferences)
       // 词条表内容变化（词典开关/自定义词典编辑）后强制重扫：恢复旧替换再用新表写。
       if (nextModes.fixed && hadFixedEntries !== undefined && !sameFixedEntries(nextModes.fixedEntries, hadFixedEntries)) {
         fixedActive = false
@@ -1034,11 +1076,30 @@ function createInstance(inputOnly = false): Instance {
         case 'wt:translate-input': {
           if (inputTranslationOn()) ensureInputTranslation()
           const accepted = inputTranslationOn() && inputTranslation?.translateAndReplace() === true
-          sendResponse(
-            accepted
-              ? { ok: true }
-              : { ok: false, error: t('wtInputUnavailable') },
-          )
+          if (accepted) {
+            sendResponse({ ok: true } satisfies ContentTranslationReply<'wt:translate-input'>)
+            return
+          }
+          if (!inputTranslationOn() || documentInput === undefined) {
+            sendResponse(
+              { ok: false, error: t('wtInputUnavailable') } satisfies ContentTranslationReply<'wt:translate-input'>,
+            )
+            return
+          }
+          void documentInput
+            .translate()
+            .then((handled) => {
+              sendResponse(
+                handled
+                  ? ({ ok: true } satisfies ContentTranslationReply<'wt:translate-input'>)
+                  : ({ ok: false, error: t('wtInputUnavailable') } satisfies ContentTranslationReply<'wt:translate-input'>),
+              )
+            })
+            .catch(() => {
+              sendResponse(
+                { ok: false, error: t('wtInputUnavailable') } satisfies ContentTranslationReply<'wt:translate-input'>,
+              )
+            })
         }
       }
     })
@@ -1121,7 +1182,8 @@ function createInstance(inputOnly = false): Instance {
     void reload()
   })
   const unwatchSettings = watchSettings((next) => {
-    panel.setStyle(next.uiStyle)
+    surfacePreferences = { ...surfacePreferences, uiStyle: next.uiStyle, theme: next.theme }
+    panel.setPreferences(surfacePreferences)
     disposeLiveFeatures()
     if (!next.enabled) {
       pageRestored = false
@@ -1193,7 +1255,7 @@ function createInstance(inputOnly = false): Instance {
 export async function startPageTranslation(options: StartPageTranslationOptions = {}): Promise<void> {
   const inputOnly = options.inputOnly === true
   if (inputOnly) {
-    if (window.top === window || currentYouTubeInputFrameTopUrl() === undefined) return
+    if (window.top === window || currentInputFrameTopUrl() === undefined) return
   } else if (window.top !== window) {
     return
   }

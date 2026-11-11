@@ -25,13 +25,21 @@ test.describe('弹出页', () => {
     await expect.poll(async () => enabledOf(await extension.readSettings())).toBe(true)
   })
 
-  test('没有未翻译一行与收集开关', async ({ extension }) => {
+  test('更多默认收起并保留展开偏好；没有未翻译一行与收集开关', async ({ extension }) => {
     await extension.setSettings({ uiLanguage: 'zh-CN' })
     const { page } = extension
     await expect(page.getByRole('switch', { name: '启用', exact: true })).toBeVisible()
+    const more = page.locator('.popup-more')
+    await expect(more).toHaveJSProperty('open', false)
+    await expect(page.locator('[data-test="wt-popup-auto-interaction"] [role="switch"]')).toBeHidden()
+    await more.locator('summary').click()
+    await expect(more).toHaveJSProperty('open', true)
     await expect(page.locator('[data-test="wt-popup-auto-interaction"] [role="switch"]')).toBeVisible()
     await expect(page.locator('[data-test="wt-popup-floating"] [role="switch"]')).toBeVisible()
     await expect(page.getByText('收集未翻译')).toHaveCount(0)
     await expect(page.locator('[data-test="untranslated"]')).toHaveCount(0)
+    await page.reload()
+    await expect(more).toHaveJSProperty('open', true)
+    await expect(page.locator('[data-test="wt-popup-floating"] [role="switch"]')).toBeVisible()
   })
 })

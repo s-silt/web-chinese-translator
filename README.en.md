@@ -39,7 +39,7 @@ Page text ──► Authorized site + Configured endpoint ──► Your model e
 
 1. Install on Chrome from the [Chrome Web Store](https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe) for automatic updates.
 2. Or install manually: download `web-chinese-translator-<version>-chrome.zip` from [Releases](https://github.com/s-silt/web-chinese-translator/releases/latest) and extract it, open `chrome://extensions`, enable "Developer mode", click "Load unpacked", and select the extracted folder.
-3. Click "Set up in 1 minute" in the popup: choose a provider preset, enter your API Key and model name, and click "Save & connect". The connection badge shows latency or the reason for failure.
+3. Click "Configure model" or "Model settings" in the popup: choose a provider preset, enter your API Key and model name, and click "Save & connect". The connection badge shows latency or the reason for failure.
 4. Open a supported English webpage and click "Translate this page" in the popup. Enable "Auto-translate this site" for sites you visit often.
 
 For Edge, use `-edge.zip` and load it at `edge://extensions`; for Firefox, install `-firefox.xpi`. When updating a manually installed version, replace the files in the original directory and click "Reload"—changing directories will lose your configuration. Each release includes `SHA256SUMS.txt` for verification.
@@ -51,13 +51,17 @@ For Edge, use `-edge.zip` and load it at `edge://extensions`; for Firefox, insta
 | Never call a model on a site | "Exclude this site" in the popup (local dictionaries still work) |
 | Translate selected text | Select text and right-click "Translate selected text", or press `Alt+S` |
 | Translate drafts in input fields or search boxes | Enable "Input translation" in Settings; optionally preview and press the replace key (default `Tab`, customizable in Settings) or auto-replace after typing stops, or press `Alt+Y` (macOS `Command+Shift+Y`) to replace directly |
+| Translate an online document editor | Enable Input translation and grant site access, focus the editor, then press `Alt+Y` to preview; recognized safe plain-text structures support replacement and restoration, while complex formatting is preview/copy only |
+| Paste arbitrary text or Markdown | Use Text translation in the popup or webpage floating menu, up to 6000 characters per request; it reuses the existing model configuration and does not restore drafts after the window closes |
 | Long article stops translating midway | Raise "Per-page limit" in Settings, or click "Resume translation" |
 | Add or override UI dictionary entries | "Sites & dictionaries" in Settings; for GitHub, use "GitHub rules" |
 | Full documentation | [Usage Guide](docs/USAGE.md) (Chinese) |
 
+In-place replacement is currently unsupported in Word for the web and desktop Word; use the text translation window to paste text instead. Editor compatibility depends on the version and document structure. Restoration checks current content and does not overwrite newer drafts with an old replacement record.
+
 ## Default Behavior & Boundaries
 
-- **Model translation is off by default.** No model endpoint or API key is built in; content is sent to your configured endpoint only for features you enable and on sites you authorize, with charges governed by your agreement with the provider.
+- **Model translation is off by default.** Provider endpoint presets are available, but you configure the endpoint and supply your own credentials. Webpage features send content only on enabled, authorized sites; the text window sends typed or pasted text only when you request a translation. Charges are governed by your agreement with the provider.
 - **Per-page limit.** Defaults to about 50,000 characters per page, adjustable in Settings from 20,000 to 200,000 or Unlimited; once reached, remaining content stays in the original language.
 - **UI dictionaries work offline.** UI entries for popular sites and GitHub are replaced locally; the GitHub dictionary includes both Simplified and Traditional Chinese sets—see [Usage Guide](docs/USAGE.md#github-汉化) (Chinese).
 - **Sensitive pages are skipped.** Account, payment, mail, and similar pages are not auto-translated, and the popup displays "Skipped"; detection is heuristic and does not guarantee full coverage.

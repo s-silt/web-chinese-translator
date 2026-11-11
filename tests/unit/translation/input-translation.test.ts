@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { translateMessage } from '../../../src/i18n'
 import zhCN from '../../../src/i18n/zh-CN'
+import zhTW from '../../../src/i18n/zh-TW'
 import {
   isChatEditorCandidate,
   isChatPlainEditor,
@@ -3236,7 +3237,7 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(2)
     expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('EN:快捷键模式的草稿')
-    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')).toBeNull()
+    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')?.textContent).toBe(zhCN.wtInputPreviewHint)
     await vi.advanceTimersByTimeAsync(5000)
     expect(textarea.value).toBe('快捷键模式的草稿')
 
@@ -3246,3 +3247,253 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
 
 
 
+
+describe('文档编辑器根节点不走普通输入路径', () => {
+  it('TinyMCE/CKEditor 可编辑根返回 false，不发网络请求也不改 DOM', async () => {
+    document.body.innerHTML = `
+      <div id="tinymce" class="mce-content-body" contenteditable="true"><p>你好</p></div>
+      <div class="ck-editor__editable ck-content" contenteditable="true" role="textbox"><p>第二行</p></div>
+    `
+    const tinymceBody = document.getElementById('tinymce') as HTMLElement
+    const ckEditable = document.querySelector<HTMLElement>('.ck-editor__editable')!
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: texts.map((t) => `EN:${t}`) }))
+    const watcher = createInputTranslation({ translate, cancel: vi.fn(), t: (key) => zhCN[key] })
+
+    focusEditable(tinymceBody)
+    expect(watcher.translateAndReplace()).toBe(false)
+    focusEditable(ckEditable)
+    expect(watcher.translateAndReplace()).toBe(false)
+    trustedInput(tinymceBody, '你好\n新行')
+    trustedInput(ckEditable, '第二行\n新行')
+    const afterTyping = document.body.innerHTML
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(translate).not.toHaveBeenCalled()
+    expect(isPopoverOpen()).toBe(false)
+    expect(document.body.innerHTML).toBe(afterTyping)
+    watcher.dispose()
+  })
+})
+
+describe('外观、标题、焦点与生命周期', () => {
+  it('应用外观偏好、图标、对话框语义与源→目标标题', async () => {
+    const input = document.createElement('textarea')
+    document.body.append(input)
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
+    const watcher = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k) => zhTW[k],
+      appearance: () => ({ uiStyle: 'glass', theme: 'dark', language: 'zh-TW' }),
+      iconUrl: 'chrome-extension://test/icon.png',
+      sourceLanguage: () => 'ja',
+      targetLanguage: () => 'ko',
+    })
+    focusEditable(input)
+    trustedInput(input, 'こんにちは')
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+
+    const host = document.querySelector<HTMLElement>('[data-wt-root]')!
+    expect(host.dataset.style).toBe('glass')
+    expect(host.dataset.theme).toBe('dark')
+    expect(host.lang).toBe('zh-TW')
+    expect(host.style.getPropertyValue('color-scheme')).toBe('dark')
+    expect(host.style.getPropertyPriority('color-scheme')).toBe('important')
+
+    const shadow = popoverShadow()!
+    const popover = shadow.querySelector('.popover')!
+    expect(popover.getAttribute('role')).toBe('dialog')
+    expect(popover.getAttribute('aria-modal')).toBe('false')
+    expect(popover.getAttribute('aria-labelledby')).toBe('wt-input-title')
+
+    const logo = shadow.querySelector<HTMLImageElement>('.input-logo')!
+    expect(logo).not.toBeNull()
+    expect(logo.getAttribute('src')).toBe('chrome-extension://test/icon.png')
+    expect(logo.getAttribute('alt')).toBe('')
+
+    expect(shadow.querySelector('#wt-input-title')!.textContent).toBe(`${zhTW.wtInputTranslation} · 日本語 → 한국어`)
+    watcher.dispose()
+  })
+
+  it('hotkey 模式显示手动提示且不自动替换', async () => {
+    const input = document.createElement('textarea')
+    document.body.append(input)
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
+    const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
+    focusEditable(input)
+    trustedInput(input, '手动提示草稿')
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+    const hint = popoverShadow()?.querySelector('.auto-hint')
+    expect(hint?.textContent).toBe(zhCN.wtInputPreviewHint)
+    expect(input.value).toBe('手动提示草稿')
+    watcher.dispose()
+  })
+
+  it('auto 模式显示倒计时提示且到期自动替换', async () => {
+    const input = document.createElement('textarea')
+    document.body.append(input)
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
+    const watcher = createInputTranslation({
+      translate,
+      cancel: () => undefined,
+      t: (k) => zhCN[k],
+      replaceMode: () => 'auto',
+      autoReplaceDelayMs: () => 1000,
+    })
+    focusEditable(input)
+    trustedInput(input, '自动替换草稿')
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+    const hint = popoverShadow()?.querySelector('.auto-hint')
+    expect(hint?.textContent).toContain('秒后自动替换')
+    expect(hint?.textContent).not.toBe(zhCN.wtInputPreviewHint)
+    expect(input.value).toBe('自动替换草稿')
+    await vi.advanceTimersByTimeAsync(2000)
+    await Promise.resolve()
+    expect(input.value).toBe('EN:自动替换草稿')
+    watcher.dispose()
+  })
+
+  it('浮层持有焦点时关闭归还输入框，焦点不在浮层时不强制聚焦', async () => {
+    const input = document.createElement('textarea')
+    document.body.append(input)
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
+    const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
+    focusEditable(input)
+    const focusSpy = vi.spyOn(input, 'focus')
+    trustedInput(input, '焦点返回草稿')
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+    expect(isPopoverOpen()).toBe(true)
+    const host = document.querySelector<HTMLElement>('[data-wt-root]')!
+    const closeBtn = popoverShadow()!.querySelector<HTMLButtonElement>('button[data-action="close"]')!
+    closeBtn.focus()
+    expect(document.activeElement).toBe(host)
+    const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true, cancelable: true })
+    Object.defineProperty(esc, 'isTrusted', { value: true, configurable: true })
+    closeBtn.dispatchEvent(esc)
+    expect(isPopoverOpen()).toBe(false)
+    expect(document.activeElement).toBe(input)
+    expect(focusSpy).toHaveBeenCalled()
+
+    focusSpy.mockClear()
+    trustedInput(input, '再次焦点草稿')
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+    expect(isPopoverOpen()).toBe(true)
+    expect(document.activeElement).toBe(input)
+    const closeBtn2 = popoverShadow()!.querySelector<HTMLButtonElement>('button[data-action="close"]')!
+    trustedClick(closeBtn2)
+    expect(isPopoverOpen()).toBe(false)
+    expect(document.activeElement).toBe(input)
+    expect(focusSpy).not.toHaveBeenCalled()
+    watcher.dispose()
+  })
+
+  it('旧预览的延迟复制完成不会在新预览显示已复制', async () => {
+    const input = document.createElement('textarea')
+    document.body.append(input)
+    let resolveCopy: ((value: boolean) => void) | undefined
+    const copyGate = new Promise<boolean>((resolve) => {
+      resolveCopy = resolve
+    })
+    vi.mocked(clipboard.copySelectionText).mockImplementationOnce(() => copyGate)
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
+    const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
+    focusEditable(input)
+    trustedInput(input, '第一段草稿')
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+    const copyBtn = popoverShadow()!.querySelector<HTMLButtonElement>('button[data-action="copy"]')!
+    expect(copyBtn.textContent).toBe(zhCN.wtToolbarCopy)
+    trustedClick(copyBtn)
+    trustedInput(input, '第二段全新草稿')
+    await vi.advanceTimersByTimeAsync(650)
+    await Promise.resolve()
+    resolveCopy?.(true)
+    await Promise.resolve()
+    await Promise.resolve()
+    const copyBtn2 = popoverShadow()!.querySelector<HTMLButtonElement>('button[data-action="copy"]')!
+    expect(copyBtn2.textContent).toBe(zhCN.wtToolbarCopy)
+    watcher.dispose()
+  })
+
+  it('页面隐藏取消防抖与在途请求，迟到结果不渲染', async () => {
+    const input = document.createElement('textarea')
+    document.body.append(input)
+    let resolveTranslate: ((value: { ok: true; texts: string[] }) => void) | undefined
+    const translate = vi.fn(
+      (_texts: string[]) =>
+        new Promise<{ ok: true; texts: string[] }>((resolve) => {
+          resolveTranslate = resolve
+        }),
+    )
+    const cancel = vi.fn()
+    const watcher = createInputTranslation({ translate, cancel, t: (k) => zhCN[k] })
+    const setHidden = (value: boolean): void => {
+      Object.defineProperty(document, 'hidden', { value, configurable: true })
+    }
+    try {
+      focusEditable(input)
+      trustedInput(input, '隐藏防抖草稿')
+      setHidden(true)
+      document.dispatchEvent(new Event('visibilitychange'))
+      await vi.advanceTimersByTimeAsync(2000)
+      await Promise.resolve()
+      expect(translate).not.toHaveBeenCalled()
+
+      setHidden(false)
+      document.dispatchEvent(new Event('visibilitychange'))
+      trustedInput(input, '在途隐藏草稿')
+      await vi.advanceTimersByTimeAsync(650)
+      await Promise.resolve()
+      expect(translate).toHaveBeenCalledTimes(1)
+      setHidden(true)
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(cancel).toHaveBeenCalledTimes(1)
+      resolveTranslate?.({ ok: true, texts: ['EN:在途隐藏草稿'] })
+      await Promise.resolve()
+      await Promise.resolve()
+      setHidden(false)
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(isPopoverOpen()).toBe(false)
+    } finally {
+      setHidden(false)
+      document.dispatchEvent(new Event('visibilitychange'))
+      watcher.dispose()
+    }
+  })
+
+  it('隐藏页面取消已排队的自动替换，恢复可见后也不覆盖草稿', async () => {
+    const input = document.createElement('textarea')
+    document.body.append(input)
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
+    const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k], replaceMode: () => 'auto', autoReplaceDelayMs: () => 1000 })
+    const hidden = (value: boolean): void => { Object.defineProperty(document, 'hidden', { value, configurable: true }) }
+    const visibility = vi.spyOn(document, 'visibilityState', 'get')
+    try {
+      focusEditable(input)
+      trustedInput(input, '待替换草稿')
+      await vi.advanceTimersByTimeAsync(650)
+      await Promise.resolve()
+      expect(popoverShadow()?.querySelector('.auto-hint')?.textContent).toContain('秒后自动替换')
+      expect(input.value).toBe('待替换草稿')
+      hidden(true)
+      visibility.mockReturnValue('hidden')
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(isPopoverOpen()).toBe(false)
+      hidden(false)
+      visibility.mockReturnValue('visible')
+      document.dispatchEvent(new Event('visibilitychange'))
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(input.value).toBe('待替换草稿')
+      expect(translate).toHaveBeenCalledTimes(1)
+      expect(isPopoverOpen()).toBe(false)
+    } finally {
+      hidden(false)
+      visibility.mockRestore()
+      watcher.dispose()
+    }
+  })
+})

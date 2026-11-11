@@ -35,6 +35,12 @@ import {
   type SourceLanguage,
   type TargetLanguage,
 } from './target-language'
+import {
+  applySurfacePreferences,
+  DEFAULT_SURFACE_PREFERENCES,
+  SURFACE_CSS,
+  syncSurfaceVisibility,
+} from './ui-surface'
 
 export { isCandidateDraft } from './target-language'
 
@@ -61,7 +67,7 @@ export interface InputTranslationOptions extends Omit<LiveTranslationOptions, 't
 const DEBOUNCE_MS = 600
 
 const RICH_EDITOR_SELECTOR =
-  '.ProseMirror,[data-lexical-editor],[data-slate-editor],.DraftEditor-root,.ql-editor,.ck-editor,.monaco-editor,.cm-editor,.CodeMirror'
+  '.ProseMirror,[data-lexical-editor],[data-slate-editor],.DraftEditor-root,.ql-editor,.ck-editor,.ck-editor__editable,.mce-content-body,.monaco-editor,.cm-editor,.CodeMirror'
 
 const SENSITIVE_AUTOCOMPLETE = /^(?:username|current-password|new-password|one-time-code|cc-[a-z-]+)$/i
 const SENSITIVE_METADATA_PATTERN =
@@ -69,116 +75,24 @@ const SENSITIVE_METADATA_PATTERN =
 
 const PLAIN_EDITABLE_CHILD_TAGS = new Set(['BR', 'DIV', 'P'])
 
-const INPUT_POPOVER_CSS = `
-.popover {
-  box-sizing: border-box;
-  position: fixed;
-  z-index: 2147483647;
-  max-width: min(360px, calc(100vw - 24px));
-  min-width: 200px;
-  padding: 10px 12px;
-  font: 13px/1.5 -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  color: #24374a;
-  background: #f8fafc;
-  border: 1px solid #d4dee8;
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(6, 16, 30, 0.16);
-  pointer-events: auto;
-}
-@media (prefers-color-scheme: dark) {
-  .popover {
-    color: #dce7ef;
-    background: #182534;
-    border-color: #3a4c5d;
-  }
-}
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-.title {
-  font-size: 11px;
-  font-weight: 600;
-  color: #63778a;
-}
-@media (prefers-color-scheme: dark) {
-  .title { color: #a6b6c4; }
-}
-.close {
-  flex: none;
-  padding: 0 4px;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-  background: transparent;
-  border: 0;
-  border-radius: 4px;
-}
-.status {
-  font-size: 13px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-.status.is-error {
-  color: #cf222e;
-  font-size: 12px;
-}
-@media (prefers-color-scheme: dark) {
-  .status.is-error { color: #f85149; }
-}
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-}
-.actions:empty {
-  display: none;
-}
-.actions button {
-  padding: 2px 10px;
-  font: inherit;
-  font-size: 12px;
-  color: #24374a;
-  cursor: pointer;
-  background: transparent;
-  border: 1px solid #d4dee8;
-  border-radius: 6px;
-}
-.actions button[data-action='replace'] {
-  color: #ffffff;
-  background: #1f6feb;
-  border-color: #1f6feb;
-  font-weight: 500;
-}
-@media (prefers-color-scheme: dark) {
-  .actions button {
-    color: #dce7ef;
-    border-color: #3a4c5d;
-  }
-  .actions button[data-action='replace'] {
-    color: #ffffff;
-    background: #1f6feb;
-    border-color: #1f6feb;
-  }
-}
-.popover button:focus-visible {
-  outline: 2px solid #1f6feb;
-  outline-offset: 2px;
-}
-.auto-hint {
-  font-size: 11px;
-  color: #63778a;
-}
-@media (prefers-color-scheme: dark) {
-  .auto-hint { color: #a6b6c4; }
-}
+export const INPUT_POPOVER_CSS = `${SURFACE_CSS}
+.popover { box-sizing: border-box; position: fixed; z-index: 2147483647; max-width: min(400px,calc(100vw - 16px)); min-width: min(240px,calc(100vw - 16px)); max-height: min(480px,calc(100vh - 16px)); overflow: auto; padding: 12px; font: 13px/1.5 var(--gcn-font); color: var(--gcn-fg); background: var(--gcn-surface); border: 1px solid var(--gcn-surface-border); border-radius: var(--gcn-radius-overlay); box-shadow: var(--gcn-shadow-overlay); pointer-events: auto; }
+:host([data-style='glass']) .popover { backdrop-filter: blur(var(--gcn-surface-blur)); -webkit-backdrop-filter: blur(var(--gcn-surface-blur)); }
+.header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.input-logo { width: 24px; height: 24px; flex: none; border-radius: 6px; }
+.title { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
+.close { box-sizing: border-box; flex: none; min-width: var(--gcn-control-sm); min-height: var(--gcn-control-sm); padding: 0 4px; font: inherit; color: var(--gcn-fg-muted); cursor: pointer; background: transparent; border: 1px solid var(--gcn-border); border-radius: var(--gcn-radius); }
+.close:hover { background: var(--gcn-btn-hover-bg); }
+.status { max-height: clamp(48px,40vh,240px); overflow: auto; font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.status.is-error { color: var(--gcn-danger-fg); font-size: 13px; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.actions:empty { display: none; }
+.actions button { box-sizing: border-box; max-width: 100%; min-width: 0; min-height: var(--gcn-control-md); padding: 4px 12px; font: inherit; font-size: 12px; color: var(--gcn-btn-fg); background: var(--gcn-btn-bg); border: 1px solid var(--gcn-btn-border); border-radius: var(--gcn-radius); cursor: pointer; overflow-wrap: anywhere; }
+.actions button:hover:not(:disabled) { background: var(--gcn-btn-hover-bg); }
+.actions button[data-action='replace'] { color: var(--gcn-primary-fg); background: var(--gcn-primary-bg); border-color: var(--gcn-primary-border); font-weight: 600; }
+.actions button[data-action='replace']:hover:not(:disabled) { background: var(--gcn-primary-hover-bg); }
+.actions button:disabled { color: var(--gcn-fg-disabled); background: var(--gcn-bg-disabled); cursor: default; }
+.auto-hint { flex-basis: 100%; font-size: 12px; color: var(--gcn-fg-muted); }
 `
 
 type EditableElement = HTMLInputElement | HTMLTextAreaElement | HTMLElement
@@ -259,7 +173,7 @@ function collectLabelsText(element: HTMLElement): string {
   return parts.join(' ')
 }
 
-function isSensitiveField(element: HTMLElement): boolean {
+export function isSensitiveField(element: HTMLElement): boolean {
   if (closestComposed(element, '[data-sensitive],[data-wt-root]') !== null) return true
   const autoComplete = (element.getAttribute('autocomplete') ?? '').trim().toLowerCase()
   if (autoComplete !== '') {
@@ -279,7 +193,7 @@ function isSensitiveField(element: HTMLElement): boolean {
   return false
 }
 
-function isHiddenOrDisabled(element: HTMLElement): boolean {
+export function isHiddenOrDisabled(element: HTMLElement): boolean {
   if (!element.isConnected) return true
   if (element.hidden || closestComposed(element, '[hidden],[inert],[aria-hidden="true"]') !== null) return true
   if ((element as HTMLElement & { inert?: boolean }).inert === true) return true
@@ -529,7 +443,7 @@ function applyFieldReplacement(
 const MANAGED_BRIDGE_MS = 5000
 const MANAGED_SETTLE_MS = 250
 
-function deepActiveElement(doc: Document = document): Element | null {
+export function deepActiveElement(doc: Document = document): Element | null {
   let active: Element | null = doc.activeElement
   for (
     let depth = 0;
@@ -551,6 +465,16 @@ function isManagedPlainEditor(field: EditableElement): field is HTMLElement {
 
 function isManagedCandidate(field: EditableElement): field is HTMLElement {
   return isSlateEditor(field) || isChatEditorCandidate(field)
+}
+
+export function inputTranslationTitle(
+  options: Pick<InputTranslationOptions, 't' | 'sourceLanguage' | 'targetLanguage'>,
+): string {
+  const source = options.sourceLanguage?.() ?? 'auto'
+  const target = options.targetLanguage?.() ?? 'en'
+  const sourceLabel = source === 'auto' ? options.t('wtSourceAuto') : TARGET_LANGUAGE_NATIVE_LABEL[source]
+  const targetLabel = TARGET_LANGUAGE_NATIVE_LABEL[target]
+  return `${options.t('wtInputTranslation')} · ${sourceLabel} → ${targetLabel}`
 }
 
 export function createInputTranslation(options: InputTranslationOptions): InputTranslationWatcher {
@@ -587,22 +511,37 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   host.setAttribute('data-wt-root', '')
   host.style.cssText =
     'all: initial !important; position: fixed !important; left: 0 !important; top: 0 !important; width: 0 !important; height: 0 !important; z-index: 2147483647 !important; pointer-events: none !important; display: none !important; contain: style !important;'
+  applySurfacePreferences(host, options.appearance?.() ?? DEFAULT_SURFACE_PREFERENCES)
   const shadow = host.attachShadow({ mode: 'closed' })
   const style = document.createElement('style')
   style.textContent = INPUT_POPOVER_CSS
 
   const popover = document.createElement('div')
   popover.className = 'popover'
+  popover.setAttribute('role', 'dialog')
+  popover.setAttribute('aria-modal', 'false')
+  popover.setAttribute('aria-labelledby', 'wt-input-title')
   const header = document.createElement('div')
   header.className = 'header'
+  const iconUrl = options.iconUrl
+  const logo =
+    iconUrl !== undefined && iconUrl !== '' ? document.createElement('img') : undefined
+  if (logo !== undefined && iconUrl !== undefined) {
+    logo.className = 'input-logo'
+    logo.alt = ''
+    logo.width = 24
+    logo.height = 24
+    logo.src = iconUrl
+  }
   const title = document.createElement('span')
   title.className = 'title'
+  title.id = 'wt-input-title'
   const closeButton = document.createElement('button')
   closeButton.type = 'button'
   closeButton.className = 'close'
   closeButton.dataset.action = 'close'
   closeButton.textContent = '✕'
-  header.append(title, closeButton)
+  header.append(...(logo !== undefined ? [logo] : []), title, closeButton)
 
   const statusNode = document.createElement('div')
   statusNode.className = 'status'
@@ -657,11 +596,8 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   }
 
   function syncLabels(): void {
-    const source = options.sourceLanguage?.() ?? 'auto'
-    const target = options.targetLanguage?.() ?? 'en'
-    const sourceLabel = source === 'auto' ? options.t('wtSourceAuto') : TARGET_LANGUAGE_NATIVE_LABEL[source]
-    const targetLabel = TARGET_LANGUAGE_NATIVE_LABEL[target]
-    title.textContent = `${options.t('wtInputTranslation')} · ${sourceLabel} → ${targetLabel}`
+    applySurfacePreferences(host, options.appearance?.() ?? DEFAULT_SURFACE_PREFERENCES)
+    title.textContent = inputTranslationTitle(options)
     closeButton.setAttribute('aria-label', options.t('wtPanelClose'))
     replaceButton.textContent = options.t('wtInputReplace')
     const replaceKey = currentReplaceKey()
@@ -803,6 +739,18 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     hidePopover(clearBackup)
   }
 
+  function dismissPopover(): void {
+    const owned = document.activeElement === host
+    const field = activeField
+    if (field !== undefined && field.isConnected) {
+      suppressedSnapshot = { field, value: readFieldValue(field) }
+    }
+    clearAllState(true)
+    if (owned && field !== undefined && field.isConnected) {
+      field.focus({ preventScroll: true })
+    }
+  }
+
   function managedBackupStillLive(): boolean {
     return backupState !== undefined &&
       activeField !== undefined &&
@@ -844,8 +792,14 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     statusNode.textContent = normalized
     actions.textContent = ''
     actions.append(replaceButton, copyButton)
-    if (autoHint !== undefined && autoHint !== '') {
-      autoHintNode.textContent = autoHint
+    const hint =
+      autoHint !== undefined && autoHint !== ''
+        ? autoHint
+        : currentReplaceMode() === 'hotkey'
+          ? options.t('wtInputPreviewHint')
+          : ''
+    if (hint !== '') {
+      autoHintNode.textContent = hint
       actions.append(autoHintNode)
     }
     showPopover()
@@ -1132,10 +1086,11 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       composingField === undefined &&
       host.style.display !== 'none'
     ) {
-      if (activeField !== undefined && activeField.isConnected) {
-        suppressedSnapshot = { field: activeField, value: readFieldValue(activeField) }
+      if (isEventInsidePopover(event)) {
+        event.preventDefault()
+        event.stopPropagation()
       }
-      clearAllState(true)
+      dismissPopover()
       return
     }
     // 原生 compositionend 被站点吞掉且未重发时的兜底：浏览器给出的可信 keydown 已不处于合成，
@@ -1486,8 +1441,9 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   copyButton.addEventListener('click', (event) => {
     if (disposed || !event.isTrusted || previewTranslation === '') return
     const textToCopy = previewTranslation
+    const copyEpoch = epoch
     void copySelectionText(textToCopy).then((copied) => {
-      if (disposed || host.style.display === 'none') return
+      if (disposed || copyEpoch !== epoch || host.style.display === 'none') return
       clearCopyTimer()
       copyButton.textContent = options.t(copied ? 'wtToolbarCopied' : 'wtToolbarCopyFailed')
       copyTimer = setTimeout(() => {
@@ -1500,8 +1456,9 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   copyOriginalButton.addEventListener('click', (event) => {
     if (disposed || !event.isTrusted || recoveryOriginalText === undefined || recoveryOriginalText === '') return
     const textToCopy = recoveryOriginalText
+    const copyEpoch = epoch
     void copySelectionText(textToCopy).then((copied) => {
-      if (disposed || host.style.display === 'none') return
+      if (disposed || copyEpoch !== epoch || host.style.display === 'none') return
       if (copyOriginalTimer !== undefined) {
         clearTimeout(copyOriginalTimer)
         copyOriginalTimer = undefined
@@ -1516,11 +1473,13 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
 
   closeButton.addEventListener('click', (event) => {
     if (disposed || !event.isTrusted) return
-    if (activeField !== undefined && activeField.isConnected) {
-      suppressedSnapshot = { field: activeField, value: readFieldValue(activeField) }
-    }
-    clearAllState(true)
+    dismissPopover()
   })
+
+  function onVisibilityChange(): void {
+    syncSurfaceVisibility(host)
+    if (document.hidden) leaveFieldForFocus()
+  }
 
   document.addEventListener('beforeinput', onBeforeInput, true)
   document.addEventListener('compositionstart', onCompositionStart, true)
@@ -1529,6 +1488,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   document.addEventListener('keydown', onKeyDown, true)
   document.addEventListener('focusin', onFocusIn, true)
   document.addEventListener('focusout', onFocusOut, true)
+  document.addEventListener('visibilitychange', onVisibilityChange)
   window.addEventListener('scroll', onViewportChange, true)
   window.addEventListener('resize', onViewportChange)
 
@@ -1544,6 +1504,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       document.removeEventListener('keydown', onKeyDown, true)
       document.removeEventListener('focusin', onFocusIn, true)
       document.removeEventListener('focusout', onFocusOut, true)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('scroll', onViewportChange, true)
       window.removeEventListener('resize', onViewportChange)
       composingField = undefined

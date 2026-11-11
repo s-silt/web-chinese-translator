@@ -470,6 +470,34 @@ describe('界面风格', () => {
       expect(el?.hasAttribute('data-style')).toBe(false)
     }
   })
+
+  it('setPreferences 写 host 的 style/theme/lang 与 important color-scheme，partial setStyle 不重置', () => {
+    panel = createTranslationPanel()
+    panel.showSelection('src')
+    panel.setPreferences({ uiStyle: 'glass', theme: 'dark', language: 'zh-TW' })
+    expect(host().dataset.style).toBe('glass')
+    expect(host().dataset.theme).toBe('dark')
+    expect(host().lang).toBe('zh-TW')
+    expect(host().style.getPropertyValue('color-scheme')).toBe('dark')
+    expect(host().style.getPropertyPriority('color-scheme')).toBe('important')
+    expect(host().style.getPropertyValue('direction')).toBe('ltr')
+
+    panel.setPreferences({ uiStyle: 'cyber', theme: 'light', language: 'en' })
+    expect(host().dataset.style).toBe('cyber')
+    expect(host().dataset.theme).toBe('light')
+    expect(host().lang).toBe('en')
+    expect(host().style.getPropertyValue('color-scheme')).toBe('dark')
+
+    panel.setStyle('classic')
+    expect(host().dataset.theme).toBe('light')
+    expect(host().lang).toBe('en')
+
+    panel.setPreferences({ uiStyle: 'classic', theme: 'auto', language: 'zh-CN' })
+    expect(host().hasAttribute('data-style')).toBe(false)
+    expect(host().hasAttribute('data-theme')).toBe(false)
+    expect(host().lang).toBe('zh-CN')
+    expect(host().style.getPropertyValue('color-scheme')).toBe('light dark')
+  })
 })
 
 const ANCHOR = { left: 10, top: 10, right: 40, bottom: 24 }
@@ -642,6 +670,7 @@ function floatingLabels(): FloatingLabels {
     restore: '恢复',
     resume: '继续',
     settings: '设置',
+    textTranslate: '文本翻译',
     configure: '请先配置模型',
     fixedOn: '词库',
     modelOn: '模型开',
@@ -955,6 +984,180 @@ describe('结果卡片复制', () => {
     expect(copyButton()).toBeNull()
     expect(shadow().querySelector('.panel-status')?.textContent).toBe('')
     expect(shadow().textContent).not.toContain('已复制')
+  })
+
+  it('页面隐藏复位复制反馈，隐藏与恢复期间不再产生新反馈', () => {
+    vi.useFakeTimers()
+    const setHidden = (value: boolean): void => {
+      Object.defineProperty(document, 'hidden', { value, configurable: true })
+    }
+    try {
+      panel = createTranslationPanel()
+      panel.showSelectionResult('src', ['译文'])
+      const live = shadow().querySelector('.panel .panel-announcement') as HTMLElement
+      copyButton()?.click()
+      panel.setCopyResultFeedback(true)
+      expect(copyButton()?.textContent).toBe('已复制')
+      setHidden(true)
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(copyButton()?.textContent).toBe('复制')
+      expect(live.textContent).toBe('')
+      panel.setCopyResultFeedback(true)
+      expect(copyButton()?.textContent).toBe('复制')
+      setHidden(false)
+      document.dispatchEvent(new Event('visibilitychange'))
+      panel.setCopyResultFeedback(true)
+      expect(copyButton()?.textContent).toBe('复制')
+      expect(live.textContent).toBe('')
+      vi.advanceTimersByTime(2000)
+      expect(copyButton()?.textContent).toBe('复制')
+    } finally {
+      setHidden(false)
+      document.dispatchEvent(new Event('visibilitychange'))
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('焦点归还与提示键盘', () => {
+  it('工具栏唤起后外部指针按下关闭且不抢回页面焦点', () => {
+    const pageButton = document.createElement('button')
+    document.body.append(pageButton)
+    try {
+      pageButton.focus()
+      panel = createTranslationPanel()
+      panel.showToolbar(ANCHOR, true, () => undefined)
+      expect(panel.focusToolbar()).toBe(true)
+      const outside = document.createElement('button')
+      document.body.append(outside)
+      try {
+        outside.focus()
+        outside.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+        expect(panel.isOpen()).toBe(false)
+        expect(document.activeElement).toBe(outside)
+      } finally {
+        outside.remove()
+      }
+    } finally {
+      pageButton.remove()
+    }
+  })
+
+  it('返回目标已脱离文档时关闭不报错也不聚焦', () => {
+    const pageButton = document.createElement('button')
+    document.body.append(pageButton)
+    try {
+      pageButton.focus()
+      panel = createTranslationPanel()
+      panel.showToolbar(ANCHOR, true, () => undefined)
+      expect(panel.focusToolbar()).toBe(true)
+      pageButton.remove()
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      expect(panel.isOpen()).toBe(false)
+      expect(document.activeElement).not.toBe(pageButton)
+    } finally {
+      pageButton.remove()
+    }
+  })
+
+  it('提示键盘激活展开卡片并聚焦关闭钮，鼠标点击不抢焦点', () => {
+    panel = createTranslationPanel()
+    let opened = 0
+    panel.showHint(ANCHOR, () => {
+      opened += 1
+    })
+    const hintEl = shadow().querySelector('.hint') as HTMLButtonElement
+    hintEl.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    expect(opened).toBe(1)
+    expect((shadow().querySelector('.panel') as HTMLElement).style.display).toBe('')
+    expect(shadow().activeElement).not.toBe(shadow().querySelector('.panel-close'))
+
+    panel.showHint(ANCHOR, () => {
+      opened += 1
+    })
+    hintEl.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }))
+    expect(opened).toBe(2)
+    expect(shadow().activeElement).toBe(shadow().querySelector('.panel-close'))
+  })
+
+  it('悬浮菜单 Escape 把焦点还给入口而不是旧页面按钮', () => {
+    const pageButton = document.createElement('button')
+    document.body.append(pageButton)
+    try {
+      pageButton.focus()
+      panel = createTranslationPanel()
+      panel.setFloating(floatingView(), floatingLabels(), floatingCallbacks())
+      trustedClick(floatingButton())
+      expect((shadow().querySelector('.floating-menu') as HTMLElement).hidden).toBe(false)
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      expect(shadow().activeElement).toBe(floatingButton())
+      expect(document.activeElement).not.toBe(pageButton)
+    } finally {
+      pageButton.remove()
+    }
+  })
+})
+
+describe('页面隐藏生命周期', () => {
+  function setHidden(value: boolean): void {
+    Object.defineProperty(document, 'hidden', { value, configurable: true })
+  }
+
+  it('隐藏取消暂停定位 rAF（含 pauseShown），恢复后重新定位，dispose 清空', () => {
+    const pending = new Set<number>()
+    const callbacks = new Map<number, FrameRequestCallback>()
+    let nextId = 0
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      const id = ++nextId
+      pending.add(id)
+      callbacks.set(id, callback)
+      return id
+    })
+    const cafSpy = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
+      pending.delete(id)
+      callbacks.delete(id)
+    })
+    try {
+      panel = createTranslationPanel()
+      panel.showPauseStatus('paused', true)
+      expect(pending.size).toBeGreaterThan(0)
+      setHidden(true)
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(pending.size).toBe(0)
+      setHidden(false)
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(pending.size).toBeGreaterThan(0)
+      panel.dispose()
+      panel = undefined
+      expect(pending.size).toBe(0)
+    } finally {
+      setHidden(false)
+      document.dispatchEvent(new Event('visibilitychange'))
+      rafSpy.mockRestore()
+      cafSpy.mockRestore()
+    }
+  })
+
+  it('Shift+Escape 与输入法合成中的 Escape 不关闭，普通 Escape 关闭并归还页面焦点', () => {
+    const pageButton = document.createElement('button')
+    document.body.append(pageButton)
+    pageButton.focus()
+    try {
+      panel = createTranslationPanel()
+      panel.showToolbar(ANCHOR, true, () => undefined)
+      expect(panel.focusToolbar()).toBe(true)
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', shiftKey: true }))
+      expect(panel.isOpen()).toBe(true)
+      const composing = new KeyboardEvent('keydown', { key: 'Escape' })
+      Object.defineProperty(composing, 'isComposing', { value: true, configurable: true })
+      document.dispatchEvent(composing)
+      expect(panel.isOpen()).toBe(true)
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      expect(panel.isOpen()).toBe(false)
+      expect(document.activeElement).toBe(pageButton)
+    } finally {
+      pageButton.remove()
+    }
   })
 })
 

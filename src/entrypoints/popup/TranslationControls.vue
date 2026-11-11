@@ -26,6 +26,7 @@
             </UiButton>
           </span>
         </div>
+        <p class="ui-hint">{{ t('wtOfflineHint') }}</p>
       </div>
     </div>
 
@@ -34,17 +35,19 @@
         <span class="engine-tag engine-tag-model">{{ t('wtEngineModel') }}</span>
         <div class="popup-engine-body">
           <div class="popup-engine-row">
-            <span class="popup-engine-name">{{ modelName || t('wtModelUnset') }}</span>
+            <span class="popup-engine-name" :title="modelName || t('wtModelUnset')">{{ modelName || t('wtModelUnset') }}</span>
           </div>
+          <p class="ui-hint">{{ t('wtModelEndpointHint') }}</p>
           <template v-if="modelConfigured">
             <UiSwitch
               :checked="autoEnabled"
               :disabled="autoDisabled"
               :label="t('wtSiteAuto')"
+              :aria-describedby="autoReason !== '' ? 'wt-auto-reason' : undefined"
               data-test="wt-auto"
               @change="setAuto"
             />
-            <p v-if="autoReason" class="ui-hint">
+            <p v-if="autoReason" id="wt-auto-reason" class="ui-hint">
               {{ t(autoReason) }}
               <button
                 v-if="autoReason === 'wtNotConfigured'"
@@ -59,7 +62,7 @@
           </template>
           <div v-else class="popup-model-guide">
             <p class="ui-hint">{{ t('wtModelSetupHint') }}</p>
-            <UiButton size="sm" data-test="wt-configure-now" @click="openOptionsAt('#wt-title')">
+            <UiButton v-if="!canTranslate || sensitive || canRestore || canResume" size="sm" data-test="wt-configure-now" @click="openOptionsAt('#wt-title')">
               {{ t('wtConfigureNow') }}
             </UiButton>
           </div>
@@ -80,6 +83,7 @@
               :disabled="moreDisabled"
               :label="t('wtAutomaticInteractions')"
               :title="t('wtAutomaticInteractionsHint')"
+              :aria-describedby="moreReason !== '' ? 'wt-more-reason' : undefined"
               data-test="wt-popup-auto-interaction"
               @change="setAutoInteraction"
             />
@@ -89,6 +93,7 @@
               :checked="floatingEnabled"
               :disabled="moreDisabled"
               :label="t('wtFloatingButton')"
+              :aria-describedby="moreReason !== '' ? 'wt-more-reason' : undefined"
               data-test="wt-popup-floating"
               @change="setFloating"
             />
@@ -98,6 +103,7 @@
               :checked="videoSubtitlesEnabled"
               :disabled="moreDisabled"
               :label="t('wtVideoSubtitlesShort')"
+              :aria-describedby="moreReason !== '' ? 'wt-more-reason' : undefined"
               data-test="wt-popup-video-subtitles"
               @change="setVideoSubtitles"
             />
@@ -107,11 +113,12 @@
               :checked="inputTranslationEnabled"
               :disabled="moreDisabled"
               :label="t('wtInputTranslation')"
+              :aria-describedby="moreReason !== '' ? 'wt-more-reason' : undefined"
               data-test="wt-popup-input-translation"
               @change="setInputTranslation"
             />
           </div>
-          <p v-if="moreReason" class="ui-hint" data-test="wt-more-reason">{{ t(moreReason) }}</p>
+          <p v-if="moreReason" id="wt-more-reason" class="ui-hint" data-test="wt-more-reason">{{ t(moreReason) }}</p>
         </div>
       </details>
     </template>
@@ -152,6 +159,8 @@ const { t } = useI18n()
 const {
   autoEnabled,
   canTranslate,
+  canRestore,
+  canResume,
   floatingEnabled,
   autoInteractionEnabled,
   videoSubtitlesEnabled,
@@ -160,6 +169,7 @@ const {
   masterEnabled,
   modelConfigured,
   modelName,
+  sensitive,
   dictEnabled,
   pageError,
   autoError,
@@ -174,11 +184,9 @@ const {
 
 function readMoreOpen(): boolean {
   try {
-    const raw = localStorage.getItem(POPUP_MORE_KEY)
-    if (raw === null) return true
-    return raw === 'true'
+    return localStorage.getItem(POPUP_MORE_KEY) === 'true'
   } catch {
-    return true
+    return false
   }
 }
 

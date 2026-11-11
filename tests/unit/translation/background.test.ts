@@ -2363,6 +2363,7 @@ describe('悬浮入口桥接', () => {
     { type: 'wt:current-site-auto', enabled: true },
     { type: 'wt:current-page-controls', action: 'restore' },
     { type: 'wt:open-options' },
+    { type: 'wt:open-text-window' },
   ] as const
   function githubSender(): typeof contentSender & { documentId: string } {
     return {
@@ -2589,6 +2590,36 @@ describe('悬浮入口桥接', () => {
     const open = vi.spyOn(fakeBrowser.runtime, 'openOptionsPage').mockResolvedValue(undefined as never)
     expect(await trigger({ type: 'wt:open-options' }, contentSender)).toEqual({ ok: true })
     expect(open).toHaveBeenCalledTimes(1)
+  })
+
+  it('open-text-window 用 popup 窗口打开 translate.html，不发模型请求也不改配置', async () => {
+    await translationConfigItem.setValue({ ...VALID_CONFIG, floatingButtonEnabled: true })
+    const windowsCreate = vi.spyOn(fakeBrowser.windows, 'create').mockResolvedValue({} as never)
+    const tabsCreate = vi.spyOn(fakeBrowser.tabs, 'create').mockResolvedValue({} as never)
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    const write = vi.spyOn(translationConfigItem, 'setValue')
+    const before = await translationConfigItem.getValue()
+    expect(await trigger({ type: 'wt:open-text-window' }, contentSender)).toEqual({ ok: true })
+    expect(windowsCreate).toHaveBeenCalledTimes(1)
+    expect(windowsCreate).toHaveBeenCalledWith({
+      url: fakeBrowser.runtime.getURL('/translate.html'),
+      type: 'popup',
+      width: 1000,
+      height: 760,
+    })
+    expect(tabsCreate).not.toHaveBeenCalled()
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(write).not.toHaveBeenCalled()
+    expect(await translationConfigItem.getValue()).toEqual(before)
+  })
+
+  it('open-text-window 窗口创建失败时回退标签页', async () => {
+    await translationConfigItem.setValue({ ...VALID_CONFIG, floatingButtonEnabled: true })
+    vi.spyOn(fakeBrowser.windows, 'create').mockRejectedValue(new Error('popup blocked') as never)
+    const tabsCreate = vi.spyOn(fakeBrowser.tabs, 'create').mockResolvedValue({} as never)
+    expect(await trigger({ type: 'wt:open-text-window' }, contentSender)).toEqual({ ok: true })
+    expect(tabsCreate).toHaveBeenCalledTimes(1)
+    expect(tabsCreate).toHaveBeenCalledWith({ url: fakeBrowser.runtime.getURL('/translate.html') })
   })
 
   it('两次发送之间授权撤销：resume 被阻断不再发 gcn，restore 仍完成 GitHub 引擎还原', async () => {
@@ -2845,15 +2876,32 @@ describe('浏览器快捷键', () => {
 
   it('translate-input 只在已授权的普通标签页发送 wt:translate-input，不读取选区', async () => {
     await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true, autoInteractionEnabled: false })
-    const inject = vi.spyOn(fakeBrowser.scripting, 'executeScript')
+    const inject = vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation((async (opts: {
+      target?: { allFrames?: boolean; documentIds?: string[] }
+      files?: string[]
+    }) => {
+      if (opts.files !== undefined) return []
+      return [
+        {
+          frameId: 0,
+          documentId: 'doc-top',
+          result: { url: contentSender.url, topUrl: contentSender.url, focused: true },
+        },
+      ]
+    }) as never)
     const sent: unknown[] = []
     vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async (_tabId, message) => {
       sent.push(message)
       return { ok: true }
     })
+    vi.spyOn(fakeBrowser.tabs, 'get').mockImplementation(
+      async (id) => ({ id, url: contentSender.url }) as never,
+    )
     commandTrigger!('translate-input', { id: contentSender.tab.id, url: contentSender.url } as never)
     await vi.waitFor(() => expect(sent).toEqual([{ type: 'wt:translate-input' }]))
-    expect(inject).not.toHaveBeenCalled()
+    // 新路由先全帧读取焦点快照，再向选中的 document 定向注入/投递
+    expect(inject).toHaveBeenCalled()
+    expect(inject.mock.calls[0]?.[0]).toMatchObject({ target: { tabId: contentSender.tab.id, allFrames: true } })
 
     sent.length = 0
     commandTrigger!('translate-input', { id: contentSender.tab.id, url: contentSender.url, incognito: true } as never)
@@ -2864,6 +2912,30 @@ describe('浏览器快捷键', () => {
     commandTrigger!('translate-input', { id: contentSender.tab.id, url: contentSender.url } as never)
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect(sent).toEqual([])
+  })
+
+  it.each([true, false])('Alt+Y 全帧注入失败后只回退顶层实际焦点：%s', async (focused) => {
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true })
+    const inject = vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation((async (opts: {
+      target?: { allFrames?: boolean; frameIds?: number[] }
+      files?: string[]
+    }) => {
+      if (opts.target?.allFrames === true) throw new Error('Cannot access contents of the page')
+      if (opts.files !== undefined) return []
+      return [{ frameId: 0, documentId: 'doc-top', result: { url: contentSender.url, topUrl: contentSender.url, focused } }]
+    }) as never)
+    vi.spyOn(fakeBrowser.tabs, 'get').mockResolvedValue({ id: contentSender.tab.id, url: contentSender.url } as never)
+    const send = vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async () => ({ ok: true }))
+    const open = vi.spyOn(fakeBrowser.windows, 'create').mockResolvedValue({ id: 88 } as never)
+    commandTrigger!('translate-input', { id: contentSender.tab.id, url: contentSender.url } as never)
+    if (focused) {
+      await vi.waitFor(() => expect(send).toHaveBeenCalledWith(contentSender.tab.id, { type: 'wt:translate-input' }, { frameId: 0, documentId: 'doc-top' }))
+      expect(open).not.toHaveBeenCalled()
+    } else {
+      await vi.waitFor(() => expect(open).toHaveBeenCalled())
+      expect(send).not.toHaveBeenCalled()
+    }
+    expect(inject.mock.calls[1]?.[0]).toMatchObject({ target: { tabId: contentSender.tab.id, frameIds: [0] } })
   })
 
   it('Alt+S 焦点在已授权跨源 iframe 时优先读取该 frame 并展示到 top doc，不聚合其他 frame，且语境仅用源 frame 站点', async () => {
@@ -4651,5 +4723,330 @@ describe('聊天输入替换授权', () => {
     })
     expect(await trigger(chatMessage, chatSender('https://claude.ai/chat/1'))).toMatchObject({ ok: false, error: '未授权访问该站点' })
     expect(exec).not.toHaveBeenCalled()
+  })
+})
+
+describe('wt:translate-text 文本翻译窗口', () => {
+  const textSender = { id: '', url: '' }
+  const popupSender = { id: '', url: '' }
+  const message = {
+    type: 'wt:translate-text',
+    text: 'Hello **world**\n第二行',
+    sourceLanguage: 'auto',
+    targetLanguage: 'zh-CN',
+    requestId: 'text-req-1',
+  } as const
+
+  beforeEach(() => {
+    textSender.id = fakeBrowser.runtime.id
+    textSender.url = fakeBrowser.runtime.getURL('/translate.html')
+    popupSender.id = fakeBrowser.runtime.id
+    popupSender.url = fakeBrowser.runtime.getURL('/popup.html')
+  })
+
+  function textMessage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return { ...message, ...overrides }
+  }
+
+  it.each([
+    ['内容脚本', contentSender],
+    ['弹出页', popupSender],
+    ['选项页', extSender],
+    ['其他扩展', pageSender],
+    ['普通扩展页', { id: fakeBrowser.runtime.id, url: fakeBrowser.runtime.getURL('/options.html#x') }],
+    ['错误路径', { id: fakeBrowser.runtime.id, url: fakeBrowser.runtime.getURL('/translate.html.evil') }],
+  ])('%s 发送 wt:translate-text 被拒绝且不发请求', async (_name, sender) => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    const reply = await trigger(textMessage(), sender)
+    expect(reply).toEqual({ ok: false, error: '无权访问' })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('文本翻译窗口按消息中的语言翻译，不改全局配置', async () => {
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      targetLanguage: 'zh-CN',
+      sourceLanguage: 'auto',
+      inputTargetLanguage: 'en',
+      inputSourceLanguage: 'auto',
+    })
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completionReply(['译文']))
+    const reply = await trigger(textMessage({ sourceLanguage: 'en', targetLanguage: 'ja' }), textSender)
+    expect(reply).toEqual({ ok: true, texts: ['译文'] })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    const init = (fetcher.mock.calls[0] as [string, RequestInit])[1]
+    const body = JSON.parse(init.body as string) as { messages: { role: string; content: string }[] }
+    expect(body.messages[0]!.content).toContain('Japanese')
+    expect(body.messages[0]!.content).toContain('The source language is English.')
+    expect(body.messages[0]!.content).not.toContain('Simplified Chinese')
+    expect(JSON.parse(body.messages[1]!.content)).toEqual(['Hello **world**\n第二行'])
+    const saved = await translationConfigItem.getValue()
+    expect(saved.targetLanguage).toBe('zh-CN')
+    expect(saved.sourceLanguage).toBe('auto')
+    expect(saved.inputTargetLanguage).toBe('en')
+    expect(saved.inputSourceLanguage).toBe('auto')
+  })
+
+  it('粘贴文本不写入持久缓存', async () => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completionReply(['译文']))
+    const writeSpy = vi.mocked(writePersistentTranslations)
+    const readSpy = vi.mocked(readPersistentTranslations)
+    writeSpy.mockClear()
+    readSpy.mockClear()
+    expect(await trigger(textMessage(), textSender)).toEqual({ ok: true, texts: ['译文'] })
+    expect(writeSpy).not.toHaveBeenCalled()
+    expect(readSpy).not.toHaveBeenCalled()
+  })
+
+  it('总开关关闭不发请求', async () => {
+    await settingsItem.setValue({ ...DEFAULT_SETTINGS, enabled: false })
+    await translationConfigItem.setValue(VALID_CONFIG)
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    const reply = await trigger(textMessage(), textSender)
+    expect(reply).toMatchObject({ ok: false, error: '总开关已关闭' })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['缺少接口地址', { baseUrl: '' }],
+    ['缺少模型', { model: '' }],
+  ])('%s 不发请求', async (_name, patch) => {
+    await translationConfigItem.setValue({ ...VALID_CONFIG, ...patch })
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    const reply = await trigger(textMessage(), textSender)
+    expect(reply).toMatchObject({ ok: false, error: '请先配置接口地址与模型' })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('缺少接口权限不发请求', async () => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (query) => {
+      const origins = (query as { origins?: string[] }).origins ?? []
+      return !origins.some((o) => o.includes('api.example.com'))
+    })
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    const reply = await trigger(textMessage(), textSender)
+    expect(reply).toMatchObject({ ok: false, error: '未授权访问该接口地址' })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('非法消息被拒绝且无回复', async () => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    for (const invalid of [
+      textMessage({ text: '   ' }),
+      textMessage({ text: 'x'.repeat(6001) }),
+      textMessage({ sourceLanguage: 'xx' }),
+      textMessage({ targetLanguage: 'zh' }),
+      textMessage({ requestId: 'bad id!' }),
+      textMessage({ pageSession: 'bad id!' }),
+      textMessage({ extra: true }),
+      { type: 'wt:translate-text', text: 'hi' },
+    ]) {
+      const reply = await Promise.race([
+        trigger(invalid, textSender),
+        new Promise((resolve) => setTimeout(() => resolve('no-reply'), 50)),
+      ])
+      expect(reply).toBe('no-reply')
+    }
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('重复 requestId 被拒绝，原请求仍可取消', async () => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    let signal: AbortSignal | undefined
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      signal = init?.signal ?? undefined
+      return new Promise<Response>((_resolve, reject) => {
+        signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
+      })
+    })
+    const pending = trigger(textMessage(), textSender)
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1))
+    expect(await trigger(textMessage(), textSender)).toMatchObject({ ok: false, error: '请求 ID 重复' })
+    expect(signal!.aborted).toBe(false)
+    await trigger({ type: 'wt:cancel-assist', requestId: 'text-req-1' }, textSender)
+    expect(signal!.aborted).toBe(true)
+    expect(await pending).toMatchObject({ ok: false, code: 'cancelled' })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('内容脚本的取消按自身作用域查找，无法中止文本翻译窗口的请求', async () => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    let signal: AbortSignal | undefined
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      signal = init?.signal ?? undefined
+      return new Promise<Response>((_resolve, reject) => {
+        signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
+      })
+    })
+    const pending = trigger(textMessage(), textSender)
+    await vi.waitFor(() => expect(signal).toBeDefined())
+    expect(await trigger({ type: 'wt:cancel-assist', requestId: 'text-req-1' }, contentSender)).toEqual({ ok: true })
+    expect(signal!.aborted).toBe(false)
+    await trigger({ type: 'wt:cancel-assist', requestId: 'text-req-1' }, textSender)
+    expect(await pending).toMatchObject({ ok: false, code: 'cancelled' })
+  })
+
+  it('页面会话断开中止在途请求', async () => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    const session = 'text-page-1'
+    const listeners: ((port: unknown) => void)[] = []
+    const port = {
+      name: `wt:page:${session}`,
+      sender: textSender,
+      disconnect: vi.fn(),
+      onDisconnect: { addListener: (listener: (port: unknown) => void) => listeners.push(listener) },
+    }
+    portConnect!(port)
+    let signal: AbortSignal | undefined
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      signal = init?.signal ?? undefined
+      return new Promise<Response>((_resolve, reject) => {
+        signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
+      })
+    })
+    const pending = trigger(textMessage({ pageSession: session }), textSender)
+    await vi.waitFor(() => expect(signal).toBeDefined())
+    listeners.forEach((listener) => listener(port))
+    expect(await pending).toMatchObject({ ok: false, code: 'cancelled' })
+    expect(signal!.aborted).toBe(true)
+  })
+
+  it('已结束的页面会话直接取消，不发请求', async () => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    const session = 'text-page-2'
+    const listeners: ((port: unknown) => void)[] = []
+    const port = {
+      name: `wt:page:${session}`,
+      sender: textSender,
+      disconnect: vi.fn(),
+      onDisconnect: { addListener: (listener: (port: unknown) => void) => listeners.push(listener) },
+    }
+    portConnect!(port)
+    listeners.forEach((listener) => listener(port))
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    expect(await trigger(textMessage({ pageSession: session }), textSender)).toMatchObject({ ok: false, code: 'cancelled' })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+})
+
+describe('wt:document-input 桥接授权', () => {
+  const elementId = '123e4567-e89b-42d3-a456-426614174000'
+  const docConfig = { ...VALID_CONFIG, inputTranslationEnabled: true }
+  const topSender = { ...contentSender, tab: { id: 7, url: 'https://app.devin.ai/work' } }
+  const frameSender = {
+    ...topSender,
+    frameId: 3,
+    documentId: 'doc-frame',
+    url: 'about:blank',
+    origin: 'https://app.devin.ai',
+  }
+
+  function bridgeMock(
+    result: unknown = { status: 'ok', text: '文本', canReplace: true },
+    frameId = 0,
+  ) {
+    return vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation((async (opts: {
+      world?: string
+      target?: { documentIds?: string[] }
+    }) => {
+      if (opts.world === 'MAIN') {
+        const documentId = opts.target?.documentIds?.[0] ?? ''
+        return [{ frameId, documentId, result }]
+      }
+      return [{
+        frameId: 3,
+        documentId: 'doc-frame',
+        result: { url: 'about:blank', topUrl: 'https://app.devin.ai/work', focused: false },
+      }]
+    }) as never)
+  }
+
+  beforeEach(async () => {
+    await translationConfigItem.setValue(docConfig)
+    topSender.id = fakeBrowser.runtime.id
+    frameSender.id = fakeBrowser.runtime.id
+    vi.spyOn(fakeBrowser.tabs, 'get').mockImplementation(
+      async (id) => ({ id, url: 'https://app.devin.ai/work' }) as never,
+    )
+  })
+
+  it('顶层 read 经 MAIN world 执行并返回 editor 结果', async () => {
+    const exec = bridgeMock()
+    const reply = await trigger({ type: 'wt:document-input', elementId, action: 'read' }, topSender)
+    expect(reply).toMatchObject({ ok: true, editor: { status: 'ok', text: '文本' } })
+    const mainCall = exec.mock.calls.map((call) => call[0] as { world?: string; args?: unknown[] }).find((o) => o.world === 'MAIN')
+    expect(mainCall?.args?.[0]).toEqual({ elementId, action: 'read' })
+  })
+
+  it('同源 about:blank 子框架 read 允许，replace 校验 expectedText/text', async () => {
+    bridgeMock({ status: 'ok', text: '文本', canReplace: true }, 3)
+    const read = await trigger({ type: 'wt:document-input', elementId, action: 'read' }, frameSender)
+    expect(read).toMatchObject({ ok: true })
+    const replace = await trigger(
+      { type: 'wt:document-input', elementId, action: 'replace', expectedText: 'a', text: 'b' },
+      frameSender,
+    )
+    expect(replace).toMatchObject({ ok: true })
+  })
+
+  it.each([
+    ['输入翻译关闭', async () => { await translationConfigItem.setValue({ ...docConfig, inputTranslationEnabled: false }) }, [topSender]],
+    ['站点排除', async () => { await translationConfigItem.setValue({ ...docConfig, excludedHosts: ['app.devin.ai'] }) }, [topSender]],
+    ['主开关关闭', async () => { await settingsItem.setValue({ ...DEFAULT_SETTINGS, enabled: false }) }, [topSender]],
+    ['权限拒绝', async () => { vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async () => false) }, [topSender]],
+    ['跨源框架', async () => { void 0 }, [{ ...frameSender, url: 'https://evil.example/x', origin: 'https://evil.example' }]],
+    ['sandbox null origin', async () => { void 0 }, [{ ...frameSender, origin: 'null' }]],
+    ['扩展页面', async () => { void 0 }, [extSender]],
+    ['普通外部内容', async () => { void 0 }, [{ ...topSender, id: 'other-extension' }]],
+    ['标签页已变化', async () => { vi.spyOn(fakeBrowser.tabs, 'get').mockImplementation(async (id) => ({ id, url: 'https://other.example/' }) as never) }, [frameSender]],
+  ])('%s 时拒绝且不执行桥接', async (_name, arrange, senders) => {
+    await arrange()
+    const exec = vi.spyOn(fakeBrowser.scripting, 'executeScript')
+    for (const sender of senders) {
+      const reply = await trigger({ type: 'wt:document-input', elementId, action: 'read' }, sender)
+      expect(reply).toMatchObject({ ok: false })
+    }
+    expect(exec.mock.calls.filter((call) => (call[0] as { world?: string }).world === 'MAIN')).toHaveLength(0)
+  })
+
+  it('桥接返回不匹配的 documentId/frameId 或非法结果被拒绝', async () => {
+    vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation((async (opts: { world?: string }) => {
+      if (opts.world === 'MAIN') {
+        return [{ frameId: 0, documentId: 'stale-doc', result: { status: 'ok', text: 'x', canReplace: true } }]
+      }
+      return []
+    }) as never)
+    const reply = await trigger({ type: 'wt:document-input', elementId, action: 'read' }, topSender)
+    expect(reply).toMatchObject({ ok: false })
+  })
+
+  it('read 结果 text 超过 6000 或为空时拒绝', async () => {
+    bridgeMock({ status: 'ok', text: 'x'.repeat(6001), canReplace: true })
+    const reply = await trigger({ type: 'wt:document-input', elementId, action: 'read' }, topSender)
+    expect(reply).toMatchObject({ ok: false })
+  })
+})
+
+describe('inputFrameUrl 同源策略', () => {
+  it('接受同源 http(s) 与 about:blank/srcdoc，拒绝跨源、凭据与非法协议', async () => {
+    const { inputFrameUrl } = await import('../../../src/translation/input-frame')
+    const top = 'https://app.devin.ai/work'
+    expect(inputFrameUrl(top, 'about:blank')).toBe(top)
+    expect(inputFrameUrl(top, 'about:srcdoc')).toBe(top)
+    expect(inputFrameUrl(top, 'https://app.devin.ai/frame')).toBe('https://app.devin.ai/frame')
+    expect(inputFrameUrl('http://a.example/', 'http://a.example/f')).toBe('http://a.example/f')
+    expect(inputFrameUrl(top, 'https://evil.example/x')).toBeUndefined()
+    expect(inputFrameUrl(top, 'https://app.devin.ai:8443/x')).toBeUndefined()
+    expect(inputFrameUrl(top, 'https://user@app.devin.ai/x')).toBeUndefined()
+    expect(inputFrameUrl(top, 'https://app.devin.ai@evil.example/x')).toBeUndefined()
+    expect(inputFrameUrl(top, 'chrome-extension://abc/x')).toBeUndefined()
+    expect(inputFrameUrl('not a url', 'about:blank')).toBeUndefined()
+    expect(inputFrameUrl('https://user:pw@app.devin.ai/', 'about:blank')).toBeUndefined()
+    expect(inputFrameUrl(top, 'javascript:alert(1)')).toBeUndefined()
+    expect(inputFrameUrl('', 'about:blank')).toBeUndefined()
   })
 })

@@ -1,9 +1,9 @@
 <template>
-  <textarea v-model="model" class="ui-field ui-textarea" :class="{ 'ui-textarea-mono': mono }"></textarea>
+  <textarea ref="area" v-model="model" class="ui-field ui-textarea" :class="{ 'ui-textarea-mono': mono }"></textarea>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, useTemplateRef } from 'vue'
 
 /**
  * 多行输入框。rows、placeholder、aria-*、input 等属性与事件直接落在原生 textarea 上。
@@ -20,6 +20,14 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 const model = computed({
   get: () => props.modelValue ?? '',
   set: (value: string) => emit('update:modelValue', value),
+})
+
+const area = useTemplateRef<HTMLTextAreaElement>('area')
+
+defineExpose({
+  focus(): void {
+    area.value?.focus()
+  },
 })
 </script>
 

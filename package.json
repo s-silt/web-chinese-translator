@@ -1,6 +1,6 @@
 {
   "name": "web-chinese-translator",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "type": "module",
   "description": "GitHub 汉化与网页翻译扩展（Chrome、Edge 提供固定词库与模型翻译；Firefox 仅 GitHub 汉化）",

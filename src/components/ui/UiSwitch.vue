@@ -1,8 +1,9 @@
 <template>
-  <div class="ui-switch">
-    <label :for="id" class="ui-switch-label">{{ label }}</label>
+  <div class="ui-switch" v-bind="attrs().root">
+    <label :for="controlId()" class="ui-switch-label">{{ label }}</label>
     <button
-      :id="id"
+      v-bind="attrs().field"
+      :id="controlId()"
       type="button"
       role="switch"
       class="ui-switch-track"
@@ -17,8 +18,11 @@
 </template>
 
 <script setup lang="ts">
-import { useId } from 'vue'
+import { useAttrs, useId } from 'vue'
+import { splitAttrs, type SplitAttrs } from './attrs'
 import UiRipple from './UiRipple.vue'
+
+defineOptions({ inheritAttrs: false })
 
 /** 开关：标签在左、开关在右。状态由父组件持有，点击只发出相反状态 */
 defineProps<{
@@ -31,7 +35,19 @@ defineProps<{
 
 const emit = defineEmits<{ change: [checked: boolean] }>()
 
+const rawAttrs = useAttrs()
 const id = useId()
+
+const controlId = (): string => (typeof rawAttrs.id === 'string' ? rawAttrs.id : id)
+
+function attrs(): SplitAttrs {
+  const result = splitAttrs(rawAttrs)
+  if ('data-test' in result.field) {
+    result.root['data-test'] = result.field['data-test']
+    delete result.field['data-test']
+  }
+  return result
+}
 </script>
 
 <style scoped>
@@ -79,7 +95,7 @@ const id = useId()
 
 .ui-switch-track:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: var(--gcn-opacity-disabled);
 }
 
 .ui-switch-knob {

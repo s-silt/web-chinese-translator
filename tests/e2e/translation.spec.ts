@@ -2,7 +2,6 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { chromium, test as nativeTest, type BrowserContext, type Locator, type Page } from '@playwright/test'
-import * as ts from 'typescript'
 import zhCN from '../../src/i18n/zh-CN'
 import type { TranslationPanel } from '../../src/translation/panel'
 import {
@@ -22,6 +21,7 @@ import {
 import { bundleDanmakuFixture, bundleManagedChatFixture, bundleProseMirrorFixture } from './chat-editors-fixture'
 import { bundleDiscordSlateFixture } from './discord-slate-fixture'
 import { startMock, PHYSICS, ENTROPY, THIRD, LONG_RESULT, PAGE_HTML, type MockCall } from './mock-server'
+import { createTranslationModuleUrls } from './translation-module-fixture'
 
 type FixtureChrome = typeof import('wxt/browser').browser
 
@@ -1825,6 +1825,10 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await expect(popup.locator('[data-test="wt-popup-video-subtitles"] [role="switch"]')).toHaveCount(1)
       await expect(popup.locator('[data-test="wt-popup-input-translation"] [role="switch"]')).toHaveCount(1)
       await expect(popup.locator('[data-test="settings"]')).toBeVisible()
+      const more = popup.locator('.popup-more')
+      await expect(more).toHaveJSProperty('open', false)
+      await more.locator('summary').click()
+      await expect(more).toHaveJSProperty('open', true)
       const autoInteraction = popup.locator('[data-test="wt-popup-auto-interaction"] [role="switch"]')
       await autoInteraction.click()
       await expect(autoInteraction).toHaveAttribute('aria-checked', 'false')
@@ -5555,32 +5559,25 @@ interface WtPanelWindow extends Window {
 }
 
 async function mountPanelFixture(page: Page): Promise<void> {
-  const compilerOptions = { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 }
-  const floatingCode = ts.transpileModule(
-    await readFile(resolve(import.meta.dirname, '../../src/translation/floating.ts'), 'utf8'),
-    { compilerOptions },
-  ).outputText
-  let code = ts.transpileModule(
-    await readFile(resolve(import.meta.dirname, '../../src/translation/panel.ts'), 'utf8'),
-    { compilerOptions },
-  ).outputText
   await page.setContent(
     '<!doctype html><html><body><dialog id="native-dialog" style="width:220px;height:170px;overflow:hidden;transform:translate(17px,11px)"><input id="native-input"><button id="native-close">关闭网页窗口</button></dialog></body></html>',
   )
-  const floatingUrl = await page.evaluate((source) => {
-    return URL.createObjectURL(new Blob([source], { type: 'text/javascript' }))
-  }, floatingCode)
-  code = code.replaceAll("from './floating'", `from '${floatingUrl}'`).replaceAll('from "./floating"', `from "${floatingUrl}"`)
+  const blobUrls = await createTranslationModuleUrls(page, ['panel.ts'])
   await page.addScriptTag({
     type: 'module',
     content:
-      code +
+      `import { createTranslationPanel } from ${JSON.stringify(blobUrls['./panel']!)};` +
       '\nwindow.__wtPanel = createTranslationPanel(); window.__wtResumed = 0; window.__wtClosed = 0;' +
       ' window.__wtPanel.setOnResume(() => { window.__wtResumed += 1 });' +
       ' window.__wtPanel.setOnClose(() => { window.__wtClosed += 1 });' +
       ' document.getElementById("native-close").onclick = () => document.getElementById("native-dialog").close();',
   })
-  await page.evaluate((url) => URL.revokeObjectURL(url), floatingUrl)
+  await page.waitForFunction(() =>
+    typeof (window as unknown as Partial<WtPanelWindow>).__wtPanel?.showPauseStatus === 'function',
+  )
+  await page.evaluate((urls) => {
+    for (const url of Object.values(urls)) URL.revokeObjectURL(url)
+  }, blobUrls)
   await inspectClosedShadowPage(page)
 }
 

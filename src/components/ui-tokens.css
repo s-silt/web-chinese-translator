@@ -1,0 +1,259 @@
+:root,
+:host {
+  color-scheme: light dark;
+  --gcn-font-latin: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial;
+  /* 中文字体按简繁分开：雅黑、苹方 SC 没有繁体字形变体，繁体界面用它们会显示大陆字形 */
+  --gcn-font-sc: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei';
+  --gcn-font-tc: 'PingFang TC', 'Microsoft JhengHei';
+  --gcn-font: var(--gcn-font-latin), var(--gcn-font-sc), sans-serif;
+  --gcn-font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* 尺寸。触屏（Firefox Android 等）上控件加高，见文件末尾 */
+  --gcn-radius: 6px;
+  --gcn-radius-lg: 8px;
+  --gcn-radius-overlay: 12px;
+  --gcn-control-sm: 28px;
+  --gcn-control-md: 32px;
+  --gcn-gap-4: 4px;
+  --gcn-gap-8: 8px;
+  --gcn-gap-12: 12px;
+  --gcn-gap-16: 16px;
+  --gcn-gap-24: 24px;
+  --gcn-gap-32: 32px;
+  --gcn-opacity-disabled: 60%;
+
+  /* 动效：悬停、按下等状态切换用 fast；开关滑块等位移用 base，缓出 */
+  --gcn-ease: cubic-bezier(0.3, 0, 0.5, 1);
+  --gcn-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --gcn-duration-fast: 140ms;
+  --gcn-duration-base: 180ms;
+  --gcn-duration-theme: 160ms;
+
+  /* 文字与背景 */
+  --gcn-fg: light-dark(#1f2328, #f0f6fc);
+  --gcn-fg-muted: light-dark(#59636e, #9198a1);
+  --gcn-fg-disabled: light-dark(#656f7a, #9198a1);
+  --gcn-bg: light-dark(#ffffff, #0d1117);
+  --gcn-bg-muted: light-dark(#f6f8fa, #151b23);
+  --gcn-bg-disabled: light-dark(#eff2f5, #212830);
+  --gcn-border: light-dark(#d1d9e0, #3d444d);
+  --gcn-border-muted: light-dark(#d1d9e0b3, #3d444db3);
+  --gcn-border-emphasis: light-dark(#818b98, #656c76);
+  --gcn-accent: light-dark(#0969da, #4493f8);
+  --gcn-focus: light-dark(#0969da, #4493f8);
+  --gcn-selection: light-dark(#0969da33, #1f6febb3);
+  --gcn-scrollbar: light-dark(#818b9899, #656c7699);
+  --gcn-scrollbar-hover: light-dark(#59636ecc, #9198a1cc);
+  /* 阴影：按钮外投影（静止）与顶部高光；输入类控件用内阴影 */
+  --gcn-shadow-sm: 0 1px 0 0 light-dark(#1f23280a, #0000);
+  --gcn-shadow-inset: inset 0 1px 0 0 light-dark(#1f23280a, #0104093d);
+  --gcn-highlight: inset 0 1px 0 0 light-dark(#ffffff40, #ffffff08);
+
+  /* 浮层（下拉列表） */
+  --gcn-overlay-bg: light-dark(#ffffff, #151b23);
+  --gcn-overlay-border: light-dark(#d1d9e0b3, #3d444d);
+  --gcn-shadow-overlay: 0 6px 12px -3px light-dark(#25292e0a, #01040966), 0 6px 18px 0 light-dark(#25292e1f, #01040966);
+
+  /* 状态色 */
+  --gcn-success-fg: light-dark(#1a7f37, #3fb950);
+  --gcn-success-bg: light-dark(#dafbe1, #2ea04326);
+  --gcn-attention-fg: light-dark(#7d5300, #d29922);
+  --gcn-attention-bg: light-dark(#fff8c5, #bb800926);
+  --gcn-danger-fg: light-dark(#d1242f, #fa5e55);
+  --gcn-danger-bg: light-dark(#ffebe9, #f8514926);
+  --gcn-neutral-bg: light-dark(#818b981f, #656c7633);
+
+  /* 按钮 */
+  --gcn-btn-fg: light-dark(#25292e, #f0f6fc);
+  --gcn-btn-bg: light-dark(#f6f8fa, #212830);
+  --gcn-btn-hover-bg: light-dark(#eff2f5, #262c36);
+  --gcn-btn-active-bg: light-dark(#e6eaef, #2a313c);
+  --gcn-btn-border: light-dark(#d1d9e0, #3d444d);
+  --gcn-primary-fg: #ffffff;
+  --gcn-primary-bg: light-dark(#1a7f37, #238636);
+  --gcn-primary-hover-bg: light-dark(#166b2e, #1f7a31);
+  --gcn-primary-active-bg: light-dark(#145e28, #1b6e2b);
+  --gcn-primary-disabled-bg: light-dark(#95d8a6, #105823);
+  --gcn-primary-disabled-fg: light-dark(#ffffffcc, #ffffff66);
+  --gcn-primary-border: light-dark(#1f232826, #ffffff1a);
+  --gcn-primary-shadow: 0 1px 0 0 light-dark(#1f23281a, #0000);
+  --gcn-danger-hover-bg: light-dark(#d1242f, #b62324);
+  --gcn-danger-active-bg: light-dark(#a40e26, #8e1519);
+  --gcn-invisible-hover-bg: light-dark(#818b981a, #656c7633);
+  --gcn-invisible-active-bg: light-dark(#818b9826, #656c7640);
+
+  /* 开关 */
+  --gcn-switch-off: light-dark(#818b98, #656c76);
+  --gcn-switch-off-hover: light-dark(#59636e, #9198a1);
+  --gcn-switch-on: light-dark(#0969da, #1f6feb);
+  --gcn-switch-on-hover: light-dark(#0860ca, #388bfd);
+  --gcn-knob: light-dark(#ffffff, #f0f6fc);
+}
+
+:root:lang(zh-TW),
+:host(:lang(zh-TW)) {
+  --gcn-font: var(--gcn-font-latin), var(--gcn-font-tc), sans-serif;
+}
+
+:root:lang(ja),
+:host(:lang(ja)) {
+  --gcn-font: var(--gcn-font-latin), 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Meiryo', sans-serif;
+}
+
+:root:lang(ko),
+:host(:lang(ko)) {
+  --gcn-font: var(--gcn-font-latin), 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+}
+
+/* 手动选择的外观：颜色变量用 light-dark()，随 color-scheme 取浅色或深色值 */
+:root[data-theme='light'],
+:host([data-theme='light']) {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'],
+:host([data-theme='dark']) {
+  color-scheme: dark;
+}
+
+/* 界面风格共享变量：classic 默认等同现有面板；cyber/glass 在 styles/*.css 中覆盖 */
+:root,
+:host {
+  --gcn-surface: var(--gcn-bg);
+  --gcn-surface-border: var(--gcn-border);
+  --gcn-surface-shadow: none;
+  --gcn-surface-blur: 0;
+  --gcn-page-bg: var(--gcn-bg);
+  --gcn-radius-panel: var(--gcn-radius-lg);
+  --gcn-eyebrow: var(--gcn-fg-muted);
+  --gcn-engine-dict-fg: var(--gcn-success-fg);
+  --gcn-engine-dict-bg: var(--gcn-success-bg);
+  --gcn-engine-model-fg: var(--gcn-accent);
+  --gcn-engine-model-bg: var(--gcn-selection);
+  --gcn-card-bg: var(--gcn-bg-muted);
+  --gcn-card-border: var(--gcn-border-muted);
+  --gcn-card-radius: var(--gcn-radius-lg);
+}
+
+:root[data-style='cyber'],
+:host([data-style='cyber']) {
+  color-scheme: dark;
+  --gcn-fg: #e7f4ff;
+  --gcn-fg-muted: #9cb4cf;
+  --gcn-fg-disabled: #9cb4cf;
+  --gcn-bg: #101c2e;
+  --gcn-bg-muted: #081120;
+  --gcn-bg-disabled: #0d1829;
+  --gcn-border: #264561;
+  --gcn-border-muted: #26456199;
+  --gcn-border-emphasis: #3f73a1;
+  --gcn-accent: #55e5ff;
+  --gcn-focus: #55e5ff;
+  --gcn-selection: #55e5ff33;
+  --gcn-control-sm: 30px;
+  --gcn-control-md: 36px;
+  --gcn-radius: 8px;
+  --gcn-radius-lg: 10px;
+  --gcn-radius-overlay: 10px;
+  --gcn-success-fg: #46e1b4;
+  --gcn-success-bg: #113629;
+  --gcn-attention-fg: #ffd166;
+  --gcn-attention-bg: #3a2f10;
+  --gcn-danger-fg: #ff7b8a;
+  --gcn-danger-bg: #3a1620;
+  --gcn-neutral-bg: #1a2b44;
+  --gcn-btn-fg: #e7f4ff;
+  --gcn-btn-bg: #101c2e;
+  --gcn-btn-hover-bg: #16263e;
+  --gcn-btn-active-bg: #1c304e;
+  --gcn-btn-border: #2b4f6e;
+  --gcn-primary-fg: #051c26;
+  --gcn-primary-bg: #55e5ff;
+  --gcn-primary-hover-bg: #7fecff;
+  --gcn-primary-active-bg: #3fd6f2;
+  --gcn-primary-disabled-bg: #182b3e;
+  --gcn-primary-disabled-fg: #6b85a0;
+  --gcn-primary-border: transparent;
+  --gcn-switch-off: #2d4a6b;
+  --gcn-switch-on: #55e5ff;
+  --gcn-switch-on-hover: #7fecff;
+  --gcn-knob: #e7f4ff;
+  --gcn-overlay-bg: #0b1526;
+  --gcn-overlay-border: #2b4f6e;
+  --gcn-page-bg: #060c18;
+  --gcn-surface: #0b1526;
+  --gcn-surface-border: #264561;
+  --gcn-surface-shadow: 0 8px 28px #02081480, 0 0 20px #1aa6d912;
+  --gcn-radius-panel: 10px;
+  --gcn-eyebrow: #55e5ff;
+  --gcn-engine-dict-fg: var(--gcn-success-fg);
+  --gcn-engine-dict-bg: var(--gcn-success-bg);
+  --gcn-engine-model-fg: var(--gcn-accent);
+  --gcn-engine-model-bg: #55e5ff26;
+  --gcn-card-bg: var(--gcn-surface);
+  --gcn-card-border: var(--gcn-surface-border);
+  --gcn-card-radius: var(--gcn-radius-lg);
+}
+
+:root[data-style='glass'],
+:host([data-style='glass']) {
+  --gcn-fg: light-dark(#1d2b43, #e6edf7);
+  --gcn-fg-muted: light-dark(#4e6078, #a3b4cc);
+  --gcn-fg-disabled: light-dark(#65748a, #a3b4cc);
+  --gcn-bg: light-dark(#ffffffeb, #141e2feb);
+  --gcn-bg-muted: light-dark(#f2f6fcbf, #0e1624bf);
+  --gcn-bg-disabled: light-dark(#e9eef6, #1b2536);
+  --gcn-border: light-dark(#c5d2e3, #2f3e56);
+  --gcn-border-muted: light-dark(#c5d2e399, #2f3e5699);
+  --gcn-border-emphasis: light-dark(#8ea3bf, #4d6487);
+  --gcn-accent: light-dark(#1268e8, #6ea8ff);
+  --gcn-focus: var(--gcn-accent);
+  --gcn-selection: light-dark(#e5eeff, #1f3a66);
+  --gcn-control-sm: 30px;
+  --gcn-control-md: 36px;
+  --gcn-radius: 10px;
+  --gcn-radius-lg: 12px;
+  --gcn-radius-overlay: 18px;
+  --gcn-success-fg: light-dark(#137a4b, #5ad39b);
+  --gcn-success-bg: light-dark(#dff4e9, #11331f);
+  --gcn-primary-fg: #ffffff;
+  --gcn-primary-bg: light-dark(#1268e8, #2165d6);
+  --gcn-primary-hover-bg: light-dark(#0f5ccf, #1c5fcf);
+  --gcn-primary-active-bg: light-dark(#0d51b6, #1855bd);
+  --gcn-primary-disabled-bg: light-dark(#d8e2f0, #1e2b3e);
+  --gcn-primary-disabled-fg: light-dark(#6c7e96, #697c96);
+  --gcn-primary-border: transparent;
+  --gcn-btn-fg: light-dark(#1d2b43, #e6edf7);
+  --gcn-btn-bg: light-dark(#ffffffcc, #1a2437cc);
+  --gcn-btn-hover-bg: light-dark(#f5f8ff, #223049);
+  --gcn-btn-active-bg: light-dark(#eaf0fb, #2a3a57);
+  --gcn-btn-border: light-dark(#c5d2e3, #2f3e56);
+  --gcn-overlay-bg: light-dark(#fffffffa, #182234fa);
+  --gcn-overlay-border: light-dark(#c5d2e3, #2f3e56);
+  --gcn-switch-on: var(--gcn-primary-bg);
+  --gcn-page-bg: light-dark(
+    linear-gradient(135deg, #e9f1ff 0%, #f4f0fb 55%, #e6f3ff 100%),
+    linear-gradient(135deg, #0d1420 0%, #141c2c 55%, #0f1826 100%)
+  );
+  --gcn-surface: light-dark(#ffffffb8, #1a2437b8);
+  --gcn-surface-border: light-dark(#ffffffcc, #ffffff1f);
+  --gcn-surface-shadow: 0 10px 32px light-dark(#24385c1a, #00000066);
+  --gcn-surface-blur: 24px;
+  --gcn-radius-panel: 18px;
+  --gcn-engine-dict-fg: var(--gcn-success-fg);
+  --gcn-engine-dict-bg: var(--gcn-success-bg);
+  --gcn-engine-model-fg: var(--gcn-accent);
+  --gcn-engine-model-bg: var(--gcn-selection);
+  --gcn-card-bg: var(--gcn-surface);
+  --gcn-card-border: var(--gcn-surface-border);
+  --gcn-card-radius: 14px;
+}
+
+/* 触屏：控件加高到便于点按的尺寸（按钮、输入框、下拉框都按这两个变量取高度） */
+@media (pointer: coarse) {
+  :root,
+  :host {
+    --gcn-control-sm: 36px;
+    --gcn-control-md: 40px;
+  }
+}

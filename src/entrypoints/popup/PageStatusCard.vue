@@ -10,14 +10,17 @@
     <div class="popup-card-actions">
       <UiButton
         variant="primary"
-        size="sm"
+        size="md"
         :disabled="primaryDisabled"
+        :aria-busy="busy"
+        :aria-describedby="primaryReason !== '' ? 'wt-primary-reason' : undefined"
         data-test="wt-translate-page"
         @click="onPrimary"
       >
         {{ primaryLabel }}
       </UiButton>
       <UiButton
+        variant="invisible"
         size="sm"
         :disabled="busy || host === '' || !configurationReady"
         data-test="wt-exclude-site"
@@ -50,15 +53,34 @@
         {{ t(canResume ? 'wtFailedRetryWithResume' : 'wtFailedNoRetry') }}
       </span>
     </div>
-    <p v-if="sensitive" class="ui-hint">{{ t('wtSensitivePage') }}</p>
-    <p v-else-if="state === 'out-of-scope'" class="ui-hint">{{ t('wtScopeBlocked') }}</p>
-    <p v-else-if="state === 'master-off'" class="ui-hint">{{ t('wtMasterOff') }}</p>
+    <p
+      v-if="sensitive"
+      :id="primaryReason === 'wtSensitivePage' ? 'wt-primary-reason' : undefined"
+      class="ui-hint"
+    >
+      {{ t('wtSensitivePage') }}
+    </p>
+    <p
+      v-else-if="state === 'out-of-scope'"
+      :id="primaryReason === 'wtScopeBlocked' ? 'wt-primary-reason' : undefined"
+      class="ui-hint"
+    >
+      {{ t('wtScopeBlocked') }}
+    </p>
+    <p
+      v-else-if="state === 'master-off'"
+      :id="primaryReason === 'wtMasterOff' ? 'wt-primary-reason' : undefined"
+      class="ui-hint"
+    >
+      {{ t('wtMasterOff') }}
+    </p>
     <p v-else-if="state === 'capped'" class="ui-hint" data-test="wt-capped-note">
       {{ t(canResume ? 'wtCappedNote' : 'wtCappedRecordsNote') }}
       <button type="button" class="popup-card-link" data-test="wt-capped-settings" @click="openOptionsAt('#wt-general-title')">
         {{ t('wtPageLimitAdjust') }}
       </button>
     </p>
+    <p v-if="reasonNoteKey !== ''" id="wt-primary-reason" class="ui-hint">{{ t(reasonNoteKey) }}</p>
   </section>
 </template>
 
@@ -67,6 +89,7 @@ import { computed } from 'vue'
 import UiBadge from '../../components/ui/UiBadge.vue'
 import UiButton from '../../components/ui/UiButton.vue'
 import { useI18n } from '../../components/ui-preferences'
+import type { MessageKey } from '../../i18n'
 import {
   useProvidedTranslationControls,
   wtStateTone,
@@ -87,6 +110,7 @@ const {
   outOfScope,
   busy,
   configurationReady,
+  modelConfigured,
   sensitive,
   siteExcluded,
   translatePage,
@@ -104,13 +128,32 @@ const primaryLabel = computed(() => {
   if (busy.value) return t('wtProcessing')
   if (restoreOnly.value) return t('wtRestore')
   if (canResume.value) return t('wtResume')
-  return t('wtTranslatePage')
+  return t(
+    configurationReady.value && !modelConfigured.value && !primaryDisabled.value
+      ? 'wtConfigureNow'
+      : 'wtTranslatePage',
+  )
 })
 
 const primaryDisabled = computed(() => {
   if (busy.value) return true
   if (sensitive.value) return !restoreOnly.value
   return !canTranslate.value && !canRestore.value && !canResume.value
+})
+
+const primaryReason = computed<MessageKey | ''>(() => {
+  if (!primaryDisabled.value) return ''
+  if (busy.value) return 'wtProcessing'
+  if (state.value === 'loading') return 'stateLoading'
+  if (!configurationReady.value) return 'wtConfigUnreadable'
+  if (sensitive.value) return 'wtSensitivePage'
+  return WT_STATE_MESSAGE[state.value]
+})
+
+const reasonNoteKey = computed<MessageKey | ''>(() => {
+  const reason = primaryReason.value
+  if (reason === 'wtSensitivePage' || reason === 'wtScopeBlocked' || reason === 'wtMasterOff') return ''
+  return reason
 })
 
 function onPrimary(): void {
@@ -151,13 +194,20 @@ const progressText = computed(() => {
 
 .popup-card-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
 }
 
+.popup-card-head :deep(.ui-badge) {
+  flex: none;
+  max-width: 100%;
+}
+
 .popup-card-host {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   font-weight: 600;
@@ -167,7 +217,7 @@ const progressText = computed(() => {
 
 .popup-card-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -193,6 +243,7 @@ const progressText = computed(() => {
 
 .popup-card-failed {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;

@@ -2,6 +2,7 @@ import { enableAutoUnmount, mount, type DOMWrapper, type VueWrapper } from '@vue
 import { fakeBrowser } from 'wxt/testing/fake-browser'
 import { clearToasts } from '../../../src/components/toast'
 import { getSettings, settingsItem } from '../../../src/shared/settings'
+import { DEFAULT_TRANSLATION_CONFIG } from '../../../src/translation/config'
 import {
   STATUS,
   contentMissing,
@@ -132,6 +133,7 @@ describe.skipIf(!App)('弹出页组件', () => {
     delete document.documentElement.dataset.theme
     clearToasts()
     vi.restoreAllMocks()
+    vi.unstubAllEnvs()
   })
 
   it('标题后紧跟版本号（不在标题内）', async () => {
@@ -306,8 +308,8 @@ describe.skipIf(!App)('弹出页组件', () => {
       const wrapper = await render()
       const children = [...wrapper.element.children]
       const footer = wrapper.get('footer')
-      expect(children.map((item) => item.tagName)).toEqual(['HEADER', 'SECTION', 'SECTION', 'FOOTER', 'DIV'])
-      expect(children[4]?.getAttribute('aria-live')).toBe('polite')
+      expect(children.map((item) => item.tagName)).toEqual(['HEADER', 'SECTION', 'SECTION', 'SECTION', 'FOOTER', 'DIV'])
+      expect(children[5]?.getAttribute('aria-live')).toBe('polite')
       expect(toastTexts(wrapper)).toEqual([])
       expect(wrapper.find('.popup-details').exists()).toBe(false)
       expect(footer.findAll('button, a').map((item) => item.attributes('aria-label') ?? item.text())).toEqual([
@@ -318,13 +320,17 @@ describe.skipIf(!App)('弹出页组件', () => {
       expect(footer.get('[data-test="settings"] svg').attributes('aria-hidden')).toBe('true')
     })
 
-    it('页脚有本站设置、模型设置和设置齿轮，没有外链', async () => {
+    it('页脚有本站设置、模型设置和设置齿轮，没有外链；文本翻译入口在页脚之外且只有一个', async () => {
       mockContent(contentWith())
       const wrapper = await render()
       expect(wrapper.find('footer a').exists()).toBe(false)
       expect(wrapper.find('[data-test="repository"]').exists()).toBe(false)
       expect(wrapper.get('[data-test="wt-open-site-settings"]').text()).toBe('本站设置')
       expect(wrapper.get('[data-test="wt-open-model-settings"]').text()).toBe('模型设置')
+      const entries = wrapper.findAll('[data-test="wt-open-translate"]')
+      expect(entries).toHaveLength(1)
+      expect(wrapper.get('footer').find('[data-test="wt-open-translate"]').exists()).toBe(false)
+      expect(entries[0]?.element.closest('footer')).toBeNull()
       const gear = wrapper.get('[data-test="settings"]')
       expect(gear.attributes('aria-label')).toBe('设置')
       expect(gear.get('svg').attributes('viewBox')).toBe('0 0 24 24')
@@ -392,9 +398,109 @@ describe.skipIf(!App)('弹出页组件', () => {
       await wrapper.get('[data-test="settings"]').trigger('click')
       await settle()
       const children = [...wrapper.element.children]
-      expect(children.map((item) => item.tagName)).toEqual(['HEADER', 'SECTION', 'SECTION', 'FOOTER', 'DIV'])
+      expect(children.map((item) => item.tagName)).toEqual(['HEADER', 'SECTION', 'SECTION', 'SECTION', 'FOOTER', 'DIV'])
       expect(toastTexts(wrapper)).toEqual(['打开失败'])
       expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    })
+  })
+
+  describe('更多功能与未配置模型', () => {
+    it('“更多功能”默认收起；已保存的展开/收起状态被恢复', async () => {
+      mockContent(contentWith())
+      let wrapper = await render()
+      expect((wrapper.get('details.popup-more').element as HTMLDetailsElement).open).toBe(false)
+      wrapper.unmount()
+
+      localStorage.setItem('gcn:popup-more-open', 'true')
+      wrapper = await render()
+      expect((wrapper.get('details.popup-more').element as HTMLDetailsElement).open).toBe(true)
+      wrapper.unmount()
+
+      localStorage.setItem('gcn:popup-more-open', 'false')
+      wrapper = await render()
+      expect((wrapper.get('details.popup-more').element as HTMLDetailsElement).open).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('未配置模型时主按钮为配置入口：点击打开选项页模型分区，不发送翻译请求', async () => {
+      await openTab(`${REPO_URL}/issues`)
+      mockContent(contentWith())
+      const send = vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockImplementation(async (message: unknown) => {
+        const m = message as { type?: string }
+        if (m.type === 'wt:get-config') {
+          return {
+            ok: true,
+            config: { ...DEFAULT_TRANSLATION_CONFIG, baseUrl: '', model: '' },
+            hasKey: false,
+            keyState: 'none',
+          }
+        }
+        return { ok: true }
+      })
+      const createTab = vi.spyOn(fakeBrowser.tabs, 'create')
+      const wrapper = await render()
+      const primary = wrapper.get('[data-test="wt-translate-page"]')
+      expect(primary.text()).toBe('配置模型')
+      expect((primary.element as HTMLButtonElement).disabled).toBe(false)
+      await primary.trigger('click')
+      await settle()
+      expect(createTab).toHaveBeenCalledWith({
+        url: expect.stringContaining('options.html#wt-title'),
+      })
+      const types = send.mock.calls.map((call) => (call[0] as { type?: string }).type)
+      expect(types).not.toContain('wt:translate-page')
+    })
+  })
+
+  describe('文本翻译窗口', () => {
+    it('点击后以独立弹出窗口打开 translate.html 并关闭弹出页', async () => {
+      mockContent(contentWith())
+      const create = vi.spyOn(fakeBrowser.windows, 'create').mockResolvedValue({} as never)
+      const createTab = vi.spyOn(fakeBrowser.tabs, 'create')
+      const close = vi.spyOn(window, 'close').mockImplementation(() => undefined)
+      const wrapper = await render()
+      await wrapper.get('[data-test="wt-open-translate"]').trigger('click')
+      await settle()
+      expect(create).toHaveBeenCalledWith({
+        url: expect.stringContaining('/translate.html'),
+        type: 'popup',
+        width: 1000,
+        height: 760,
+      })
+      expect(createTab).not.toHaveBeenCalled()
+      expect(close).toHaveBeenCalledTimes(1)
+    })
+
+    it('弹出窗口失败时退回当前窗口新标签页', async () => {
+      mockContent(contentWith())
+      vi.spyOn(fakeBrowser.windows, 'create').mockRejectedValue(new Error('不支持'))
+      const createTab = vi.spyOn(fakeBrowser.tabs, 'create').mockResolvedValue({} as never)
+      const close = vi.spyOn(window, 'close').mockImplementation(() => undefined)
+      const wrapper = await render()
+      await wrapper.get('[data-test="wt-open-translate"]').trigger('click')
+      await settle()
+      expect(createTab).toHaveBeenCalledWith({ url: expect.stringContaining('/translate.html') })
+      expect(close).toHaveBeenCalledTimes(1)
+    })
+
+    it('两种打开方式都失败时提示，不关闭弹出页', async () => {
+      mockContent(contentWith())
+      vi.spyOn(fakeBrowser.windows, 'create').mockRejectedValue(new Error('不支持'))
+      vi.spyOn(fakeBrowser.tabs, 'create').mockRejectedValue(new Error('失败'))
+      const close = vi.spyOn(window, 'close').mockImplementation(() => undefined)
+      const wrapper = await render()
+      await wrapper.get('[data-test="wt-open-translate"]').trigger('click')
+      await settle()
+      expect(toastTexts(wrapper)).toEqual(['打开失败'])
+      expect(close).not.toHaveBeenCalled()
+    })
+
+    it('Firefox 构建不显示入口（与模型功能一致）', async () => {
+      vi.stubEnv('FIREFOX', 'true')
+      mockContent(contentWith())
+      const wrapper = await render()
+      expect(wrapper.find('[data-test="wt-open-translate"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="wt-open-model-settings"]').exists()).toBe(false)
     })
   })
 

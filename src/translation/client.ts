@@ -48,7 +48,9 @@ export function closePageSession(): void {
 }
 
 function withPageSession<M extends TranslationMessage>(message: M): M {
-  if (message.type !== 'wt:translate' && message.type !== 'wt:assist') return message
+  if (message.type !== 'wt:translate' && message.type !== 'wt:assist' && message.type !== 'wt:translate-text') {
+    return message
+  }
   const session = ensurePageSession()
   return session === undefined ? message : { ...message, pageSession: session }
 }
@@ -62,7 +64,7 @@ function queueWaitMs(message: TranslationMessage): number {
   if (message.type === 'wt:assist') {
     return message.input.trigger === 'selection' ? QUEUE_WAIT_LIMIT_MS.interactive : QUEUE_WAIT_LIMIT_MS.automatic
   }
-  return message.type === 'wt:test' ? QUEUE_WAIT_LIMIT_MS.interactive : 0
+  return message.type === 'wt:test' || message.type === 'wt:translate-text' ? QUEUE_WAIT_LIMIT_MS.interactive : 0
 }
 
 /**
@@ -94,7 +96,9 @@ export async function sendTranslationMessage<M extends TranslationMessage>(
   const timeout = new Promise<TranslationReply<M['type']>>((resolve) => {
     timer = setTimeout(() => {
       if (
-        (message.type === 'wt:assist' || message.type === 'wt:translate') &&
+        (message.type === 'wt:assist' ||
+          message.type === 'wt:translate' ||
+          message.type === 'wt:translate-text') &&
         message.requestId !== undefined
       ) {
         void Promise.resolve()
