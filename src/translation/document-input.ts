@@ -12,6 +12,8 @@ import type { LiveTranslationOptions } from './live-translation'
 import type { DocumentEditorRequest, DocumentEditorResult } from './document-editor'
 import {
   applySurfacePreferences,
+  createProgressIndicator,
+  createSurfaceExit,
   DEFAULT_SURFACE_PREFERENCES,
   syncSurfaceVisibility,
 } from './ui-surface'
@@ -74,6 +76,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   let copyOriginalButton: HTMLButtonElement | undefined
   let hintNode: HTMLElement | undefined
   let keyHintNode: HTMLElement | undefined
+  let panelExit: ReturnType<typeof createSurfaceExit> | undefined
 
   function ensureDom(): void {
     if (host !== undefined) return
@@ -145,8 +148,9 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     keyHint.dataset.action = 'key-hint'
     panel.setAttribute('aria-describedby', keyHint.id)
     actions.append(replace, restore, copy, copyOriginal, hint, keyHint)
-    panel.append(header, status, actions)
+    panel.append(header, status, actions, createProgressIndicator())
     closed.append(style, panel)
+    panelExit = createSurfaceExit(panel, created)
     panel.addEventListener('pointerdown', (event) => {
       event.preventDefault()
     })
@@ -198,6 +202,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
 
   function showPanel(): void {
     if (disposed || host === undefined) return
+    panelExit?.show()
     syncLabels()
     if (!host.isConnected) document.documentElement.append(host)
     host.style.setProperty('display', 'block', 'important')
@@ -209,7 +214,19 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   }
 
   function hidePanel(): void {
-    if (host !== undefined) host.style.setProperty('display', 'none', 'important')
+    popover?.setAttribute('aria-busy', 'false')
+    const finalize = () => {
+      if (host !== undefined) host.style.setProperty('display', 'none', 'important')
+      if (statusNode !== undefined) {
+        statusNode.textContent = ''
+        statusNode.className = 'status'
+      }
+      syncActions()
+    }
+    if (disposed || panelExit === undefined) {
+      panelExit?.show()
+      finalize()
+    } else panelExit.hide(finalize)
   }
 
   function setStatus(text: string, isError = false): void {
@@ -357,12 +374,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     clearCopyTimer()
     clearVerify()
     hidePanel()
-    if (statusNode !== undefined) {
-      statusNode.textContent = ''
-      statusNode.className = 'status'
-    }
     statusFailed = false
-    syncActions()
     if (returnRoot?.isConnected === true) focusEditor(returnRoot)
   }
 
@@ -711,6 +723,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
       copyOriginalButton = undefined
       hintNode = undefined
       keyHintNode = undefined
+      panelExit = undefined
     },
   }
 }

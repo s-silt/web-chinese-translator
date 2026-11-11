@@ -25,9 +25,11 @@
   /* 动效：悬停、按下等状态切换用 fast；开关滑块等位移用 base，缓出 */
   --gcn-ease: cubic-bezier(0.3, 0, 0.5, 1);
   --gcn-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --gcn-ease-ripple: cubic-bezier(0.2, 0, 0, 1);
   --gcn-duration-fast: 140ms;
   --gcn-duration-base: 180ms;
   --gcn-duration-theme: 160ms;
+  --gcn-duration-exit: 100ms;
 
   /* 文字与背景 */
   --gcn-fg: light-dark(#1f2328, #f0f6fc);
@@ -70,11 +72,11 @@
   --gcn-btn-active-bg: light-dark(#e6eaef, #2a313c);
   --gcn-btn-border: light-dark(#d1d9e0, #3d444d);
   --gcn-primary-fg: #ffffff;
-  --gcn-primary-bg: light-dark(#1a7f37, #238636);
-  --gcn-primary-hover-bg: light-dark(#166b2e, #1f7a31);
-  --gcn-primary-active-bg: light-dark(#145e28, #1b6e2b);
-  --gcn-primary-disabled-bg: light-dark(#95d8a6, #105823);
-  --gcn-primary-disabled-fg: light-dark(#ffffffcc, #ffffff66);
+  --gcn-primary-bg: #0969da;
+  --gcn-primary-hover-bg: #0860ca;
+  --gcn-primary-active-bg: #0757b8;
+  --gcn-primary-disabled-bg: var(--gcn-bg-disabled);
+  --gcn-primary-disabled-fg: var(--gcn-fg-disabled);
   --gcn-primary-border: light-dark(#1f232826, #ffffff1a);
   --gcn-primary-shadow: 0 1px 0 0 light-dark(#1f23281a, #0000);
   --gcn-danger-hover-bg: light-dark(#d1242f, #b62324);
@@ -88,6 +90,7 @@
   --gcn-switch-on: light-dark(#0969da, #1f6feb);
   --gcn-switch-on-hover: light-dark(#0860ca, #388bfd);
   --gcn-knob: light-dark(#ffffff, #f0f6fc);
+  --gcn-knob-on: var(--gcn-knob);
 }
 
 :root:lang(zh-TW),
@@ -171,13 +174,14 @@
   --gcn-primary-bg: #55e5ff;
   --gcn-primary-hover-bg: #7fecff;
   --gcn-primary-active-bg: #3fd6f2;
-  --gcn-primary-disabled-bg: #182b3e;
-  --gcn-primary-disabled-fg: #6b85a0;
+  --gcn-primary-disabled-bg: var(--gcn-bg-disabled);
+  --gcn-primary-disabled-fg: var(--gcn-fg-disabled);
   --gcn-primary-border: transparent;
   --gcn-switch-off: #2d4a6b;
   --gcn-switch-on: #55e5ff;
   --gcn-switch-on-hover: #7fecff;
   --gcn-knob: #e7f4ff;
+  --gcn-knob-on: #051c26;
   --gcn-overlay-bg: #0b1526;
   --gcn-overlay-border: #2b4f6e;
   --gcn-page-bg: #060c18;
@@ -199,13 +203,13 @@
 :host([data-style='glass']) {
   --gcn-fg: light-dark(#1d2b43, #e6edf7);
   --gcn-fg-muted: light-dark(#4e6078, #a3b4cc);
-  --gcn-fg-disabled: light-dark(#65748a, #a3b4cc);
+  --gcn-fg-disabled: light-dark(#596b82, #a3b4cc);
   --gcn-bg: light-dark(#ffffffeb, #141e2feb);
   --gcn-bg-muted: light-dark(#f2f6fcbf, #0e1624bf);
   --gcn-bg-disabled: light-dark(#e9eef6, #1b2536);
   --gcn-border: light-dark(#c5d2e3, #2f3e56);
   --gcn-border-muted: light-dark(#c5d2e399, #2f3e5699);
-  --gcn-border-emphasis: light-dark(#8ea3bf, #4d6487);
+  --gcn-border-emphasis: light-dark(#7589a4, #6b85a5);
   --gcn-accent: light-dark(#1268e8, #6ea8ff);
   --gcn-focus: var(--gcn-accent);
   --gcn-selection: light-dark(#e5eeff, #1f3a66);
@@ -216,12 +220,16 @@
   --gcn-radius-overlay: 18px;
   --gcn-success-fg: light-dark(#137a4b, #5ad39b);
   --gcn-success-bg: light-dark(#dff4e9, #11331f);
+  --gcn-attention-fg: light-dark(#795300, #e9ba66);
+  --gcn-attention-bg: light-dark(#f7f0db, #332b1e);
+  --gcn-danger-fg: light-dark(#bb3349, #ff8fa3);
+  --gcn-danger-bg: light-dark(#fae8ed, #382532);
   --gcn-primary-fg: #ffffff;
   --gcn-primary-bg: light-dark(#1268e8, #2165d6);
   --gcn-primary-hover-bg: light-dark(#0f5ccf, #1c5fcf);
   --gcn-primary-active-bg: light-dark(#0d51b6, #1855bd);
-  --gcn-primary-disabled-bg: light-dark(#d8e2f0, #1e2b3e);
-  --gcn-primary-disabled-fg: light-dark(#6c7e96, #697c96);
+  --gcn-primary-disabled-bg: var(--gcn-bg-disabled);
+  --gcn-primary-disabled-fg: var(--gcn-fg-disabled);
   --gcn-primary-border: transparent;
   --gcn-btn-fg: light-dark(#1d2b43, #e6edf7);
   --gcn-btn-bg: light-dark(#ffffffcc, #1a2437cc);

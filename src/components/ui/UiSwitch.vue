@@ -113,6 +113,7 @@ function attrs(): SplitAttrs {
 }
 
 .ui-switch-track[aria-checked='true'] .ui-switch-knob {
+  background: var(--gcn-knob-on);
   transform: translateX(16px);
 }
 

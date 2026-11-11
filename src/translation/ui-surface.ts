@@ -1,4 +1,5 @@
 import tokens from '../components/ui-tokens.css?inline'
+import progress from '../components/progress.css?inline'
 import type { UiLanguage } from '../shared/locale'
 import type { ThemePreference, UiStyle } from '../shared/settings'
 
@@ -14,8 +15,74 @@ export const DEFAULT_SURFACE_PREFERENCES: SurfacePreferences = {
   language: 'zh-CN',
 }
 
+const pendingExits = new WeakMap<HTMLElement, Set<() => void>>()
+
+export function createSurfaceExit(element: HTMLElement, host: HTMLElement) {
+  let pending: { timer?: ReturnType<typeof setTimeout>; finalize: () => void } | undefined
+
+  function clear(): void {
+    if (pending?.timer !== undefined) clearTimeout(pending.timer)
+    pending = undefined
+    pendingExits.get(host)?.delete(finish)
+    element.removeAttribute('data-wt-closing')
+    element.removeAttribute('aria-hidden')
+    element.inert = false
+    element.style.removeProperty('--wt-exit-opacity')
+  }
+
+  function finish(): void {
+    const current = pending
+    if (current === undefined) return
+    clear()
+    current.finalize()
+  }
+
+  return {
+    show: clear,
+    finish,
+    isClosing: () => pending !== undefined,
+    hide(finalize: () => void): void {
+      if (pending !== undefined) return
+      if (!element.isConnected || document.hidden || host.style.display === 'none' || element.style.display === 'none' || element.hidden || typeof element.getAnimations !== 'function') {
+        finalize()
+        return
+      }
+      element.style.setProperty('--wt-exit-opacity', getComputedStyle(element).opacity)
+      element.setAttribute('data-wt-closing', '')
+      element.setAttribute('aria-hidden', 'true')
+      element.inert = true
+      const animations = element.getAnimations().filter(animation =>
+        'animationName' in animation && animation.animationName === 'wt-surface-exit',
+      )
+      const current: { timer?: ReturnType<typeof setTimeout>; finalize: () => void } = { finalize }
+      pending = current
+      if (animations.length === 0) {
+        finish()
+        return
+      }
+      const exits = pendingExits.get(host) ?? new Set<() => void>()
+      exits.add(finish)
+      pendingExits.set(host, exits)
+      const duration = Number.parseFloat(getComputedStyle(element).getPropertyValue('--gcn-duration-exit'))
+      current.timer = setTimeout(finish, Math.max(0, Math.min(Number.isFinite(duration) ? duration : 100, 1000)) + 50)
+      void Promise.allSettled(animations.map(animation => animation.finished)).then(() => {
+        if (pending === current) finish()
+      })
+    },
+  }
+}
+
+export function createProgressIndicator(): HTMLElement {
+  const indicator = document.createElement('span')
+  indicator.className = 'wt-progress'
+  indicator.setAttribute('aria-hidden', 'true')
+  indicator.append(document.createElement('span'))
+  return indicator
+}
+
 export function syncSurfaceVisibility(host: HTMLElement): void {
   host.toggleAttribute('data-wt-page-hidden', document.hidden)
+  if (document.hidden) for (const finish of pendingExits.get(host) ?? []) finish()
 }
 
 export function applySurfacePreferences(
@@ -44,7 +111,7 @@ export function applySurfacePreferences(
   syncSurfaceVisibility(host)
 }
 
-export const SURFACE_CSS = tokens + '\n' + `:host {
+export const SURFACE_CSS = tokens + '\n' + progress + '\n' + `:host {
   --wt-surface: var(--gcn-surface);
   --wt-ink: var(--gcn-fg);
   --wt-muted: var(--gcn-fg-muted);
@@ -56,15 +123,18 @@ button, input, summary { font-family: var(--gcn-font); }
 button:focus-visible, input:focus-visible, summary:focus-visible {
   outline: 2px solid var(--gcn-focus); outline-offset: 2px;
 }
-:host([data-wt-page-hidden]) * { animation: none !important; transition: none !important; }
+:host([data-wt-page-hidden]) *, :host([data-wt-page-hidden]) *::before, :host([data-wt-page-hidden]) *::after { animation: none !important; transition: none !important; }
 @keyframes wt-surface-enter { from { opacity: 0; } to { opacity: 1; } }
+@keyframes wt-surface-exit { from { opacity: var(--wt-exit-opacity, 1); } to { opacity: 0; } }
+[data-wt-closing] { pointer-events: none !important; }
 @media (prefers-reduced-motion: no-preference) {
   .panel, .hint, .selection-toolbar, .popover, .floating-menu:not([hidden]), .notice-speech {
     animation: wt-surface-enter var(--gcn-duration-base) var(--gcn-ease-out);
   }
+  :is(.panel, .hint, .selection-toolbar, .popover, .floating-menu, .notice-speech)[data-wt-closing] { animation: wt-surface-exit var(--gcn-duration-exit) var(--gcn-ease-out) both; }
   button { transition: background-color var(--gcn-duration-fast) var(--gcn-ease), border-color var(--gcn-duration-fast) var(--gcn-ease); }
 }
-@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 @media (prefers-reduced-transparency: reduce) {
   :host([data-style='glass']) { --gcn-surface: Canvas; --gcn-surface-blur: 0px; }
 }

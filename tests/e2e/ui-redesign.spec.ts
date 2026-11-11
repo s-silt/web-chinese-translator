@@ -310,6 +310,63 @@ async function workerOf(context: BrowserContext): Promise<Worker> {
   return context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'))
 }
 
+test('深色导航与玻璃悬浮菜单在明暗网页上保持文字对比度', async () => {
+  const api = await startMock()
+  const { context, extensionId } = await launch({ width: 1100, height: 800 })
+  const contrast = async (page: Page, selector: string): Promise<number> => page.locator(selector).evaluate(node => {
+    const rgba = (value: string): number[] => {
+      const parts = (value.match(/[\d.]+/g) ?? []).map(Number)
+      return [...parts.slice(0, 3), parts[3] ?? 1]
+    }
+    const layers: number[][] = []
+    let current: Element | null = node
+    while (current) {
+      layers.push(rgba(getComputedStyle(current).backgroundColor))
+      current = current.parentElement ?? (current.getRootNode() as ShadowRoot).host ?? null
+    }
+    let background = [255, 255, 255]
+    for (const layer of layers.reverse()) background = background.map((value, i) => layer[i]! * layer[3]! + value * (1 - layer[3]!))
+    const luminance = (color: number[]): number => color.slice(0, 3).reduce((sum, value, i) => {
+      const srgb = value / 255
+      return sum + [0.2126, 0.7152, 0.0722][i]! * (srgb <= 0.04045 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4)
+    }, 0)
+    const levels = [luminance(rgba(getComputedStyle(node).color)), luminance(background)].sort((a, b) => a - b)
+    return (levels[1]! + 0.05) / (levels[0]! + 0.05)
+  })
+  try {
+    const options = await saveAndConnect(context, extensionId, api.url)
+    await setAppearance(options, 'classic', 'dark')
+    await expect(options.locator('html')).toHaveAttribute('data-theme', 'dark')
+    await expect.configure({ soft: true }).poll(() => contrast(options, '.options-nav a[aria-current="page"]')).toBeGreaterThanOrEqual(4.5)
+    await enableFloating(options)
+    await setAppearance(options, 'glass', 'dark')
+    await expect(options.locator('html')).toHaveAttribute('data-style', 'glass')
+    const page = await context.newPage()
+    await page.goto(`${api.url.replace('127.0.0.1', 'reader.fixture.test')}/page`)
+    await waitForSiteScriptRegistration(options, { url: page.url() })
+    await waitForSiteContentReady(options, page, { supported: false })
+    await page.bringToFront()
+    const entry = page.locator('.floating-entry')
+    await expect(entry).toBeVisible()
+    const rect = await entry.boundingBox()
+    expect(rect).not.toBeNull()
+    const width = await page.evaluate(() => innerWidth)
+    await page.mouse.move(Math.min(rect!.x + rect!.width - 4, width - 4), rect!.y + rect!.height / 2)
+    await entry.click()
+    const menu = page.locator('.floating-menu')
+    await expect(menu).toBeVisible()
+    await expect.poll(() => menu.evaluate(node => getComputedStyle(node).opacity)).toBe('1')
+    for (const color of ['#ffffff', '#000000']) {
+      await page.evaluate(value => { document.documentElement.style.backgroundColor = value }, color)
+      await expect.poll(() => contrast(page, '.floating-disclosure')).toBeGreaterThanOrEqual(4.5)
+      await expect.poll(() => contrast(page, '.floating-close')).toBeGreaterThanOrEqual(4.5)
+    }
+  } finally {
+    await context.close()
+    await api.close()
+  }
+})
+
 async function workerTabId(worker: Worker, url: string): Promise<number> {
   return worker.evaluate(async (target) => {
     const { chrome } = globalThis as unknown as { chrome: FixtureChrome }

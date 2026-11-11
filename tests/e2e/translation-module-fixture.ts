@@ -20,10 +20,10 @@ async function transpileTranslationModules(entryFiles: readonly string[]): Promi
     const code = ts.transpileModule(raw, { compilerOptions }).outputText
     for (const match of code.matchAll(/\bfrom\s+['"](\.[^'"]+)['"]/g)) {
       const spec = match[1]!
-      if (spec === '../components/ui-tokens.css?inline') {
+      if (spec === '../components/ui-tokens.css?inline' || spec === '../components/progress.css?inline') {
         if (!visited.has(spec)) {
           visited.add(spec)
-          const css = await readFile(resolve(TRANSLATION_DIR, '../components/ui-tokens.css'), 'utf8')
+          const css = await readFile(resolve(TRANSLATION_DIR, spec.replace(/\?inline$/, '')), 'utf8')
           ordered.push({ spec, code: `export default ${JSON.stringify(css)};` })
         }
         continue

@@ -78,6 +78,23 @@ function deferred(): { promise: Promise<unknown>; resolve(value: unknown): void 
   return { promise, resolve }
 }
 
+it.each(['success', 'error', 'cancel'] as const)('等待指示在 %s 后移除，保留独立状态文字', async completion => {
+  const pending = deferred()
+  translateReplies.push(() => pending.promise)
+  const wrapper = await render()
+  await wrapper.get('[data-test="wt-text-input"]').setValue('Synthetic loading sample')
+  await wrapper.get('[data-test="wt-text-translate"]').trigger('click')
+  await settle()
+  expect(wrapper.get('.wt-progress').attributes('aria-hidden')).toBe('true')
+  expect(wrapper.get('[data-test="wt-text-busy"]').attributes('role')).toBe('status')
+  if (completion === 'cancel') await wrapper.get('[data-test="wt-text-cancel"]').trigger('click')
+  pending.resolve(completion === 'error' ? { ok: false, error: 'Synthetic failure' } : { ok: true, texts: ['Synthetic result'] })
+  await settle()
+  expect(wrapper.find('.wt-progress').exists()).toBe(false)
+  expect(wrapper.get('[data-test="wt-text-result"]').attributes('aria-busy')).toBe('false')
+  wrapper.unmount()
+})
+
 beforeEach(async () => {
   fakeBrowser.reset()
   sent = []

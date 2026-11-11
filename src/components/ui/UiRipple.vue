@@ -184,7 +184,7 @@ onBeforeUnmount(() => {
   opacity: 0;
   transform: scale(0);
   animation:
-    ui-ripple-grow var(--gcn-duration-base) cubic-bezier(0.2, 0, 0, 1),
+    ui-ripple-grow var(--gcn-duration-base) var(--gcn-ease-ripple),
     ui-ripple-fade var(--gcn-duration-base) linear;
 }
 

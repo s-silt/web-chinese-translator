@@ -649,7 +649,7 @@ describe('悬浮入口', () => {
     const forced = css.slice(css.lastIndexOf('.floating-auto::after { forced-color-adjust'))
     expect(css.slice(0, css.length - forced.length).trimEnd().endsWith('@media (forced-colors: active) {')).toBe(true)
     expect(forced).toContain('.floating-auto::after { forced-color-adjust: none; --gcn-knob: ButtonText; --gcn-switch-off: Canvas;')
-    expect(forced).toContain(".floating-auto[aria-checked='true']::after { --gcn-knob: HighlightText; --gcn-switch-on: Highlight;")
+    expect(forced).toContain(".floating-auto[aria-checked='true']::after { --gcn-knob: HighlightText; --gcn-knob-on: HighlightText; --gcn-switch-on: Highlight;")
     expect(forced).toContain('.floating-auto:disabled::after { --gcn-knob: GrayText;')
   })
 

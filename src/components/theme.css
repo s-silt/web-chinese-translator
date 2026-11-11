@@ -1,5 +1,6 @@
 /* 全局主题：Primer 风格的颜色变量与基础样式。外观默认跟随浏览器明暗，<html data-theme> 可固定为浅色或深色 */
 @import './ui-tokens.css';
+@import './progress.css';
 
 /* 浏览器自带的表面（选中文字、原生控件）也取主题色；滚动条见下方 */
 :root {
@@ -87,7 +88,7 @@ p {
   line-height: 20px;
   color: var(--gcn-fg);
   background: var(--gcn-bg);
-  border: 1px solid var(--gcn-border);
+  border: 1px solid var(--gcn-border-emphasis);
   border-radius: var(--gcn-radius);
   box-shadow: var(--gcn-shadow-inset);
   caret-color: var(--gcn-accent);
@@ -102,7 +103,7 @@ p {
 }
 
 .ui-field:hover:not(:disabled, :focus-visible) {
-  border-color: var(--gcn-border-emphasis);
+  border-color: var(--gcn-accent);
 }
 
 .ui-field:focus-visible {

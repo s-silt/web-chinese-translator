@@ -5,6 +5,8 @@ import { deepActiveElement } from './input-translation'
 import type { SelectionAnchor } from './selection'
 import {
   applySurfacePreferences,
+  createProgressIndicator,
+  createSurfaceExit,
   DEFAULT_SURFACE_PREFERENCES,
   SURFACE_CSS,
   syncSurfaceVisibility,
@@ -330,8 +332,9 @@ export function createTranslationPanel(): TranslationPanel {
   panelAnnouncement.className = 'panel-announcement'
   panelAnnouncement.setAttribute('role', 'status')
   panelAnnouncement.setAttribute('aria-live', 'polite')
-  panel.append(header, body, status, panelErrorDetails.element, actions, panelAnnouncement)
+  panel.append(header, body, status, panelErrorDetails.element, actions, panelAnnouncement, createProgressIndicator())
   shadow.append(style, panel, hint, pauseStatus, toolbar)
+  const surfaceExits = [panel, hint, toolbar].map(element => ({ element, exit: createSurfaceExit(element, host) }))
 
   let attached = false
   let modalHost: HTMLDialogElement | undefined
@@ -453,6 +456,7 @@ export function createTranslationPanel(): TranslationPanel {
 
   function setStatus(message: string, error: boolean): void {
     loading = false
+    panel.setAttribute('aria-busy', 'false')
     status.textContent = message
     status.classList.toggle('panel-status-error', error)
     status.style.display = message === '' ? 'none' : ''
@@ -570,7 +574,7 @@ export function createTranslationPanel(): TranslationPanel {
   }
 
   function syncHostAttachment(): void {
-    const visible = state !== 'hidden' || pauseShown || floatingEntry !== undefined
+    const visible = state !== 'hidden' || pauseShown || floatingEntry !== undefined || surfaceExits.some(({ exit }) => exit.isClosing())
     if (visible) attach()
     else {
       releaseModal()
@@ -649,7 +653,7 @@ export function createTranslationPanel(): TranslationPanel {
     floatingEntry.reposition()
   }
 
-  function applyState(next: PanelState): void {
+  function applyState(next: PanelState, afterHide?: () => void): void {
     if ((next === 'panel' || next === 'hint' || next === 'toolbar') && floatingEntry?.isMenuOpen() === true) {
       floatingEntry.closeMenu()
     }
@@ -666,10 +670,24 @@ export function createTranslationPanel(): TranslationPanel {
         pendingRaf = 0
       }
     }
+    for (const { element, exit } of surfaceExits) {
+      const shown = next === 'panel' ? panel : next === 'hint' ? hint : next === 'toolbar' ? toolbar : undefined
+      if (element === shown) {
+        exit.show()
+        element.style.display = ''
+      } else if (next === 'hidden' && !disposed && element.style.display !== 'none') {
+        exit.hide(() => {
+          element.style.display = 'none'
+          afterHide?.()
+          syncHostAttachment()
+        })
+      } else {
+        exit.show()
+        element.style.display = 'none'
+      }
+    }
+    if (disposed) afterHide?.()
     syncHostAttachment()
-    panel.style.display = next === 'panel' ? '' : 'none'
-    hint.style.display = next === 'hint' ? '' : 'none'
-    toolbar.style.display = next === 'toolbar' ? '' : 'none'
     const nextTarget = layoutTarget()
     if (previousTarget !== undefined && previousTarget !== nextTarget) resizeObserver?.unobserve(previousTarget)
     if (next === 'panel') {
@@ -896,13 +914,18 @@ export function createTranslationPanel(): TranslationPanel {
     if (options?.keepFloatingMenu !== true) floatingEntry?.closeMenu()
     if (state === 'hidden') return
     onHintOpen = () => undefined
-    resetBody()
-    setStatus('', false)
+    resultText = ''
+    copyArmed = false
+    loading = false
+    panel.setAttribute('aria-busy', 'false')
     toolbarAction = undefined
     copyFeedback = undefined
     copyButton.textContent = labels.copy
     toolbarAnnouncement.textContent = ''
-    applyState('hidden')
+    applyState('hidden', () => {
+      resetBody()
+      setStatus('', false)
+    })
     resizeObserver?.unobserve(panel)
     resizeObserver?.unobserve(toolbar)
     onClose()
@@ -1098,6 +1121,7 @@ export function createTranslationPanel(): TranslationPanel {
       resetBody()
       setStatus(labels.loading, false)
       loading = true
+      panel.setAttribute('aria-busy', 'true')
       applyState('panel')
     },
     showSelectionResult(source, translations) {
@@ -1185,6 +1209,7 @@ export function createTranslationPanel(): TranslationPanel {
       if (pauseRaf !== 0) cancelAnimationFrame(pauseRaf)
       pauseRaf = 0
       close()
+      for (const { exit } of surfaceExits) exit.finish()
       if (floatingEntry !== undefined) {
         floatingEntry.dispose()
         floatingEntry = undefined

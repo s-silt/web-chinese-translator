@@ -118,6 +118,7 @@ const {
 .ui-button-primary:disabled {
   color: var(--gcn-primary-disabled-fg);
   background: var(--gcn-primary-disabled-bg);
+  border-color: var(--gcn-border);
 }
 
 .ui-button-danger {

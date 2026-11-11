@@ -71,7 +71,12 @@
           </p>
         </section>
 
-        <section class="translate-pane" aria-labelledby="wt-text-target-label">
+        <section
+          class="translate-pane"
+          aria-labelledby="wt-text-target-label"
+          :aria-busy="busy"
+          :data-wt-page-hidden="pageHidden ? '' : undefined"
+        >
           <div class="translate-pane-head">
             <span id="wt-text-target-label" class="ui-label">{{ t('wtTargetLanguage') }}</span>
             <UiSelect
@@ -92,6 +97,7 @@
             readonly
             :aria-busy="busy"
           />
+          <span v-if="busy" class="wt-progress" aria-hidden="true"><span /></span>
         </section>
       </div>
 
@@ -225,6 +231,7 @@ const source = ref<SourceLanguage>('auto')
 const target = ref<TargetLanguage>('zh-CN')
 const error = ref('')
 const busy = ref(false)
+const pageHidden = ref(document.hidden)
 const requestFailed = ref(false)
 const errorHintKey = ref<MessageKey>('textTranslateErrorHint')
 const loadFailed = ref(false)
@@ -422,6 +429,10 @@ function onPageHide(): void {
   closePageSession()
 }
 
+function onVisibilityChange(): void {
+  pageHidden.value = document.hidden
+}
+
 watch(
   [language, settings],
   () => {
@@ -431,6 +442,11 @@ watch(
 )
 
 watch(busy, (now) => {
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  if (now) {
+    onVisibilityChange()
+    document.addEventListener('visibilitychange', onVisibilityChange)
+  }
   const active = document.activeElement
   if (active === null) return
   if (now) {
@@ -457,6 +473,7 @@ onBeforeUnmount(() => {
   configEpoch += 1
   window.removeEventListener('focus', onFocus)
   window.removeEventListener('pagehide', onPageHide)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   invalidate()
   closePageSession()
 })
@@ -542,6 +559,7 @@ onBeforeUnmount(() => {
 }
 
 .translate-pane {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;

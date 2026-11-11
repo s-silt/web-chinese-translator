@@ -386,7 +386,7 @@ html:root .options-main > .wt-github-group > .section {
 }
 
 .options-nav a[aria-current='page'] {
-  color: var(--gcn-accent);
+  color: var(--gcn-fg);
   background: var(--gcn-selection);
 }
 </style>

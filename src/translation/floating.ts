@@ -1,5 +1,5 @@
 import type { UiStyle } from '../shared/settings'
-import { applySurfacePreferences, SURFACE_CSS, syncSurfaceVisibility } from './ui-surface'
+import { applySurfacePreferences, createSurfaceExit, SURFACE_CSS, syncSurfaceVisibility } from './ui-surface'
 
 export interface FloatingPosition {
   readonly side: 'left' | 'right'
@@ -100,6 +100,7 @@ const FLOATING_CSS = `${SURFACE_CSS}
 .floating-entry.is-dragging { transition: none; }
 .floating-menu { position: fixed; z-index: 2147483647; display: flex; flex-direction: column; gap: calc(8px / var(--wt-floating-scale)); width: calc(${MENU_MAX}px / var(--wt-floating-scale)); padding: calc(12px / var(--wt-floating-scale)); border-radius: calc(12px / var(--wt-floating-scale)); pointer-events: auto; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
 :host([data-style='glass']) .floating-menu, :host([data-style='glass']) .floating-entry { backdrop-filter: blur(var(--gcn-surface-blur)); -webkit-backdrop-filter: blur(var(--gcn-surface-blur)); }
+:host([data-style='glass']) .floating-menu { background: var(--gcn-overlay-bg); }
 /* 类选择器的 display 会盖过浏览器默认的 [hidden]{display:none}：hidden 时必须显式不渲染，否则会挡住页面点击 */
 .floating-menu[hidden], .floating-consent[hidden], .floating-menu [hidden] { display: none !important; }
 .floating-head { display: grid; grid-template-columns: calc(24px / var(--wt-floating-scale)) minmax(0,1fr) calc(28px / var(--wt-floating-scale)); align-items: center; gap: calc(8px / var(--wt-floating-scale)); }
@@ -117,12 +118,12 @@ const FLOATING_CSS = `${SURFACE_CSS}
 .floating-menu .floating-close { grid-column: 3; grid-row: 1; min-height: calc(28px / var(--wt-floating-scale)); width: calc(28px / var(--wt-floating-scale)); padding: 0; color: var(--gcn-fg-muted); background: transparent; border-color: var(--gcn-border); }
 .floating-menu .floating-auto { justify-content: space-between; gap: calc(8px / var(--wt-floating-scale)); padding-left: 0; padding-right: 0; text-align: start; background: transparent; border-color: transparent; }
 .floating-auto::after { content: ''; flex: none; box-sizing: border-box; width: calc(32px / var(--wt-floating-scale)); height: calc(18px / var(--wt-floating-scale)); border: 1px solid var(--gcn-border); border-radius: calc(12px / var(--wt-floating-scale)); background: radial-gradient(circle at calc(8px / var(--wt-floating-scale)) 50%, var(--gcn-knob) 0 calc(6px / var(--wt-floating-scale)), transparent calc(6.5px / var(--wt-floating-scale))), var(--gcn-switch-off); }
-.floating-auto[aria-checked='true']::after { background: radial-gradient(circle at calc(22px / var(--wt-floating-scale)) 50%, var(--gcn-knob) 0 calc(6px / var(--wt-floating-scale)), transparent calc(6.5px / var(--wt-floating-scale))), var(--gcn-switch-on); }
+.floating-auto[aria-checked='true']::after { background: radial-gradient(circle at calc(22px / var(--wt-floating-scale)) 50%, var(--gcn-knob-on) 0 calc(6px / var(--wt-floating-scale)), transparent calc(6.5px / var(--wt-floating-scale))), var(--gcn-switch-on); }
 @media (forced-colors: active) {
   .floating-auto::after { forced-color-adjust: none; --gcn-knob: ButtonText; --gcn-switch-off: Canvas; border-color: ButtonText; }
-  .floating-auto[aria-checked='true']::after { --gcn-knob: HighlightText; --gcn-switch-on: Highlight; border-color: Highlight; }
+  .floating-auto[aria-checked='true']::after { --gcn-knob: HighlightText; --gcn-knob-on: HighlightText; --gcn-switch-on: Highlight; border-color: Highlight; }
   .floating-auto:disabled::after { --gcn-knob: GrayText; border-color: GrayText; }
-  .floating-auto[aria-checked='true']:disabled::after { --gcn-knob: Canvas; --gcn-switch-on: GrayText; }
+  .floating-auto[aria-checked='true']:disabled::after { --gcn-knob: Canvas; --gcn-knob-on: Canvas; --gcn-switch-on: GrayText; }
 }
 /* 主题的主按钮配色比通用禁用规则更具体：禁用态要单独压回灰色，否则未配置模型时仍像可点 */
 .floating-menu button:disabled, .floating-menu button[aria-disabled='true'], .floating-menu .floating-primary:disabled, .floating-menu .floating-primary[aria-disabled='true'] { color: var(--gcn-fg-disabled); background: var(--gcn-bg-disabled); border-color: var(--gcn-border); cursor: default; }
@@ -282,6 +283,7 @@ export function createFloatingEntry(
   entry.setAttribute('aria-controls', menu.id)
   entry.setAttribute('aria-describedby', move.id)
   shadow.append(style, entry, menu, move)
+  const menuExit = createSurfaceExit(menu, shadow.host as HTMLElement)
 
   let position = DEFAULT_POSITION
   let view: FloatingView | undefined
@@ -492,6 +494,7 @@ export function createFloatingEntry(
     callbacks.onOpen()
     if (disposed) return
     menuOpen = true
+    menuExit.show()
     expandEntry()
     menu.hidden = false
     entry.setAttribute('aria-expanded', 'true')
@@ -514,7 +517,7 @@ export function createFloatingEntry(
     }
     menuOpen = false
     focusReturn = undefined
-    menu.hidden = true
+    menuExit.hide(() => { menu.hidden = true })
     entry.classList.remove('is-covered')
     menuObserver?.unobserve(menu)
     entry.setAttribute('aria-expanded', 'false')
@@ -987,6 +990,7 @@ export function createFloatingEntry(
     dispose() {
       if (disposed) return
       disposed = true
+      menuExit.finish()
       clearDockTimer()
       readEpoch += 1
       if (drag !== undefined) stopDrag(false)

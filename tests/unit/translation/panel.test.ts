@@ -34,6 +34,22 @@ afterEach(() => {
 })
 
 describe('暂停状态条', () => {
+  it('等待指示只跟随翻译请求，结果、错误和关闭均清除忙碌状态', () => {
+    panel = createTranslationPanel()
+    for (const complete of [
+      () => panel!.showSelectionResult('Synthetic source', ['Synthetic result']),
+      () => panel!.showError('Synthetic failure'),
+      () => panel!.close(),
+    ]) {
+      panel.showSelection('Synthetic source')
+      const element = shadow().querySelector('.panel')!
+      expect(element.getAttribute('aria-busy')).toBe('true')
+      expect(element.querySelector('.wt-progress')?.getAttribute('aria-hidden')).toBe('true')
+      complete()
+      expect(element.getAttribute('aria-busy')).toBe('false')
+    }
+  })
+
   it('错误原因默认折叠、按文字显示，同类更新保留展开状态', () => {
     panel = createTranslationPanel()
     const message = '<img src=x onerror=alert(1)> 凭证无效或没有访问权限'

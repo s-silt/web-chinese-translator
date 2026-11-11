@@ -37,6 +37,8 @@ import {
 } from './target-language'
 import {
   applySurfacePreferences,
+  createProgressIndicator,
+  createSurfaceExit,
   DEFAULT_SURFACE_PREFERENCES,
   SURFACE_CSS,
   syncSurfaceVisibility,
@@ -575,8 +577,9 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   autoHintNode.className = 'auto-hint'
   autoHintNode.dataset.action = 'auto-hint'
 
-  popover.append(header, statusNode, actions)
+  popover.append(header, statusNode, actions, createProgressIndicator())
   shadow.append(style, popover)
+  const popoverExit = createSurfaceExit(popover, host)
 
   function currentReplaceKey(): string {
     const raw = options.replaceKey === undefined ? DEFAULT_INPUT_REPLACE_KEY : options.replaceKey()
@@ -702,6 +705,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
 
   function showPopover(): void {
     if (disposed || activeField === undefined || !activeField.isConnected) return
+    popoverExit.show()
     syncLabels()
     if (!host.isConnected) {
       document.documentElement.append(host)
@@ -715,11 +719,18 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     clearCopyTimer()
     previewVisible = false
     previewTranslation = ''
-    statusNode.textContent = ''
-    statusNode.className = 'status'
-    actions.textContent = ''
     if (clearBackup) backupState = undefined
-    host.style.setProperty('display', 'none', 'important')
+    popover.setAttribute('aria-busy', 'false')
+    const finalize = () => {
+      statusNode.textContent = ''
+      statusNode.className = 'status'
+      actions.textContent = ''
+      host.style.setProperty('display', 'none', 'important')
+    }
+    if (disposed) {
+      popoverExit.show()
+      finalize()
+    } else popoverExit.hide(finalize)
   }
 
   function releasePendingManagedToken(): void {
@@ -781,6 +792,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   }
 
   function renderLoading(): void {
+    popover.setAttribute('aria-busy', 'true')
     previewVisible = false
     statusNode.className = 'status'
     statusNode.textContent = options.t('wtPanelLoading')
@@ -789,6 +801,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   }
 
   function renderPreview(translation: string, autoHint?: string): void {
+    popover.setAttribute('aria-busy', 'false')
     const normalized = translation.replace(/\r\n?/g, '\n')
     previewVisible = true
     previewTranslation = normalized
@@ -810,6 +823,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   }
 
   function renderReplaced(inserted: string): void {
+    popover.setAttribute('aria-busy', 'false')
     const normalized = inserted.replace(/\r\n?/g, '\n')
     previewVisible = false
     previewTranslation = normalized
@@ -821,6 +835,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   }
 
   function renderError(message: string): void {
+    popover.setAttribute('aria-busy', 'false')
     previewVisible = false
     statusNode.className = 'status is-error'
     statusNode.textContent = message
