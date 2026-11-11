@@ -1155,7 +1155,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     const target = eventTarget(event)
     if (!(target instanceof Node) || activeField === undefined) return
     if (target === activeField || activeField.contains(target)) {
-      if (host.style.display === 'none' && managedBackupStillLive()) renderReplaced(backupState?.inserted ?? '')
+      if ((host.style.display === 'none' || popoverExit.isClosing()) && managedBackupStillLive()) renderReplaced(backupState?.inserted ?? '')
       return
     }
     leaveFieldForFocus()

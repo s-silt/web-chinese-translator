@@ -590,6 +590,90 @@ describe('Discord 纯文本草稿', () => {
     setPageUrl('about:blank')
   })
 
+  it.each(['animation', 'timeout'] as const)('淡出期间重新聚焦同一草稿后，%s 收尾不移除还原入口', async (completion) => {
+    setPageUrl('https://discord.com/channels/@me/1')
+    const field = mountSlate(['原始草稿'])
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    const replaceDiscordInput = vi.fn(async (request: { text: string }) => {
+      writeSlateText(field, request.text)
+      return 'ok' as const
+    })
+    const watcher = createInputTranslation({
+      translate: vi.fn(async () => ({ ok: true as const, texts: ['Translated draft'] })),
+      cancel: vi.fn(),
+      t: (key) => zhCN[key],
+      replaceDiscordInput,
+    })
+    try {
+      focusEditable(field)
+      expect(watcher.translateAndReplace()).toBe(true)
+      await vi.advanceTimersByTimeAsync(300)
+      expect(readDiscordDraft(field)).toBe('Translated draft')
+      expect(requirePopoverButton('restore')).not.toBeNull()
+      const popover = popoverShadow()!.querySelector<HTMLElement>('.popover')!
+      let finishAnimation: () => void = () => undefined
+      const finished = new Promise<void>((resolve) => { finishAnimation = resolve })
+      Object.defineProperty(popover, 'getAnimations', {
+        value: () => [{ animationName: 'wt-surface-exit', finished }],
+      })
+      outside.focus()
+      await vi.advanceTimersByTimeAsync(20)
+      expect(popover.hasAttribute('data-wt-closing')).toBe(true)
+      field.focus()
+      if (completion === 'animation') finishAnimation()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(isPopoverOpen()).toBe(true)
+      expect(popover.inert).toBe(false)
+      expect(popover.hasAttribute('aria-hidden')).toBe(false)
+      trustedClick(requirePopoverButton('restore'))
+      await vi.advanceTimersByTimeAsync(300)
+      expect(readDiscordDraft(field)).toBe('原始草稿')
+      expect(replaceDiscordInput).toHaveBeenCalledTimes(2)
+    } finally {
+      watcher.dispose()
+    }
+  })
+
+  it.each(['内容改变', '主动关闭'] as const)('淡出重入前%s后不恢复旧撤销记录', async (invalidation) => {
+    setPageUrl('https://discord.com/channels/@me/1')
+    const field = mountSlate(['原始草稿'])
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    const replaceDiscordInput = vi.fn(async (request: { text: string }) => {
+      writeSlateText(field, request.text)
+      return 'ok' as const
+    })
+    const watcher = createInputTranslation({
+      translate: vi.fn(async () => ({ ok: true as const, texts: ['Translated draft'] })),
+      cancel: vi.fn(),
+      t: (key) => zhCN[key],
+      replaceDiscordInput,
+    })
+    try {
+      focusEditable(field)
+      expect(watcher.translateAndReplace()).toBe(true)
+      await vi.advanceTimersByTimeAsync(300)
+      expect(requirePopoverButton('restore')).not.toBeNull()
+      const popover = popoverShadow()!.querySelector<HTMLElement>('.popover')!
+      Object.defineProperty(popover, 'getAnimations', {
+        value: () => [{ animationName: 'wt-surface-exit', finished: new Promise<void>(() => undefined) }],
+      })
+      if (invalidation === '主动关闭') trustedClick(popover.querySelector('button[data-action="close"]')!)
+      outside.focus()
+      await vi.advanceTimersByTimeAsync(20)
+      if (invalidation === '内容改变') writeSlateText(field, 'Changed draft')
+      field.focus()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(isPopoverOpen()).toBe(false)
+      expect(popover.querySelector('button[data-action="restore"]')).toBeNull()
+      expect(readDiscordDraft(field)).toBe(invalidation === '内容改变' ? 'Changed draft' : 'Translated draft')
+      expect(replaceDiscordInput).toHaveBeenCalledTimes(1)
+    } finally {
+      watcher.dispose()
+    }
+  })
+
   it('只接受三个 Discord 主机的 https /channels/ 路径', () => {
     expect(isDiscordChatUrl('https://discord.com/channels/@me/1')).toBe(true)
     expect(isDiscordChatUrl('https://canary.discord.com/channels/a')).toBe(true)
