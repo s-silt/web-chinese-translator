@@ -57,7 +57,7 @@
     "@types/node": "^26.6.6",
     "@types/react": "19.3.0",
     "@vitejs/plugin-vue": "^6.0.10",
-    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/coverage-v8": "^5.1.0",
     "@vue/test-utils": "^2.5.1",
     "@wxt-dev/module-vue": "^1.0.3",
     "esbuild": "0.28.2",
