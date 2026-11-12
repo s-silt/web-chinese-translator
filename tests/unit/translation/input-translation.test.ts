@@ -3693,4 +3693,198 @@ describe('外观、标题、焦点与生命周期', () => {
       watcher.dispose()
     }
   })
+
+  it('Twitter/X 回复框（Draft.js）与扩展站点：支持输入、粘贴、Backspace/Enter 拦截、20ms 合成提交、直接替换与还原', async () => {
+    setPageUrl('https://x.com/someone/status/123456')
+
+    function writeDraftDom(root: HTMLElement, lines: readonly string[]): void {
+      const contents = document.createElement('div')
+      contents.setAttribute('data-contents', 'true')
+      lines.forEach((line, idx) => {
+        const block = document.createElement('div')
+        block.setAttribute('data-block', 'true')
+        block.setAttribute('data-offset-key', `k${idx}-0-0`)
+        const inner = document.createElement('div')
+        inner.className = 'public-DraftStyleDefault-block'
+        const span = document.createElement('span')
+        span.setAttribute('data-offset-key', `k${idx}-0-0`)
+        if (line === '') {
+          const br = document.createElement('br')
+          br.setAttribute('data-text', 'true')
+          span.append(br)
+        } else {
+          const leaf = document.createElement('span')
+          leaf.setAttribute('data-text', 'true')
+          leaf.textContent = line
+          span.append(leaf)
+        }
+        inner.append(span)
+        block.append(inner)
+        contents.append(block)
+      })
+      root.replaceChildren(contents)
+    }
+
+    const draftRoot = document.createElement('div')
+    draftRoot.className = 'DraftEditor-root'
+    const editorContainer = document.createElement('div')
+    editorContainer.className = 'DraftEditor-editorContainer'
+    const field = document.createElement('div')
+    field.className = 'notranslate public-DraftEditor-content'
+    field.setAttribute('contenteditable', 'true')
+    field.setAttribute('role', 'textbox')
+    field.setAttribute('data-testid', 'tweetTextarea_0')
+    writeDraftDom(field, [''])
+    editorContainer.append(field)
+    draftRoot.append(editorContainer)
+    document.body.append(draftRoot)
+
+    const translate = vi.fn(async (texts: string[]) => ({
+      ok: true as const,
+      texts: texts.map((t) => `EN:${t}`),
+    }))
+    const replaceChatInput = vi.fn(async (request: { text: string }) => {
+      writeDraftDom(field, request.text.split('\n'))
+      return 'ok' as const
+    })
+    const watcher = createInputTranslation({
+      translate,
+      cancel: vi.fn(),
+      t: (k) => zhCN[k],
+      replaceChatInput,
+    })
+
+    try {
+      focusEditable(field)
+      // 1. Draft.js IME 合成结束后延迟 20ms 才将最终文本写入 DOM（RESOLVE_DELAY = 20ms）
+      trustedComposition(field, 'compositionstart')
+      trustedComposition(field, 'compositionend')
+      setTimeout(() => {
+        writeDraftDom(field, ['推特回复里的中文草稿'])
+      }, 20)
+      await vi.advanceTimersByTimeAsync(30)
+      await vi.advanceTimersByTimeAsync(1000)
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(20)
+      expect(translate).toHaveBeenCalledTimes(1)
+      expect(translate.mock.calls[0]?.[0]).toEqual(['推特回复里的中文草稿'])
+      expect(replaceChatInput).toHaveBeenCalledTimes(1)
+      expect(readChatDraft(field)).toBe('EN:推特回复里的中文草稿')
+
+      // 点击「还原原文」恢复原稿
+      trustedClick(requirePopoverButton('restore'))
+      await vi.advanceTimersByTimeAsync(20)
+      await Promise.resolve()
+      expect(readChatDraft(field)).toBe('推特回复里的中文草稿')
+
+      // 2. Draft.js 在 keydown 拦截 Backspace（preventDefault，不触发 beforeinput/input）修改草稿后仍触发重译
+      const backspaceEvent = new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, composed: true, cancelable: true })
+      Object.defineProperty(backspaceEvent, 'isTrusted', { value: true, configurable: true })
+      field.addEventListener('keydown', (e) => {
+        if (e.key === 'Backspace') {
+          e.preventDefault()
+          writeDraftDom(field, ['推特回复里的中文'])
+        }
+      }, { once: true })
+      field.dispatchEvent(backspaceEvent)
+      await vi.advanceTimersByTimeAsync(1010)
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(20)
+      expect(translate).toHaveBeenCalledTimes(2)
+      expect(translate.mock.calls[1]?.[0]).toEqual(['推特回复里的中文'])
+      expect(readChatDraft(field)).toBe('EN:推特回复里的中文')
+
+      // 3. Draft.js 在 paste 拦截粘贴（preventDefault，不触发 beforeinput/input）后触发翻译与替换
+      const pasteEvent = new Event('paste', { bubbles: true, composed: true, cancelable: true })
+      Object.defineProperty(pasteEvent, 'isTrusted', { value: true, configurable: true })
+      field.addEventListener('paste', (e) => {
+        e.preventDefault()
+        writeDraftDom(field, ['粘贴进来的多行回复', '第二行内容'])
+      }, { once: true })
+      field.dispatchEvent(pasteEvent)
+      await vi.advanceTimersByTimeAsync(1010)
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(20)
+      expect(translate).toHaveBeenCalledTimes(3)
+      expect(translate.mock.calls[2]?.[0]).toEqual(['粘贴进来的多行回复\n第二行内容'])
+      expect(readChatDraft(field)).toBe('EN:粘贴进来的多行回复\n第二行内容')
+    } finally {
+      watcher.dispose()
+      setPageUrl('about:blank')
+    }
+  })
+
+  it('扩展站点与通用编辑器：覆盖 Gemini、Threads、Twitch Slate、B站动态与敏感词边界保护', () => {
+    for (const url of [
+      'https://x.com/home',
+      'https://twitter.com/i/tweet',
+      'https://www.reddit.com/r/test/',
+      'https://www.threads.net/@user',
+      'https://bsky.app/profile/u',
+      'https://gemini.google.com/app',
+      'https://grok.com/',
+      'https://chat.deepseek.com/',
+      'https://www.perplexity.ai/',
+      'https://www.zhihu.com/question/1',
+      'https://www.xiaohongshu.com/explore',
+      'https://www.twitch.tv/channel',
+    ]) {
+      expect(isSupportedChatUrl(url)).toBe(true)
+    }
+
+    // Twitch / 小红书等非 Discord 站点的 Slate 编辑器通过 chat-input 识别并按模型写回
+    setPageUrl('https://www.twitch.tv/channel')
+    const slateRoot = mountSlate(['直播间里的中文弹幕'])
+    const elementId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    slateRoot.setAttribute('data-wt-chat-input', elementId)
+    expect(isChatEditorCandidate(slateRoot)).toBe(true)
+    expect(isChatPlainEditor(slateRoot)).toBe(true)
+    expect(readChatDraft(slateRoot)).toBe('直播间里的中文弹幕')
+    const slateEditor = {
+      children: [{ children: [{ text: '直播间里的中文弹幕' }] }],
+      selection: null as unknown,
+      apply(op: { newProperties: unknown }) {
+        this.selection = op.newProperties
+      },
+      insertText(next: string) {
+        this.children = [{ children: [{ text: next }] }]
+      },
+    }
+    ;(slateRoot as unknown as Record<string, unknown>).__reactFiber$slate = {
+      memoizedProps: { editor: slateEditor },
+      return: null,
+    }
+    expect(
+      replaceChatDraftInMainWorld({
+        elementId,
+        expectedText: '直播间里的中文弹幕',
+        text: 'Live chat message in English',
+      }),
+    ).toBe('ok')
+    expect(slateEditor.children).toEqual([{ children: [{ text: 'Live chat message in English' }] }])
+
+    // B站动态页 t.bilibili.com 的 .bili-rich-textarea__inner 识别为原生视频输入框
+    setPageUrl('https://t.bilibili.com/')
+    const biliDynamic = document.createElement('div')
+    biliDynamic.className = 'bili-rich-textarea__inner'
+    biliDynamic.setAttribute('contenteditable', 'true')
+    biliDynamic.innerHTML = '<p>发布一条动态</p>'
+    document.body.append(biliDynamic)
+    expect(isNativeVideoChatEditor(biliDynamic)).toBe(true)
+
+    // 含有 classname(ssn)、footpath(otp)、bypass(pass)、unpin(pin) 等子串的普通 id/name 不误判为密码敏感框
+    setPageUrl('about:blank')
+    const normalInput = document.createElement('textarea')
+    normalInput.id = 'composer-classname-footpath-bypass-unpin'
+    document.body.append(normalInput)
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
+    const watcher = createInputTranslation({ translate, cancel: vi.fn(), t: (k) => zhCN[k] })
+    focusEditable(normalInput)
+    trustedInput(normalInput, '正常的评论草稿')
+    return vi.advanceTimersByTimeAsync(1000).then(() => {
+      expect(translate).toHaveBeenCalledTimes(1)
+      expect(normalInput.value).toBe('EN:正常的评论草稿')
+      watcher.dispose()
+    })
+  })
 })

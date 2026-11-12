@@ -5,12 +5,18 @@ export type NativeVideoChatKind = 'youtube' | 'bilibili'
 const NATIVE_VIDEO_HOST_KINDS: ReadonlyArray<readonly [string, NativeVideoChatKind]> = [
   ['www.youtube.com', 'youtube'],
   ['youtube.com', 'youtube'],
+  ['m.youtube.com', 'youtube'],
+  ['music.youtube.com', 'youtube'],
   ['www.bilibili.com', 'bilibili'],
   ['bilibili.com', 'bilibili'],
   ['live.bilibili.com', 'bilibili'],
+  ['t.bilibili.com', 'bilibili'],
+  ['space.bilibili.com', 'bilibili'],
+  ['message.bilibili.com', 'bilibili'],
+  ['manga.bilibili.com', 'bilibili'],
 ]
 
-const RICH_MANAGED_SELECTOR = '.ProseMirror,[data-lexical-editor],[data-slate-editor],.ql-editor'
+const RICH_MANAGED_SELECTOR = '.ProseMirror,[data-lexical-editor],[data-slate-editor],.DraftEditor-root,.ql-editor'
 
 const NATIVE_VIDEO_ALLOWED_TAGS = new Set(['DIV', 'P', 'SPAN', 'BR'])
 
@@ -52,7 +58,7 @@ export function nativeVideoChatKind(element: HTMLElement): NativeVideoChatKind |
   }
   if (
     (element.matches('.brt-editor') && closestComposed(element, 'bili-comment-rich-textarea') !== null) ||
-    element.matches('.reply-box-textarea')
+    element.matches('.reply-box-textarea,.bili-rich-textarea__inner')
   ) {
     return 'bilibili'
   }

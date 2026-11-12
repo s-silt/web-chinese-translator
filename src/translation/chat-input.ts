@@ -14,11 +14,104 @@ const EXACT_CHAT_HOSTS = new Set([
   'teams.microsoft.com',
   'teams.live.com',
   'teams.cloud.microsoft',
+  'x.com',
+  'www.x.com',
+  'pro.x.com',
+  'twitter.com',
+  'www.twitter.com',
+  'mobile.twitter.com',
+  'tweetdeck.twitter.com',
+  'www.reddit.com',
+  'reddit.com',
+  'old.reddit.com',
+  'new.reddit.com',
+  'sh.reddit.com',
+  'www.threads.net',
+  'threads.net',
+  'www.threads.com',
+  'threads.com',
+  'bsky.app',
+  'www.facebook.com',
+  'facebook.com',
+  'm.facebook.com',
+  'web.facebook.com',
+  'www.messenger.com',
+  'messenger.com',
+  'www.instagram.com',
+  'instagram.com',
+  'www.linkedin.com',
+  'linkedin.com',
+  'www.zhihu.com',
+  'zhihu.com',
+  'zhuanlan.zhihu.com',
+  'weibo.com',
+  'www.weibo.com',
+  's.weibo.com',
+  'm.weibo.cn',
+  'www.xiaohongshu.com',
+  'xiaohongshu.com',
+  'www.douyin.com',
+  'douyin.com',
+  'www.twitch.tv',
+  'twitch.tv',
+  'dashboard.twitch.tv',
+  'substack.com',
+  'medium.com',
+  'dev.to',
+  'www.quora.com',
+  'quora.com',
+  'www.producthunt.com',
+  'producthunt.com',
+  'linux.do',
+  'v2ex.com',
+  'www.v2ex.com',
+  'nodeseek.com',
+  'www.nodeseek.com',
+  'gemini.google.com',
+  'aistudio.google.com',
+  'notebooklm.google.com',
+  'grok.com',
+  'www.grok.com',
+  'chat.deepseek.com',
+  'www.deepseek.com',
+  'www.perplexity.ai',
+  'perplexity.ai',
+  'poe.com',
+  'www.poe.com',
+  'chat.mistral.ai',
+  'copilot.microsoft.com',
+  'kimi.moonshot.cn',
+  'www.kimi.com',
+  'kimi.com',
+  'www.doubao.com',
+  'doubao.com',
+  'yuanbao.tencent.com',
+  'chat.qwen.ai',
+  'qwen.ai',
+  'tongyi.aliyun.com',
+  'www.tongyi.com',
+  'qianwen.com',
+  'www.qianwen.com',
+  'chatglm.cn',
+  'www.chatglm.cn',
+  'huggingface.co',
+  'openrouter.ai',
+  'devin.ai',
+  'app.devin.ai',
+  'cursor.com',
+  'www.cursor.com',
+  'bolt.new',
+  'lovable.dev',
+  'replit.com',
+  'v0.dev',
+  'linear.app',
+  'www.notion.so',
+  'notion.so',
 ])
 const BLOCKED_CHAT_PATH = /(?:^|\/)(?:settings|api[-_]?keys?|secrets|passwords?|oauth|checkout|payments?|billing|accounts?|auth|sign-?in|sign-?up|log-?in|register)(?:\/|$)/i
 const SLACK_CHAT_PATH = /^\/(?:client|messages)(?:\/|$)/
 const ALLOWED_CHAT_TAGS = new Set(['DIV', 'P', 'SPAN', 'BR', 'STRONG', 'EM', 'B', 'I', 'U', 'S'])
-const BLOCKED_CHAT_SELECTOR = 'img,svg,canvas,button,input,textarea,a,ul,ol,li,table,pre,code,.ProseMirror-widget,[data-node-view-wrapper],[data-decoration-id],[data-mention],[data-lexical-decorator],[data-lexical-mention]'
+const BLOCKED_CHAT_SELECTOR = 'img,svg,canvas,button,input,textarea,a,ul,ol,li,table,pre,code,.ProseMirror-widget,[data-node-view-wrapper],[data-decoration-id],[data-mention],[data-lexical-decorator],[data-lexical-mention],[data-slate-void="true"]'
 
 function isSlackChatHost(host: string): boolean {
   return host === 'app.slack.com' || host.endsWith('.slack.com')
@@ -26,6 +119,36 @@ function isSlackChatHost(host: string): boolean {
 
 function isTeamsChatHost(host: string): boolean {
   return host === 'teams.microsoft.com' || host === 'teams.live.com' || host === 'teams.cloud.microsoft'
+}
+
+function isTwitterChatHost(host: string): boolean {
+  return (
+    host === 'x.com' ||
+    host === 'www.x.com' ||
+    host === 'pro.x.com' ||
+    host === 'twitter.com' ||
+    host === 'www.twitter.com' ||
+    host === 'mobile.twitter.com' ||
+    host === 'tweetdeck.twitter.com'
+  )
+}
+
+function isMetaLexicalHost(host: string): boolean {
+  return (
+    host === 'web.whatsapp.com' ||
+    host === 'www.facebook.com' ||
+    host === 'facebook.com' ||
+    host === 'm.facebook.com' ||
+    host === 'web.facebook.com' ||
+    host === 'www.messenger.com' ||
+    host === 'messenger.com' ||
+    host === 'www.instagram.com' ||
+    host === 'instagram.com' ||
+    host === 'www.threads.net' ||
+    host === 'threads.net' ||
+    host === 'www.threads.com' ||
+    host === 'threads.com'
+  )
 }
 
 export function isSupportedChatUrl(value: string): boolean {
@@ -43,7 +166,7 @@ export function isSupportedChatUrl(value: string): boolean {
   }
 }
 
-export type ChatEditorKind = 'pm' | 'lexical' | 'quill' | 'rooster'
+export type ChatEditorKind = 'pm' | 'lexical' | 'quill' | 'rooster' | 'draft' | 'slate'
 
 function pageHost(): string {
   try {
@@ -53,15 +176,37 @@ function pageHost(): string {
   }
 }
 
+function closestAcrossShadow(element: Element, selector: string): Element | null {
+  let current: Element | null = element
+  for (let depth = 0; current !== null && depth < 64; depth += 1) {
+    const match = current.closest(selector)
+    if (match !== null) return match
+    const root = current.getRootNode()
+    current = root instanceof ShadowRoot ? root.host : null
+  }
+  return null
+}
+
 export function chatEditorKind(element: HTMLElement): ChatEditorKind | undefined {
   if (element.getAttribute('contenteditable') !== 'true') return undefined
   if (element.matches('.ProseMirror')) return 'pm'
-  if (element.matches('[data-lexical-editor="true"]')) return 'lexical'
+  if (element.matches('[data-lexical-editor="true"],[data-lexical-editor=""]')) return 'lexical'
   if (element.matches('.ql-editor')) return 'quill'
+  if (
+    element.matches('.public-DraftEditor-content') ||
+    closestAcrossShadow(element, '.DraftEditor-root') !== null ||
+    element.querySelector('[data-contents="true"],[data-block="true"]') !== null
+  ) {
+    return 'draft'
+  }
+  if (element.matches('[data-slate-editor="true"],[data-slate-editor=""]')) return 'slate'
   const host = pageHost()
-  if (host === 'web.whatsapp.com') return 'lexical'
-  if (isSlackChatHost(host)) return 'quill'
+  if (isMetaLexicalHost(host)) return 'lexical'
+  if (isSlackChatHost(host) || host === 'gemini.google.com' || host === 'www.linkedin.com' || host === 'linkedin.com') {
+    return 'quill'
+  }
   if (isTeamsChatHost(host)) return 'rooster'
+  if (isTwitterChatHost(host)) return 'draft'
   return undefined
 }
 
@@ -89,43 +234,94 @@ function isLexicalManagedBreak(node: Node): boolean {
   return node instanceof HTMLBRElement && node.getAttribute('data-lexical-managed-linebreak') === 'true'
 }
 
+function isDraftManagedBreak(node: Node): boolean {
+  return node instanceof HTMLBRElement && node.getAttribute('data-text') === 'true'
+}
+
 function isIgnoredChatSubtree(node: Element): boolean {
-  if (isLexicalManagedBreak(node)) return true
+  if (isLexicalManagedBreak(node) || isDraftManagedBreak(node)) return true
   return node.classList.contains('ProseMirror-trailingBreak') ||
     node.classList.contains('ProseMirror-separator') ||
     node.classList.contains('ProseMirror-gapcursor') ||
+    node.classList.contains('public-DraftEditorPlaceholder-root') ||
+    node.hasAttribute('data-placeholder') ||
     node.hasAttribute('data-slate-zero-width') ||
     node.hasAttribute('data-slate-placeholder') ||
-    node.closest('[data-slate-zero-width],[data-slate-placeholder]') !== null
+    node.closest('.public-DraftEditorPlaceholder-root,[data-placeholder],[data-slate-zero-width],[data-slate-placeholder]') !== null
 }
 
 function directChatBlocks(element: HTMLElement): HTMLElement[] {
   const blocks: HTMLElement[] = []
   for (const child of element.children) {
-    if (child instanceof HTMLElement && (child.tagName === 'P' || child.tagName === 'DIV')) blocks.push(child)
+    if (child instanceof HTMLElement && !isIgnoredChatSubtree(child) && (child.tagName === 'P' || child.tagName === 'DIV')) {
+      blocks.push(child)
+    }
   }
   return blocks
 }
 
 function flatChatBlocks(element: HTMLElement): boolean {
   const blocks = directChatBlocks(element)
-  if (blocks.length === 0 || blocks.length !== element.childElementCount) return false
+  let nonIgnoredChildren = 0
+  for (const child of element.children) {
+    if (!isIgnoredChatSubtree(child)) nonIgnoredChildren += 1
+  }
+  if (blocks.length === 0 || blocks.length !== nonIgnoredChildren) return false
   for (const block of blocks) {
     if (block.querySelector('p,div') !== null) return false
   }
   return true
 }
 
+function draftChatBlocks(element: HTMLElement): HTMLElement[] {
+  const blocks: HTMLElement[] = []
+  for (const node of element.querySelectorAll('[data-block="true"]')) {
+    if (node instanceof HTMLElement && !isIgnoredChatSubtree(node)) blocks.push(node)
+  }
+  return blocks
+}
+
+function validDraftChatBlocks(element: HTMLElement): boolean {
+  const blocks = draftChatBlocks(element)
+  if (blocks.length === 0) return flatChatBlocks(element)
+  for (const block of blocks) {
+    if (block.querySelector('[data-block="true"],p') !== null) return false
+  }
+  return true
+}
+
+function slateChatBlocks(element: HTMLElement): HTMLElement[] {
+  const blocks: HTMLElement[] = []
+  for (const child of element.children) {
+    if (child instanceof HTMLElement && !isIgnoredChatSubtree(child) && child.getAttribute('data-slate-node') === 'element') {
+      blocks.push(child)
+    }
+  }
+  return blocks
+}
+
+function validSlateChatBlocks(element: HTMLElement): boolean {
+  if (element.querySelector('[data-slate-node="element"] [data-slate-node="element"]') !== null) return false
+  const blocks = slateChatBlocks(element)
+  return blocks.length > 0 || flatChatBlocks(element)
+}
+
 export function isChatPlainEditor(element: Element): element is HTMLElement {
   if (!isChatEditorCandidate(element) || !element.isConnected) return false
   if (element.getAttribute('aria-readonly') === 'true' || element.getAttribute('aria-disabled') === 'true') return false
-  if (element.hidden || element.inert || element.closest('[hidden],[inert],[aria-hidden="true"],[data-sensitive],[data-wt-root]') !== null) {
+  if (element.hidden || element.inert || closestAcrossShadow(element, '[hidden],[inert],[aria-hidden="true"],[data-sensitive],[data-wt-root]') !== null) {
     return false
   }
   const style = element.style
   if (style.display === 'none' || style.visibility === 'hidden') return false
   const kind = chatEditorKind(element)
-  if (kind !== 'pm' && !flatChatBlocks(element)) return false
+  if (kind === 'draft') {
+    if (!validDraftChatBlocks(element)) return false
+  } else if (kind === 'slate') {
+    if (!validSlateChatBlocks(element)) return false
+  } else if (kind !== 'pm' && !flatChatBlocks(element)) {
+    return false
+  }
   if (!isAllowedChatMarkup(element)) return false
   if (hasBlockedChatContent(element)) return false
   for (const locked of element.querySelectorAll('[contenteditable]')) {
@@ -210,6 +406,18 @@ export function readChatDraft(element: HTMLElement): string {
   if (kind === 'lexical') return readJoinedChat(element, readLexicalBlock, '\n\n')
   if (kind === 'quill') return readJoinedChat(element, readQuillBlock, '\n')
   if (kind === 'rooster') return readJoinedChat(element, readRoosterBlock, '\n')
+  if (kind === 'draft') {
+    if (!validDraftChatBlocks(element)) return ''
+    const blocks = draftChatBlocks(element)
+    if (blocks.length > 0) return blocks.map((block) => readQuillBlock(block)).join('\n')
+    return readJoinedChat(element, readQuillBlock, '\n')
+  }
+  if (kind === 'slate') {
+    if (!validSlateChatBlocks(element)) return ''
+    const blocks = slateChatBlocks(element)
+    if (blocks.length > 0) return blocks.map((block) => readInlineChat(block)).join('\n')
+    return readJoinedChat(element, readInlineChat, '\n')
+  }
   const blocks = directChatBlocks(element)
   if (blocks.length === 0) return readChatNode(element, element)
   return blocks.map((block) => readChatNode(block, block)).join('\n')
@@ -233,12 +441,12 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
     if (typeof expectedText !== 'string' || typeof text !== 'string') return 'failed'
     if (expectedText.length < 1 || expectedText.length > 6000 || text.length < 1 || text.length > 6000) return 'failed'
     if (!chatUrl(location.href) || document.visibilityState === 'hidden') return 'failed'
-    const matches = document.querySelectorAll(`[data-wt-chat-input="${elementId}"]`)
+    const matches = findMarkedElements(elementId)
     if (matches.length !== 1) return 'failed'
     const element = matches[0]
     if (!(element instanceof HTMLElement) || !plainEditor(element)) return 'failed'
     if (draftText(element) !== expectedText) return 'changed'
-    const view = findHandle(element)
+    const view = findHandle(element, expectedText)
     if (view === undefined) return 'unsupported'
     const before = readActual(view)
     if (before === undefined) return 'unsupported'
@@ -254,7 +462,7 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
       return 'failed'
     }
     if (draftText(element) !== expectedText) return 'changed'
-    const freshView = findHandle(element)
+    const freshView = findHandle(element, expectedText)
     if (freshView === undefined) return 'unsupported'
     const freshBlocked = guardHandle(freshView)
     if (freshBlocked !== undefined) return freshBlocked
@@ -265,15 +473,155 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
     return writeHandle(freshView, normalized, expectedText)
   }
 
+  function findMarkedElements(elementId: string): Element[] {
+    const direct = Array.from(document.querySelectorAll(`[data-wt-chat-input="${elementId}"]`))
+    if (direct.length > 1) return direct
+    const roots: Array<Document | ShadowRoot> = [document]
+    const matches: Element[] = [...direct]
+    let scanned = 0
+    for (let index = 0; index < roots.length && index < 64; index += 1) {
+      const root = roots[index]!
+      const walker = document.createTreeWalker(root as unknown as Node, NodeFilter.SHOW_ELEMENT)
+      for (let node = walker.nextNode(); node !== null && scanned < 2000; node = walker.nextNode()) {
+        scanned += 1
+        const el = node as Element
+        if (el.shadowRoot !== null && roots.length < 64) {
+          roots.push(el.shadowRoot)
+        }
+        if (index > 0 && el.getAttribute('data-wt-chat-input') === elementId) {
+          matches.push(el)
+        }
+      }
+    }
+    return matches
+  }
+
+  function closestShadow(element: Element, selector: string): Element | null {
+    let current: Element | null = element
+    for (let depth = 0; current !== null && depth < 64; depth += 1) {
+      const match = current.closest(selector)
+      if (match !== null) return match
+      const root = current.getRootNode()
+      current = root instanceof ShadowRoot ? root.host : null
+    }
+    return null
+  }
+
+  function allowedHost(host: string): boolean {
+    switch (host) {
+      case 'chatgpt.com':
+      case 'claude.ai':
+      case 'web.telegram.org':
+      case 'web.whatsapp.com':
+      case 'teams.microsoft.com':
+      case 'teams.live.com':
+      case 'teams.cloud.microsoft':
+      case 'x.com':
+      case 'www.x.com':
+      case 'pro.x.com':
+      case 'twitter.com':
+      case 'www.twitter.com':
+      case 'mobile.twitter.com':
+      case 'tweetdeck.twitter.com':
+      case 'www.reddit.com':
+      case 'reddit.com':
+      case 'old.reddit.com':
+      case 'new.reddit.com':
+      case 'sh.reddit.com':
+      case 'www.threads.net':
+      case 'threads.net':
+      case 'www.threads.com':
+      case 'threads.com':
+      case 'bsky.app':
+      case 'www.facebook.com':
+      case 'facebook.com':
+      case 'm.facebook.com':
+      case 'web.facebook.com':
+      case 'www.messenger.com':
+      case 'messenger.com':
+      case 'www.instagram.com':
+      case 'instagram.com':
+      case 'www.linkedin.com':
+      case 'linkedin.com':
+      case 'www.zhihu.com':
+      case 'zhihu.com':
+      case 'zhuanlan.zhihu.com':
+      case 'weibo.com':
+      case 'www.weibo.com':
+      case 's.weibo.com':
+      case 'm.weibo.cn':
+      case 'www.xiaohongshu.com':
+      case 'xiaohongshu.com':
+      case 'www.douyin.com':
+      case 'douyin.com':
+      case 'www.twitch.tv':
+      case 'twitch.tv':
+      case 'dashboard.twitch.tv':
+      case 'substack.com':
+      case 'medium.com':
+      case 'dev.to':
+      case 'www.quora.com':
+      case 'quora.com':
+      case 'www.producthunt.com':
+      case 'producthunt.com':
+      case 'linux.do':
+      case 'v2ex.com':
+      case 'www.v2ex.com':
+      case 'nodeseek.com':
+      case 'www.nodeseek.com':
+      case 'gemini.google.com':
+      case 'aistudio.google.com':
+      case 'notebooklm.google.com':
+      case 'grok.com':
+      case 'www.grok.com':
+      case 'chat.deepseek.com':
+      case 'www.deepseek.com':
+      case 'www.perplexity.ai':
+      case 'perplexity.ai':
+      case 'poe.com':
+      case 'www.poe.com':
+      case 'chat.mistral.ai':
+      case 'copilot.microsoft.com':
+      case 'kimi.moonshot.cn':
+      case 'www.kimi.com':
+      case 'kimi.com':
+      case 'www.doubao.com':
+      case 'doubao.com':
+      case 'yuanbao.tencent.com':
+      case 'chat.qwen.ai':
+      case 'qwen.ai':
+      case 'tongyi.aliyun.com':
+      case 'www.tongyi.com':
+      case 'qianwen.com':
+      case 'www.qianwen.com':
+      case 'chatglm.cn':
+      case 'www.chatglm.cn':
+      case 'huggingface.co':
+      case 'openrouter.ai':
+      case 'devin.ai':
+      case 'app.devin.ai':
+      case 'cursor.com':
+      case 'www.cursor.com':
+      case 'bolt.new':
+      case 'lovable.dev':
+      case 'replit.com':
+      case 'v0.dev':
+      case 'linear.app':
+      case 'www.notion.so':
+      case 'notion.so':
+        return true
+      default:
+        return false
+    }
+  }
+
   function chatUrl(value: string): boolean {
     try {
       const url = new URL(value)
       if (url.protocol !== 'https:') return false
       const host = url.hostname.toLowerCase()
       const slack = host === 'app.slack.com' || host.endsWith('.slack.com')
-      if (!slack && host !== 'chatgpt.com' && host !== 'claude.ai' && host !== 'web.telegram.org' &&
-        host !== 'web.whatsapp.com' && host !== 'teams.microsoft.com' && host !== 'teams.live.com' &&
-        host !== 'teams.cloud.microsoft') return false
+      if (!slack && !allowedHost(host)) return false
       if (host === 'web.telegram.org' && !/^\/(?:a|k)(?:\/|$)/.test(url.pathname)) return false
       if (slack && !/^\/(?:client|messages)(?:\/|$)/.test(url.pathname)) return false
       return !/(?:^|\/)(?:settings|api[-_]?keys?|secrets|passwords?|oauth|checkout|payments?|billing|accounts?|auth|sign-?in|sign-?up|log-?in|register)(?:\/|$)/i.test(url.pathname)
@@ -283,7 +631,10 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
   }
 
   function managedBreak(node: Node): boolean {
-    return node instanceof HTMLBRElement && node.getAttribute('data-lexical-managed-linebreak') === 'true'
+    return (
+      node instanceof HTMLBRElement &&
+      (node.getAttribute('data-lexical-managed-linebreak') === 'true' || node.getAttribute('data-text') === 'true')
+    )
   }
 
   function ignoredSubtree(node: Element): boolean {
@@ -291,9 +642,11 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
     return node.classList.contains('ProseMirror-trailingBreak') ||
       node.classList.contains('ProseMirror-separator') ||
       node.classList.contains('ProseMirror-gapcursor') ||
+      node.classList.contains('public-DraftEditorPlaceholder-root') ||
+      node.hasAttribute('data-placeholder') ||
       node.hasAttribute('data-slate-zero-width') ||
       node.hasAttribute('data-slate-placeholder') ||
-      node.closest('[data-slate-zero-width],[data-slate-placeholder]') !== null
+      node.closest('.public-DraftEditorPlaceholder-root,[data-placeholder],[data-slate-zero-width],[data-slate-placeholder]') !== null
   }
 
   function allowedMarkup(element: HTMLElement): boolean {
@@ -308,56 +661,138 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
   }
 
   function blockedContent(element: HTMLElement): boolean {
-    for (const node of element.querySelectorAll('img,svg,canvas,button,input,textarea,a,ul,ol,li,table,pre,code,.ProseMirror-widget,[data-node-view-wrapper],[data-decoration-id],[data-mention],[data-lexical-decorator],[data-lexical-mention]')) {
+    for (const node of element.querySelectorAll('img,svg,canvas,button,input,textarea,a,ul,ol,li,table,pre,code,.ProseMirror-widget,[data-node-view-wrapper],[data-decoration-id],[data-mention],[data-lexical-decorator],[data-lexical-mention],[data-slate-void="true"]')) {
       if (!ignoredSubtree(node)) return true
     }
     return false
   }
 
-  function mainKind(element: HTMLElement): 'pm' | 'lexical' | 'quill' | 'rooster' | undefined {
+  function mainKind(element: HTMLElement): 'pm' | 'lexical' | 'quill' | 'rooster' | 'draft' | 'slate' | undefined {
     if (element.getAttribute('contenteditable') !== 'true') return undefined
     if (element.matches('.ProseMirror')) return 'pm'
-    if (element.matches('[data-lexical-editor="true"]')) return 'lexical'
+    if (element.matches('[data-lexical-editor="true"],[data-lexical-editor=""]')) return 'lexical'
     if (element.matches('.ql-editor')) return 'quill'
+    if (
+      element.matches('.public-DraftEditor-content') ||
+      closestShadow(element, '.DraftEditor-root') !== null ||
+      element.querySelector('[data-contents="true"],[data-block="true"]') !== null
+    ) {
+      return 'draft'
+    }
+    if (element.matches('[data-slate-editor="true"],[data-slate-editor=""]')) return 'slate'
     let host: string
     try {
       host = new URL(location.href).hostname.toLowerCase()
     } catch {
       return undefined
     }
-    if (host === 'web.whatsapp.com') return 'lexical'
-    if (host === 'app.slack.com' || host.endsWith('.slack.com')) return 'quill'
+    if (
+      host === 'web.whatsapp.com' ||
+      host === 'www.facebook.com' ||
+      host === 'facebook.com' ||
+      host === 'm.facebook.com' ||
+      host === 'web.facebook.com' ||
+      host === 'www.messenger.com' ||
+      host === 'messenger.com' ||
+      host === 'www.instagram.com' ||
+      host === 'instagram.com' ||
+      host === 'www.threads.net' ||
+      host === 'threads.net' ||
+      host === 'www.threads.com' ||
+      host === 'threads.com'
+    ) {
+      return 'lexical'
+    }
+    if (host === 'app.slack.com' || host.endsWith('.slack.com') || host === 'gemini.google.com' || host === 'www.linkedin.com' || host === 'linkedin.com') {
+      return 'quill'
+    }
     if (host === 'teams.microsoft.com' || host === 'teams.live.com' || host === 'teams.cloud.microsoft') return 'rooster'
+    if (
+      host === 'x.com' ||
+      host === 'www.x.com' ||
+      host === 'pro.x.com' ||
+      host === 'twitter.com' ||
+      host === 'www.twitter.com' ||
+      host === 'mobile.twitter.com' ||
+      host === 'tweetdeck.twitter.com'
+    ) {
+      return 'draft'
+    }
     return undefined
   }
 
   function mainBlocks(element: HTMLElement): HTMLElement[] {
     const blocks: HTMLElement[] = []
     for (const child of element.children) {
-      if (child instanceof HTMLElement && (child.tagName === 'P' || child.tagName === 'DIV')) blocks.push(child)
+      if (child instanceof HTMLElement && !ignoredSubtree(child) && (child.tagName === 'P' || child.tagName === 'DIV')) {
+        blocks.push(child)
+      }
     }
     return blocks
   }
 
   function mainFlat(element: HTMLElement): boolean {
     const blocks = mainBlocks(element)
-    if (blocks.length === 0 || blocks.length !== element.childElementCount) return false
+    let nonIgnored = 0
+    for (const child of element.children) {
+      if (!ignoredSubtree(child)) nonIgnored += 1
+    }
+    if (blocks.length === 0 || blocks.length !== nonIgnored) return false
     for (const block of blocks) {
       if (block.querySelector('p,div') !== null) return false
     }
     return true
   }
 
+  function mainDraftBlocks(element: HTMLElement): HTMLElement[] {
+    const blocks: HTMLElement[] = []
+    for (const node of element.querySelectorAll('[data-block="true"]')) {
+      if (node instanceof HTMLElement && !ignoredSubtree(node)) blocks.push(node)
+    }
+    return blocks
+  }
+
+  function mainDraftValid(element: HTMLElement): boolean {
+    const blocks = mainDraftBlocks(element)
+    if (blocks.length === 0) return mainFlat(element)
+    for (const block of blocks) {
+      if (block.querySelector('[data-block="true"],p') !== null) return false
+    }
+    return true
+  }
+
+  function mainSlateBlocks(element: HTMLElement): HTMLElement[] {
+    const blocks: HTMLElement[] = []
+    for (const child of element.children) {
+      if (child instanceof HTMLElement && !ignoredSubtree(child) && child.getAttribute('data-slate-node') === 'element') {
+        blocks.push(child)
+      }
+    }
+    return blocks
+  }
+
+  function mainSlateValid(element: HTMLElement): boolean {
+    if (element.querySelector('[data-slate-node="element"] [data-slate-node="element"]') !== null) return false
+    const blocks = mainSlateBlocks(element)
+    return blocks.length > 0 || mainFlat(element)
+  }
+
   function plainEditor(element: HTMLElement): boolean {
     const kind = mainKind(element)
     if (kind === undefined || !element.isConnected) return false
     if (element.getAttribute('aria-readonly') === 'true' || element.getAttribute('aria-disabled') === 'true') return false
-    if (element.hidden || element.inert || element.closest('[hidden],[inert],[aria-hidden="true"],[data-sensitive],[data-wt-root]') !== null) {
+    if (element.hidden || element.inert || closestShadow(element, '[hidden],[inert],[aria-hidden="true"],[data-sensitive],[data-wt-root]') !== null) {
       return false
     }
     const style = element.style
     if (style.display === 'none' || style.visibility === 'hidden') return false
-    if (kind !== 'pm' && !mainFlat(element)) return false
+    if (kind === 'draft') {
+      if (!mainDraftValid(element)) return false
+    } else if (kind === 'slate') {
+      if (!mainSlateValid(element)) return false
+    } else if (kind !== 'pm' && !mainFlat(element)) {
+      return false
+    }
     if (!allowedMarkup(element)) return false
     if (blockedContent(element)) return false
     for (const locked of element.querySelectorAll('[contenteditable]')) {
@@ -467,6 +902,18 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
       const separator = kind === 'lexical' ? '\n\n' : '\n'
       const readBlock = kind === 'quill' ? mainQuillBlock : kind === 'rooster' ? mainRoosterBlock : mainInline
       return mainBlocks(element).map((block) => readBlock(block)).join(separator)
+    }
+    if (kind === 'draft') {
+      if (!mainDraftValid(element)) return ''
+      const blocks = mainDraftBlocks(element)
+      if (blocks.length > 0) return blocks.map((block) => mainQuillBlock(block)).join('\n')
+      return mainBlocks(element).map((block) => mainQuillBlock(block)).join('\n')
+    }
+    if (kind === 'slate') {
+      if (!mainSlateValid(element)) return ''
+      const blocks = mainSlateBlocks(element)
+      if (blocks.length > 0) return blocks.map((block) => mainInline(block)).join('\n')
+      return mainBlocks(element).map((block) => mainInline(block)).join('\n')
     }
     const blocks = mainBlocks(element)
     if (blocks.length === 0) return readNode(element, element)
@@ -680,11 +1127,155 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
     return text
   }
 
+  function extractDraftBlocks(content: Record<string, unknown>): unknown[] | undefined {
+    if (typeof content.getBlocksAsArray === 'function') {
+      const list = content.getBlocksAsArray()
+      if (Array.isArray(list)) return list
+    }
+    if (typeof content.getBlockMap === 'function') {
+      const map = content.getBlockMap()
+      if (isDataRecord(map)) {
+        if (typeof map.toArray === 'function') {
+          const list = map.toArray()
+          if (Array.isArray(list)) return list
+        }
+        if (typeof map.forEach === 'function') {
+          const list: unknown[] = []
+          ;(map.forEach as (fn: (block: unknown) => void) => void)((block) => {
+            if (list.length <= 12000) list.push(block)
+          })
+          return list
+        }
+        if (typeof map.values === 'function') {
+          return Array.from(map.values() as Iterable<unknown>)
+        }
+      }
+    }
+    return undefined
+  }
+
+  function readDraftState(editorState: unknown): {
+    text: string
+    firstKey: string
+    lastKey: string
+    lastLength: number
+  } | undefined {
+    if (!isDataRecord(editorState) || typeof editorState.getCurrentContent !== 'function') return undefined
+    const content = editorState.getCurrentContent()
+    if (!isDataRecord(content) || typeof content.getPlainText !== 'function') return undefined
+    const blocks = extractDraftBlocks(content)
+    if (blocks === undefined || blocks.length === 0 || blocks.length > 12000) return undefined
+    let chars = 0
+    const parts: string[] = []
+    let firstKey = ''
+    let lastKey = ''
+    let lastLength = 0
+    for (let index = 0; index < blocks.length; index += 1) {
+      const block = blocks[index]
+      if (!isDataRecord(block) || typeof block.getText !== 'function') return undefined
+      const type = typeof block.getType === 'function' ? block.getType() : 'unstyled'
+      if (type !== 'unstyled' && type !== 'paragraph') return undefined
+      const text = block.getText()
+      if (typeof text !== 'string' || text.length > 6000) return undefined
+      chars += text.length
+      if (chars > 6000) return undefined
+      if (typeof block.getData === 'function') {
+        const data = block.getData()
+        if (isDataRecord(data) && typeof data.size === 'number' && data.size > 0) return undefined
+      }
+      for (let offset = 0; offset < text.length; offset += 1) {
+        if (typeof block.getInlineStyleAt === 'function') {
+          const style = block.getInlineStyleAt(offset)
+          if (isDataRecord(style) && typeof style.size === 'number' && style.size > 0) return undefined
+        }
+        if (typeof block.getEntityAt === 'function') {
+          const entity = block.getEntityAt(offset)
+          if (entity !== null && entity !== undefined) {
+            if (typeof content.getEntity !== 'function') return undefined
+            const entityInstance = (content.getEntity as (key: unknown) => unknown)(entity)
+            const entityType =
+              isDataRecord(entityInstance) && typeof entityInstance.getType === 'function'
+                ? String((entityInstance.getType as () => unknown)()).toUpperCase()
+                : ''
+            if (entityType !== 'MENTION' && entityType !== 'HASHTAG' && entityType !== 'CASHTAG') {
+              return undefined
+            }
+          }
+        }
+      }
+      const key = typeof block.getKey === 'function' ? block.getKey() : ''
+      if (index === 0) firstKey = typeof key === 'string' ? key : ''
+      if (index === blocks.length - 1) {
+        lastKey = typeof key === 'string' ? key : ''
+        lastLength = text.length
+      }
+      parts.push(text)
+    }
+    const joined = parts.join('\n')
+    const plain = content.getPlainText('\n')
+    if (typeof plain !== 'string' || plain !== joined || joined.length > 6000) return undefined
+    return { text: joined, firstKey, lastKey, lastLength }
+  }
+
+  function walkSlateNode(
+    node: unknown,
+    path: number[],
+    depth: number,
+    state: { nodes: number; chars: number },
+    leaves: Array<{ path: number[]; text: string }>,
+  ): boolean {
+    if (state.nodes >= 12000 || depth > 32) return false
+    state.nodes += 1
+    if (!isDataRecord(node)) return false
+    if (typeof node.text === 'string' && !Array.isArray(node.children)) {
+      if (state.chars + node.text.length > 6000) return false
+      state.chars += node.text.length
+      leaves.push({ path: path.slice(), text: node.text })
+      return true
+    }
+    if (!Array.isArray(node.children) || node.children.length > 12000) return false
+    for (let index = 0; index < node.children.length; index += 1) {
+      const childPath = path.slice()
+      childPath.push(index)
+      if (!walkSlateNode(node.children[index], childPath, depth + 1, state, leaves)) return false
+    }
+    return true
+  }
+
+  function readSlateModel(children: unknown): {
+    text: string
+    firstPath: number[]
+    lastPath: number[]
+    lastText: string
+  } | undefined {
+    if (!Array.isArray(children) || children.length === 0 || children.length > 12000) return undefined
+    const state = { nodes: 0, chars: 0 }
+    const leaves: Array<{ path: number[]; text: string }> = []
+    const parts: string[] = []
+    for (let index = 0; index < children.length; index += 1) {
+      const blockLeaves: Array<{ path: number[]; text: string }> = []
+      if (!walkSlateNode(children[index], [index], 0, state, blockLeaves)) return undefined
+      let block = ''
+      for (const leaf of blockLeaves) {
+        block += leaf.text
+        leaves.push(leaf)
+      }
+      parts.push(block)
+    }
+    const text = parts.join('\n')
+    const first = leaves[0]
+    const last = leaves[leaves.length - 1]
+    if (first === undefined || last === undefined || text.length > 6000) return undefined
+    return { text, firstPath: first.path.slice(), lastPath: last.path.slice(), lastText: last.text }
+  }
+
   function readActual(view: ChatEditorHandle): string | undefined {
     try {
       if (view.kind === 'pm') return canonicalText(view.value.state.doc)
       if (view.kind === 'lexical') return readLexicalState(view.value)
       if (view.kind === 'quill') return readQuillModel(view.value)
+      if (view.kind === 'draft') return readDraftState(view.value.getEditorState())?.text
+      if (view.kind === 'slate') return readSlateModel(view.value.children)?.text
       return readRoosterModel(view.value.getContentModelCopy('clean'))
     } catch {
       return undefined
@@ -705,6 +1296,13 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
         if (view.value.isEnabled() !== true) return 'failed'
         return undefined
       }
+      if (view.kind === 'draft') {
+        if (view.value.isReadOnly() === true || view.value.isComposing() === true) return 'failed'
+        return undefined
+      }
+      if (view.kind === 'slate') {
+        return undefined
+      }
       if (view.value.isDisposed() === true) return 'failed'
       return undefined
     } catch {
@@ -720,24 +1318,28 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
     if (paragraphType === undefined || typeof paragraphType.create !== 'function' || typeof schema.text !== 'function') {
       return undefined
     }
-    if (lines.length > 1 && (hardBreak === undefined || typeof hardBreak.create !== 'function')) return undefined
-    const inline: unknown[] = []
-    for (let index = 0; index < lines.length; index += 1) {
-      if (index > 0) {
-        if (hardBreak === undefined || typeof hardBreak.create !== 'function') return undefined
-        inline.push(hardBreak.create())
-      }
-      const line = lines[index] ?? ''
-      if (line !== '') inline.push(schema.text(line))
-    }
-    const paragraph = paragraphType.create(null, inline)
     const transactionHost = view.state.tr
     if (transactionHost === undefined || typeof transactionHost.replaceWith !== 'function' || typeof view.dispatch !== 'function') {
       return undefined
     }
     const size = view.state.doc.content?.size
     if (typeof size !== 'number') return undefined
-    const transaction = transactionHost.replaceWith(0, size, paragraph)
+    let replacement: unknown
+    if (lines.length > 1 && (hardBreak === undefined || typeof hardBreak.create !== 'function')) {
+      replacement = lines.map((line) => paragraphType.create(null, line !== '' ? [schema.text!(line)] : []))
+    } else {
+      const inline: unknown[] = []
+      for (let index = 0; index < lines.length; index += 1) {
+        if (index > 0) {
+          if (hardBreak === undefined || typeof hardBreak.create !== 'function') return undefined
+          inline.push(hardBreak.create())
+        }
+        const line = lines[index] ?? ''
+        if (line !== '') inline.push(schema.text(line))
+      }
+      replacement = paragraphType.create(null, inline)
+    }
+    const transaction = transactionHost.replaceWith(0, size, replacement)
     view.dispatch(transaction)
     const next = view.state.doc
     const nextSize = next.content?.size
@@ -795,14 +1397,137 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
     return verified === normalized ? 'ok' : 'failed'
   }
 
+  function writeDraft(handle: DraftEditorHandle, normalized: string): string | undefined {
+    const editorState = handle.getEditorState()
+    const before = readDraftState(editorState)
+    if (!isDataRecord(editorState) || before === undefined) return undefined
+    const content = editorState.getCurrentContent()
+    if (!isDataRecord(content)) return undefined
+
+    const ContentStateCtor = (content as { constructor?: { createFromText?: (text: string, delimiter?: string) => unknown } }).constructor
+    const EditorStateCtor = (editorState as {
+      constructor?: {
+        push?: (state: unknown, contentState: unknown, changeType: string) => unknown
+        moveFocusToEnd?: (state: unknown) => unknown
+        moveSelectionToEnd?: (state: unknown) => unknown
+        forceSelection?: (state: unknown, selection: unknown) => unknown
+        acceptSelection?: (state: unknown, selection: unknown) => unknown
+      }
+    }).constructor
+    if (typeof ContentStateCtor?.createFromText === 'function' && typeof EditorStateCtor?.push === 'function') {
+      const nextContent = ContentStateCtor.createFromText(normalized, '\n')
+      let nextState = EditorStateCtor.push(editorState, nextContent, 'insert-characters')
+      if (typeof EditorStateCtor.moveFocusToEnd === 'function') {
+        nextState = EditorStateCtor.moveFocusToEnd(nextState)
+      } else if (typeof EditorStateCtor.moveSelectionToEnd === 'function') {
+        nextState = EditorStateCtor.moveSelectionToEnd(nextState)
+      }
+      if (handle.commit(nextState)) {
+        const after = readDraftState(handle.getEditorState())
+        if (after !== undefined) return after.text
+      }
+    }
+
+    if (typeof editorState.getSelection === 'function' && before.firstKey !== '' && before.lastKey !== '') {
+      const selection = editorState.getSelection()
+      if (isDataRecord(selection) && typeof selection.merge === 'function') {
+        const fullSelection = selection.merge({
+          anchorKey: before.firstKey,
+          anchorOffset: 0,
+          focusKey: before.lastKey,
+          focusOffset: before.lastLength,
+          isBackward: false,
+          hasFocus: true,
+        })
+        let selectedState: unknown
+        if (typeof EditorStateCtor?.forceSelection === 'function') {
+          selectedState = EditorStateCtor.forceSelection(editorState, fullSelection)
+        } else if (typeof EditorStateCtor?.acceptSelection === 'function') {
+          selectedState = EditorStateCtor.acceptSelection(editorState, fullSelection)
+        } else if (typeof editorState.getImmutable === 'function' && typeof EditorStateCtor === 'function') {
+          const imm = editorState.getImmutable()
+          if (isDataRecord(imm) && typeof imm.merge === 'function') {
+            selectedState = new (EditorStateCtor as unknown as new (record: unknown) => unknown)(
+              imm.merge({ selection: fullSelection, forceSelection: true }),
+            )
+          }
+        }
+        if (selectedState !== undefined) {
+          handle.commit(selectedState)
+        }
+      }
+      try {
+        const domSelection = handle.root.ownerDocument.getSelection()
+        if (domSelection !== null) {
+          const range = handle.root.ownerDocument.createRange()
+          range.selectNodeContents(handle.root)
+          domSelection.removeAllRanges()
+          domSelection.addRange(range)
+        }
+      } catch {
+        void 0
+      }
+      if (handle.pasteText(normalized)) {
+        const afterPaste = readDraftState(handle.getEditorState())
+        if (afterPaste !== undefined) return afterPaste.text
+      }
+      try {
+        if (typeof DataTransfer === 'function' && typeof ClipboardEvent === 'function') {
+          const dt = new DataTransfer()
+          dt.setData('text/plain', normalized)
+          const pasteEvent = new ClipboardEvent('paste', {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: dt,
+          })
+          handle.root.dispatchEvent(pasteEvent)
+          const afterDomPaste = readDraftState(handle.getEditorState())
+          if (afterDomPaste?.text === normalized) return afterDomPaste.text
+        }
+      } catch {
+        void 0
+      }
+      if (!normalized.includes('\n') && typeof handle.root.ownerDocument.execCommand === 'function') {
+        try {
+          handle.root.ownerDocument.execCommand('insertText', false, normalized)
+          const afterExec = readDraftState(handle.getEditorState())
+          if (afterExec !== undefined) return afterExec.text
+        } catch {
+          void 0
+        }
+      }
+    }
+    return undefined
+  }
+
+  function writeSlate(editor: SlateEditorHandle, normalized: string, expectedText: string): ChatReplacementStatus {
+    const fresh = readSlateModel(editor.children)
+    if (fresh === undefined) return 'unsupported'
+    if (fresh.text !== expectedText) return 'changed'
+    editor.apply({
+      type: 'set_selection',
+      properties: editor.selection,
+      newProperties: {
+        anchor: { path: fresh.firstPath.slice(), offset: 0 },
+        focus: { path: fresh.lastPath.slice(), offset: fresh.lastText.length },
+      },
+    })
+    editor.insertText(normalized)
+    const written = readSlateModel(editor.children)
+    return written !== undefined && written.text === normalized ? 'ok' : 'failed'
+  }
+
   function writeHandle(view: ChatEditorHandle, normalized: string, expectedText: string): ChatReplacementStatus {
     try {
       if (view.kind === 'rooster') return writeRooster(view.value, normalized, expectedText)
+      if (view.kind === 'slate') return writeSlate(view.value, normalized, expectedText)
       const written = view.kind === 'pm'
         ? writeModel(view.value, normalized)
         : view.kind === 'lexical'
           ? writeLexical(view.value, normalized)
-          : writeQuill(view.value, normalized)
+          : view.kind === 'draft'
+            ? writeDraft(view.value, normalized)
+            : writeQuill(view.value, normalized)
       if (written === undefined) return 'unsupported'
       return written === normalized ? 'ok' : 'failed'
     } catch {
@@ -857,7 +1582,200 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
     return value as unknown as RoosterEditorHandle
   }
 
-  function acceptHandle(value: unknown, root: HTMLElement): ChatEditorHandle | undefined {
+  function isDraftEditorState(value: unknown): value is DraftEditorState {
+    return (
+      isDataRecord(value) &&
+      typeof value.getCurrentContent === 'function' &&
+      typeof value.getSelection === 'function'
+    )
+  }
+
+  function unwrapElementRef(value: unknown): Element | undefined {
+    if (value instanceof Element) return value
+    if (isDataRecord(value) && value.current instanceof Element) return value.current
+    return undefined
+  }
+
+  function resolveDraftOwnership(value: Record<string, unknown>, root: HTMLElement): 'bound' | 'foreign' | 'unbound' {
+    const refs = isDataRecord(value.refs) ? value.refs : undefined
+    const editorEl =
+      unwrapElementRef(value.editor) ??
+      unwrapElementRef(value._editor) ??
+      (refs !== undefined ? unwrapElementRef(refs.editor) : undefined)
+    if (editorEl !== undefined) {
+      return editorEl === root ? 'bound' : 'foreign'
+    }
+    const containerEl =
+      unwrapElementRef(value.editorContainer) ??
+      (refs !== undefined ? unwrapElementRef(refs.editorContainer) : undefined)
+    if (containerEl !== undefined) {
+      return containerEl === root || containerEl.contains(root) ? 'bound' : 'foreign'
+    }
+    const entries = Object.values(value).slice(0, 32)
+    let sawForeignDraftDom = false
+    for (const entry of entries) {
+      const el = unwrapElementRef(entry)
+      if (el === undefined) continue
+      if (el === root || el.contains(root)) return 'bound'
+      if (el.matches?.('.public-DraftEditor-content,.DraftEditor-root,.DraftEditor-editorContainer') === true) {
+        sawForeignDraftDom = true
+      }
+    }
+    return sawForeignDraftDom ? 'foreign' : 'unbound'
+  }
+
+  function acceptDraft(
+    value: unknown,
+    root: HTMLElement,
+    expectedText: string,
+    allowUnboundProps = false,
+  ): DraftEditorHandle | undefined {
+    if (!isDataRecord(value)) return undefined
+    const props = isDataRecord(value.props) ? value.props : undefined
+    const stateCandidate = isDraftEditorState(value._latestEditorState)
+      ? value._latestEditorState
+      : props !== undefined && isDraftEditorState(props.editorState)
+        ? props.editorState
+        : isDraftEditorState(value.editorState)
+          ? value.editorState
+          : undefined
+    if (stateCandidate === undefined) return undefined
+    const updateFn = typeof value.update === 'function' ? value.update : undefined
+    const onChangeFn =
+      props !== undefined && typeof props.onChange === 'function'
+        ? props.onChange
+        : typeof value.onChange === 'function'
+          ? value.onChange
+          : undefined
+    if (updateFn === undefined && onChangeFn === undefined) return undefined
+
+    const ownership = resolveDraftOwnership(value, root)
+    if (ownership === 'foreign') return undefined
+    if (ownership === 'unbound') {
+      if (!allowUnboundProps) return undefined
+      const model = readDraftState(stateCandidate)
+      if (model === undefined || model.text !== expectedText) return undefined
+    }
+
+    let committedState: DraftEditorState | undefined
+    return {
+      root,
+      getEditorState() {
+        if (isDraftEditorState(value._latestEditorState)) return value._latestEditorState
+        const liveProps = isDataRecord(value.props) ? value.props : undefined
+        if (liveProps !== undefined && isDraftEditorState(liveProps.editorState) && committedState === undefined) {
+          return liveProps.editorState
+        }
+        if (committedState !== undefined) {
+          if (liveProps !== undefined && isDraftEditorState(liveProps.editorState)) {
+            const liveModel = readDraftState(liveProps.editorState)
+            const committedModel = readDraftState(committedState)
+            if (liveModel !== undefined && committedModel !== undefined && liveModel.text === committedModel.text) {
+              return liveProps.editorState
+            }
+          }
+          return committedState
+        }
+        if (isDraftEditorState(value.editorState)) return value.editorState
+        return stateCandidate
+      },
+      isReadOnly() {
+        const liveProps = isDataRecord(value.props) ? value.props : value
+        return liveProps.readOnly === true || value.readOnly === true
+      },
+      isComposing() {
+        if (value._isInCompositionMode === true) return true
+        const current = this.getEditorState()
+        return typeof current?.isInCompositionMode === 'function' && current.isInCompositionMode() === true
+      },
+      commit(nextState: unknown) {
+        if (!isDraftEditorState(nextState)) return false
+        committedState = nextState
+        if (typeof value.update === 'function') {
+          ;(value.update as (s: unknown) => void).call(value, nextState)
+          return true
+        }
+        const liveProps = isDataRecord(value.props) ? value.props : undefined
+        if (liveProps !== undefined && typeof liveProps.onChange === 'function') {
+          if ('_latestEditorState' in value) value._latestEditorState = nextState
+          ;(liveProps.onChange as (s: unknown) => void).call(liveProps, nextState)
+          return true
+        }
+        if (typeof value.onChange === 'function') {
+          ;(value.onChange as (s: unknown) => void).call(value, nextState)
+          return true
+        }
+        return false
+      },
+      pasteText(text: string) {
+        const handler = isDataRecord(value._handler) && typeof value._handler.onPaste === 'function'
+          ? value._handler.onPaste
+          : typeof value._onPaste === 'function'
+            ? value._onPaste
+            : undefined
+        if (typeof handler !== 'function') return false
+        const fakeEvent = {
+          preventDefault() { return undefined },
+          stopPropagation() { return undefined },
+          clipboardData: {
+            types: ['text/plain'],
+            files: [],
+            items: [],
+            getData(format: string) {
+              return format === 'text/plain' || format === 'Text' ? text : ''
+            },
+          },
+        }
+        try {
+          if (isDataRecord(value._handler) && handler === value._handler.onPaste) {
+            ;(handler as (ed: unknown, ev: unknown) => void).call(value._handler, value, fakeEvent)
+          } else {
+            ;(handler as (ev: unknown) => void).call(value, fakeEvent)
+          }
+          return true
+        } catch {
+          return false
+        }
+      },
+    }
+  }
+
+  function acceptSlate(value: unknown, expectedText: string): SlateEditorHandle | undefined {
+    if (!isDataRecord(value)) return undefined
+    if (!Array.isArray(value.children) || typeof value.apply !== 'function' || typeof value.insertText !== 'function') {
+      return undefined
+    }
+    let model: ReturnType<typeof readSlateModel>
+    try {
+      model = readSlateModel(value.children)
+    } catch {
+      return undefined
+    }
+    if (model === undefined || model.text !== expectedText) return undefined
+    const apply = value.apply
+    const insertText = value.insertText
+    return {
+      get children() {
+        return (value as { children: unknown }).children
+      },
+      get selection() {
+        return (value as { selection: unknown }).selection
+      },
+      apply(operation) {
+        ;(apply as (op: unknown) => void).call(value, operation)
+      },
+      insertText(next) {
+        ;(insertText as (t: string) => void).call(value, next)
+      },
+    }
+  }
+
+  function acceptHandle(
+    value: unknown,
+    root: HTMLElement,
+    expectedText: string,
+    allowUnbound = false,
+  ): ChatEditorHandle | undefined {
     const view = acceptView(value, root)
     if (view !== undefined) return { kind: 'pm', value: view }
     const lexical = acceptLexical(value, root)
@@ -866,56 +1784,96 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
     if (quill !== undefined) return { kind: 'quill', value: quill }
     const rooster = acceptRooster(value, root)
     if (rooster !== undefined) return { kind: 'rooster', value: rooster }
+    const draft = acceptDraft(value, root, expectedText, allowUnbound)
+    if (draft !== undefined) return { kind: 'draft', value: draft }
+    if (allowUnbound && mainKind(root) === 'slate') {
+      const slate = acceptSlate(value, expectedText)
+      if (slate !== undefined) return { kind: 'slate', value: slate }
+    }
     return undefined
   }
 
-  function considerCandidate(value: unknown, root: HTMLElement, seen: Set<unknown>, depth: number): ChatEditorHandle | undefined {
+  function considerCandidate(
+    value: unknown,
+    root: HTMLElement,
+    expectedText: string,
+    seen: Set<unknown>,
+    depth: number,
+    allowUnbound = false,
+  ): ChatEditorHandle | undefined {
     if (depth > 16 || typeof value !== 'object' || value === null || seen.has(value)) return undefined
     seen.add(value)
-    const direct = acceptHandle(value, root)
+    const direct = acceptHandle(value, root, expectedText, allowUnbound)
     if (direct !== undefined) return direct
-    if (Array.isArray(value)) return value.length > 0 ? considerCandidate(value[0], root, seen, depth + 1) : undefined
+    if (Array.isArray(value)) {
+      for (let i = 0; i < Math.min(value.length, 8); i += 1) {
+        const item = considerCandidate(value[i], root, expectedText, seen, depth + 1, allowUnbound)
+        if (item !== undefined) return item
+      }
+      return undefined
+    }
     if (!isDataRecord(value)) return undefined
-    for (const key of ['view', 'editor', 'current', 'quill', '_editor'] as const) {
+    for (const key of ['view', 'editor', 'current', 'quill', '_editor', 'draftEditor', 'deps'] as const) {
       if (key in value) {
-        const nested = considerCandidate(value[key], root, seen, depth + 1)
+        const nested = considerCandidate(value[key], root, expectedText, seen, depth + 1, allowUnbound)
         if (nested !== undefined) return nested
       }
     }
     return undefined
   }
 
-  function holderOn(record: Record<string, unknown>, root: HTMLElement, seen: Set<unknown>): ChatEditorHandle | undefined {
-    for (const key of ['editor', 'view', 'quill', '_editor'] as const) {
+  function holderOn(
+    record: Record<string, unknown>,
+    root: HTMLElement,
+    expectedText: string,
+    seen: Set<unknown>,
+    allowUnbound = false,
+  ): ChatEditorHandle | undefined {
+    const direct = acceptHandle(record, root, expectedText, allowUnbound)
+    if (direct !== undefined) return direct
+    for (const key of ['editor', 'view', 'quill', '_editor', 'draftEditor'] as const) {
       if (key in record) {
-        const nested = considerCandidate(record[key], root, seen, 0)
+        const nested = considerCandidate(record[key], root, expectedText, seen, 0, allowUnbound)
         if (nested !== undefined) return nested
       }
     }
     return undefined
   }
 
-  function editorOnFiber(fiber: unknown, root: HTMLElement): ChatEditorHandle | undefined {
+  function editorOnFiber(fiber: unknown, root: HTMLElement, expectedText: string): ChatEditorHandle | undefined {
     if (!isDataRecord(fiber)) return undefined
     const seen = new Set<unknown>()
     try {
-      const props = fiber.memoizedProps
-      if (isDataRecord(props)) {
-        const fromProps = holderOn(props, root, seen)
-        if (fromProps !== undefined) return fromProps
-      }
       const stateNode = fiber.stateNode
       if (isDataRecord(stateNode)) {
-        const fromNode = holderOn(stateNode, root, seen)
+        const fromNode = holderOn(stateNode, root, expectedText, seen, true)
         if (fromNode !== undefined) return fromNode
+      }
+      const props = fiber.memoizedProps
+      if (isDataRecord(props)) {
+        const fromProps = holderOn(props, root, expectedText, seen, true)
+        if (fromProps !== undefined) return fromProps
       }
       let hook: unknown = fiber.memoizedState
       const seenHooks = new Set<unknown>()
       for (let count = 0; count < 80 && isDataRecord(hook); count += 1) {
         if (seenHooks.has(hook)) break
         seenHooks.add(hook)
-        const fromHook = considerCandidate(hook.memoizedState, root, seen, 0)
+        const fromHook = considerCandidate(hook.memoizedState, root, expectedText, seen, 0, true)
         if (fromHook !== undefined) return fromHook
+        if (
+          isDraftEditorState(hook.memoizedState) &&
+          isDataRecord(hook.queue) &&
+          typeof hook.queue.dispatch === 'function'
+        ) {
+          const fromDraftHook = acceptDraft(
+            { editorState: hook.memoizedState, onChange: hook.queue.dispatch },
+            root,
+            expectedText,
+            true,
+          )
+          if (fromDraftHook !== undefined) return { kind: 'draft', value: fromDraftHook }
+        }
         hook = hook.next
       }
       const dependencies = fiber.dependencies
@@ -926,10 +1884,10 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
         if (seenContexts.has(context)) break
         seenContexts.add(context)
         if (isDataRecord(context.memoizedValue)) {
-          const fromContext = holderOn(context.memoizedValue, root, seen)
+          const fromContext = holderOn(context.memoizedValue, root, expectedText, seen, true)
           if (fromContext !== undefined) return fromContext
         }
-        const directContext = considerCandidate(context.memoizedValue, root, seen, 0)
+        const directContext = considerCandidate(context.memoizedValue, root, expectedText, seen, 0, true)
         if (directContext !== undefined) return directContext
         context = context.next
       }
@@ -943,29 +1901,33 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
     return Object.keys(node).find((name) => name.startsWith('__reactFiber$') || name.startsWith('__reactInternalInstance$'))
   }
 
-  function findHandle(element: HTMLElement): ChatEditorHandle | undefined {
+  function findHandle(element: HTMLElement, expectedText: string): ChatEditorHandle | undefined {
     try {
       const bound = (element as unknown as { editor?: unknown }).editor
-      const fromBinding = considerCandidate(bound, element, new Set(), 0)
+      const fromBinding = considerCandidate(bound, element, expectedText, new Set(), 0, false)
       if (fromBinding !== undefined) return fromBinding
       const lexicalBinding = (element as unknown as { __lexicalEditor?: unknown }).__lexicalEditor
-      const fromLexical = considerCandidate(lexicalBinding, element, new Set(), 0)
+      const fromLexical = considerCandidate(lexicalBinding, element, expectedText, new Set(), 0, false)
       if (fromLexical !== undefined) return fromLexical
+      const draftBinding = (element as unknown as { _draftEditor?: unknown; __draftEditor?: unknown })._draftEditor ??
+        (element as unknown as { __draftEditor?: unknown }).__draftEditor
+      const fromDraft = considerCandidate(draftBinding, element, expectedText, new Set(), 0, true)
+      if (fromDraft !== undefined) return fromDraft
       const parentQuill = (element.parentElement as (HTMLElement & { __quill?: unknown }) | null)?.__quill
-      const fromQuill = considerCandidate(parentQuill, element, new Set(), 0)
+      const fromQuill = considerCandidate(parentQuill, element, expectedText, new Set(), 0, false)
       if (fromQuill !== undefined) return fromQuill
       if (element.matches('.ql-editor')) {
         try {
           const quillGlobal = (window as unknown as { Quill?: { find?: (container: Element, bubble: boolean) => unknown } }).Quill
-          const container = element.closest('.ql-container')
+          const container = closestShadow(element, '.ql-container')
           if (container !== null && typeof quillGlobal?.find === 'function') {
-            const fromFind = considerCandidate(quillGlobal.find(container, true), element, new Set(), 0)
+            const fromFind = considerCandidate(quillGlobal.find(container, true), element, expectedText, new Set(), 0, false)
             if (fromFind !== undefined) return fromFind
           }
         } catch { void 0 }
       }
       let host: Element | null = element
-      for (let hop = 0; hop <= 6 && host !== null; hop += 1) {
+      for (let hop = 0; hop <= 8 && host !== null; hop += 1) {
         const key = fiberKey(host)
         if (key !== undefined) {
           let fiber: unknown = (host as unknown as Record<string, unknown>)[key]
@@ -973,13 +1935,14 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
           for (let depth = 0; depth < 80 && typeof fiber === 'object' && fiber !== null; depth += 1) {
             if (seenFibers.has(fiber)) break
             seenFibers.add(fiber)
-            const view = editorOnFiber(fiber, element)
+            const view = editorOnFiber(fiber, element, expectedText)
             if (view !== undefined) return view
             fiber = isDataRecord(fiber) ? fiber.return : undefined
           }
           return undefined
         }
-        host = host.parentElement
+        const rootNode = host.getRootNode()
+        host = host.parentElement ?? (rootNode instanceof ShadowRoot ? rootNode.host : null)
       }
     } catch {
       return undefined
@@ -1072,8 +2035,44 @@ interface RoosterEditorHandle {
   isDisposed(): boolean
 }
 
+interface DraftEditorState {
+  getCurrentContent(): unknown
+  getSelection(): unknown
+  getImmutable?(): unknown
+  isInCompositionMode?(): boolean
+}
+
+interface DraftEditorHandle {
+  readonly root: HTMLElement
+  getEditorState(): DraftEditorState | undefined
+  isReadOnly(): boolean
+  isComposing(): boolean
+  commit(nextState: unknown): boolean
+  pasteText(text: string): boolean
+}
+
+interface SlateSelectionPoint {
+  path: number[]
+  offset: number
+}
+
+interface SlateSelectionOperation {
+  type: 'set_selection'
+  properties: unknown
+  newProperties: { anchor: SlateSelectionPoint; focus: SlateSelectionPoint }
+}
+
+interface SlateEditorHandle {
+  readonly children: unknown
+  readonly selection: unknown
+  apply(operation: SlateSelectionOperation): void
+  insertText(text: string): void
+}
+
 type ChatEditorHandle =
   | { kind: 'pm'; value: EditorViewHandle }
   | { kind: 'lexical'; value: LexicalEditorHandle }
   | { kind: 'quill'; value: QuillEditorHandle }
   | { kind: 'rooster'; value: RoosterEditorHandle }
+  | { kind: 'draft'; value: DraftEditorHandle }
+  | { kind: 'slate'; value: SlateEditorHandle }

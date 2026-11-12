@@ -72,9 +72,10 @@ const RICH_EDITOR_SELECTOR =
 
 const SENSITIVE_AUTOCOMPLETE = /^(?:username|current-password|new-password|one-time-code|cc-[a-z-]+)$/i
 const SENSITIVE_METADATA_PATTERN =
-  /(?:pass(?:word|code|phrase)?|pwd|token|secret|api[-_\s]?key|private[-_\s]?key|access[-_\s]?key|auth(?:entication)?[-_\s]?(?:code|key|token)?|otp|totp|2fa|mfa|verif(?:y|ication)[-_\s]?code|security[-_\s]?code|card[-_\s]?(?:number|no|num)|credit[-_\s]?card|debit[-_\s]?card|cvv|cvc|csc|pin(?:\b|[-_\s]?code)|ssn|tax[-_\s]?id|bank[-_\s]?account|routing[-_\s]?number|iban|swift|mnemonic|seed[-_\s]?phrase|密码|口令|密钥|秘钥|私钥|令牌|验证码|动态码|安全码|校验码|银行卡|信用卡|卡号|身份证|社保|支付密码|助记词|パスワード|暗証番号|トークン|シークレット|秘密鍵|APIキー|認証コード|確認コード|ワンタイム|セキュリティコード|カード番号|クレジットカード|口座番号)/i
+  /(?:(?<![a-z\d])(?:pass(?:word|code|phrase)?|pwd|token|secret|api[-_\s]?key|private[-_\s]?key|access[-_\s]?key|auth(?:entication)?[-_\s]?(?:code|key|token)?|otp|totp|2fa|mfa|verif(?:y|ication)[-_\s]?code|security[-_\s]?code|card[-_\s]?(?:number|no|num)|credit[-_\s]?card|debit[-_\s]?card|cvv|cvc|csc|pin(?:\b|[-_\s]?code)|ssn|tax[-_\s]?id|bank[-_\s]?account|routing[-_\s]?number|iban|swift|mnemonic|seed[-_\s]?phrase)(?![a-z\d])|密码|口令|密钥|秘钥|私钥|令牌|验证码|动态码|安全码|校验码|银行卡|信用卡|卡号|身份证|社保|支付密码|助记词|パスワード|暗証番号|トークン|シークレット|秘密鍵|APIキー|認証コード|確認コード|ワンタイム|セキュリティコード|カード番号|クレジットカード|口座番号)/i
 
-const PLAIN_EDITABLE_CHILD_TAGS = new Set(['BR', 'DIV', 'P'])
+const PLAIN_EDITABLE_CHILD_TAGS = new Set(['BR', 'DIV', 'P', 'SPAN'])
+const PLAIN_EDITABLE_ALLOWED_ATTRS = new Set(['dir', 'lang', 'style'])
 
 export const INPUT_POPOVER_CSS = `${SURFACE_CSS}
 .popover { box-sizing: border-box; position: fixed; z-index: 2147483647; max-width: min(400px,calc(100vw - 16px)); min-width: min(240px,calc(100vw - 16px)); max-height: min(480px,calc(100vh - 16px)); overflow: auto; padding: 12px; font: 13px/1.5 var(--gcn-font); color: var(--gcn-fg); background: var(--gcn-surface); border: 1px solid var(--gcn-surface-border); border-radius: var(--gcn-radius-overlay); box-shadow: var(--gcn-shadow-overlay); pointer-events: auto; }
@@ -124,7 +125,10 @@ function isPlainContentEditable(node: Element): node is HTMLElement {
   for (let current = walker.nextNode(); current !== null; current = walker.nextNode()) {
     if (!(current instanceof Element)) continue
     if (!PLAIN_EDITABLE_CHILD_TAGS.has(current.tagName)) return false
-    if (current.attributes.length > 0) return false
+    for (let i = 0; i < current.attributes.length; i += 1) {
+      const attrName = current.attributes[i]?.name.toLowerCase() ?? ''
+      if (!PLAIN_EDITABLE_ALLOWED_ATTRS.has(attrName)) return false
+    }
   }
   return true
 }
@@ -225,12 +229,15 @@ function resolveEditableField(target: EventTarget | null): EditableElement | und
   let current: Element | null = node
   while (current !== null) {
     if (current instanceof HTMLElement && current.hasAttribute('contenteditable')) {
-      break
+      const ce = (current.getAttribute('contenteditable') ?? '').trim().toLowerCase()
+      if (ce === 'false') return undefined
+      if (ce === '' || ce === 'true' || ce === 'plaintext-only') break
     }
     if (current.parentElement !== null) {
       current = current.parentElement
     } else {
-      break
+      const rootNode = current.getRootNode()
+      current = rootNode instanceof ShadowRoot ? rootNode.host : null
     }
   }
   const editableCandidate =
@@ -260,6 +267,8 @@ function readPlainEditable(element: HTMLElement): string {
       result += node.data
     } else if (node instanceof HTMLElement && node.tagName === 'BR') {
       result += '\n'
+    } else if (node instanceof HTMLElement && node.tagName === 'SPAN') {
+      result += readPlainEditable(node)
     } else if (node instanceof HTMLElement) {
       if (result !== '' && !result.endsWith('\n')) result += '\n'
       result += readPlainEditable(node)
@@ -489,6 +498,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   let composingField: EditableElement | undefined
   let debounceTimer: ReturnType<typeof setTimeout> | undefined
   let beforeInputTimer: ReturnType<typeof setTimeout> | undefined
+  let gestureTimer: ReturnType<typeof setTimeout> | undefined
   let autoReplaceTimer: ReturnType<typeof setTimeout> | undefined
   let lastEditAt = 0
   let inFlightId: string | undefined
@@ -632,6 +642,10 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     if (beforeInputTimer !== undefined) {
       clearTimeout(beforeInputTimer)
       beforeInputTimer = undefined
+    }
+    if (gestureTimer !== undefined) {
+      clearTimeout(gestureTimer)
+      gestureTimer = undefined
     }
   }
 
@@ -990,7 +1004,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     }, debounceMs)
   }
 
-  function deferManagedFieldCheck(field: HTMLElement): void {
+  function deferManagedFieldCheck(field: HTMLElement, followUpMs = 0): void {
     clearBeforeInput()
     if (activeField !== undefined && activeField !== field) clearAllState(true)
     activeField = field
@@ -1002,6 +1016,41 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
         clearAllState(true)
         return
       }
+      const sampledAtZero = readFieldValue(field)
+      scheduleFieldCheck(field)
+      if (followUpMs > 0) {
+        const afterZeroEpoch = epoch
+        gestureTimer = setTimeout(() => {
+          gestureTimer = undefined
+          if (disposed || epoch !== afterZeroEpoch || activeField !== field || composingField === field) return
+          if (!isCurrentEditable(field)) {
+            clearAllState(true)
+            return
+          }
+          if (readFieldValue(field) !== sampledAtZero) {
+            scheduleFieldCheck(field)
+          }
+        }, followUpMs)
+      }
+    }, 0)
+  }
+
+  function scheduleSilentMutationCheck(field: EditableElement, beforeValue: string): void {
+    if (gestureTimer !== undefined) {
+      clearTimeout(gestureTimer)
+      gestureTimer = undefined
+    }
+    gestureTimer = setTimeout(() => {
+      gestureTimer = undefined
+      if (disposed || composingField === field || field === ownInputWrite) return
+      if (!isCurrentEditable(field)) return
+      const afterValue = readFieldValue(field)
+      if (afterValue === beforeValue) return
+      backupState = undefined
+      if (suppressedSnapshot?.field === field && suppressedSnapshot.value !== afterValue) {
+        suppressedSnapshot = undefined
+      }
+      releasePendingManagedToken()
       scheduleFieldCheck(field)
     }, 0)
   }
@@ -1067,7 +1116,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     }
     if (field === undefined) return
     lastEditAt = Date.now()
-    if (isManagedPlainEditor(field)) deferManagedFieldCheck(field)
+    if (isManagedPlainEditor(field)) deferManagedFieldCheck(field, 28)
     else scheduleFieldCheck(field)
   }
 
@@ -1090,17 +1139,38 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       dismissPopover()
       return
     }
-    // 原生 compositionend 被站点吞掉且未重发时的兜底：浏览器给出的可信 keydown 已不处于合成，
-    // 且不是输入法开始合成时的 Process 键，就结束同一输入框的合成状态并重新取样。
-    if (event.isComposing || composingField === undefined) return
+    if (event.isComposing) return
     if (event.key === 'Process' || event.keyCode === 229) return
     if (isEventInsidePopover(event)) return
+    if (composingField !== undefined) {
+      // 原生 compositionend 被站点吞掉且未重发时的兜底：浏览器给出的可信 keydown 已不处于合成，
+      // 且不是输入法开始合成时的 Process 键，就结束同一输入框的合成状态并重新取样。
+      const field = resolveEditableField(eventTarget(event))
+      if (field === undefined || field !== composingField) return
+      composingField = undefined
+      lastEditAt = Date.now()
+      if (isManagedPlainEditor(field)) deferManagedFieldCheck(field, 28)
+      else scheduleFieldCheck(field)
+      return
+    }
+    if (
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      (event.key === 'Backspace' || event.key === 'Delete' || event.key === 'Enter')
+    ) {
+      const field = resolveEditableField(eventTarget(event))
+      if (field !== undefined && isManagedPlainEditor(field)) {
+        scheduleSilentMutationCheck(field, readFieldValue(field))
+      }
+    }
+  }
+
+  function onClipboardOrDrop(event: Event): void {
+    if (disposed || !event.isTrusted || isEventInsidePopover(event)) return
     const field = resolveEditableField(eventTarget(event))
-    if (field === undefined || field !== composingField) return
-    composingField = undefined
-    lastEditAt = Date.now()
-    if (isManagedPlainEditor(field)) deferManagedFieldCheck(field)
-    else scheduleFieldCheck(field)
+    if (field === undefined || field === ownInputWrite || composingField === field) return
+    scheduleSilentMutationCheck(field, readFieldValue(field))
   }
 
   function onInput(event: Event): void {
@@ -1172,11 +1242,28 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     updatePosition()
   }
 
-  popover.addEventListener('pointerdown', () => {
+  let pointerInsideTimer: ReturnType<typeof setTimeout> | undefined
+  function holdPointerInsidePopover(): void {
     pointerInsidePopover = true
-    queueMicrotask(() => {
+    if (pointerInsideTimer !== undefined) clearTimeout(pointerInsideTimer)
+    pointerInsideTimer = setTimeout(() => {
+      pointerInsideTimer = undefined
       pointerInsidePopover = false
-    })
+    }, 0)
+  }
+
+  popover.addEventListener('pointerdown', (event) => {
+    holdPointerInsidePopover()
+    if (!(event.target instanceof Element && event.target.closest('button') !== null)) {
+      event.preventDefault()
+    }
+  })
+
+  popover.addEventListener('mousedown', (event) => {
+    holdPointerInsidePopover()
+    if (!(event.target instanceof Element && event.target.closest('button') !== null)) {
+      event.preventDefault()
+    }
   })
 
   function removeManagedToken(field: HTMLElement, token: string, attribute: 'data-wt-discord-input' | 'data-wt-chat-input'): void {
@@ -1487,6 +1574,9 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   document.addEventListener('compositionend', onCompositionEnd, true)
   document.addEventListener('input', onInput, true)
   document.addEventListener('keydown', onKeyDown, true)
+  document.addEventListener('paste', onClipboardOrDrop, true)
+  document.addEventListener('cut', onClipboardOrDrop, true)
+  document.addEventListener('drop', onClipboardOrDrop, true)
   document.addEventListener('focusin', onFocusIn, true)
   document.addEventListener('focusout', onFocusOut, true)
   document.addEventListener('visibilitychange', onVisibilityChange)
@@ -1504,12 +1594,19 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       document.removeEventListener('compositionend', onCompositionEnd, true)
       document.removeEventListener('input', onInput, true)
       document.removeEventListener('keydown', onKeyDown, true)
+      document.removeEventListener('paste', onClipboardOrDrop, true)
+      document.removeEventListener('cut', onClipboardOrDrop, true)
+      document.removeEventListener('drop', onClipboardOrDrop, true)
       document.removeEventListener('focusin', onFocusIn, true)
       document.removeEventListener('focusout', onFocusOut, true)
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('scroll', onViewportChange, true)
       window.removeEventListener('resize', onViewportChange)
       window.removeEventListener('blur', onWindowBlur)
+      if (pointerInsideTimer !== undefined) {
+        clearTimeout(pointerInsideTimer)
+        pointerInsideTimer = undefined
+      }
       composingField = undefined
       suppressedSnapshot = undefined
       activeField = undefined
