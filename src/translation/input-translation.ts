@@ -1022,6 +1022,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       }, 0)
       return
     }
+    if (field !== undefined && suppressedSnapshot?.field === field && suppressedSnapshot.value !== readFieldValue(field)) suppressedSnapshot = undefined
     if (field === undefined || !isManagedPlainEditor(field)) return
     clearBeforeInput()
     releasePendingManagedToken()

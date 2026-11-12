@@ -252,3 +252,40 @@ it('does not refocus or restore a managed draft after it blurs during the bridge
     expect(textNode.textContent).toBe('Translated draft')
   } finally { happy.setURL('about:blank') }
 })
+
+it('还原后受管编辑器在同一轮事件中编辑并改回原稿仍重新翻译', async () => {
+  const happy = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM
+  happy.setURL('https://discord.com/channels/@me/fixture')
+  try {
+    const field = document.createElement('div')
+    field.contentEditable = 'true'
+    field.setAttribute('data-slate-editor', 'true')
+    field.setAttribute('role', 'textbox')
+    field.innerHTML = '<div data-slate-node="element"><span data-slate-string="true">原始中文草稿</span></div>'
+    document.body.append(field)
+    field.focus()
+    field.addEventListener('beforeinput', event => event.preventDefault())
+    const textNode = field.querySelector('[data-slate-string]')!
+    const translate = vi.fn(async () => ({ ok: true as const, texts: ['Translated draft'] }))
+    watchers.push(createInputTranslation({
+      translate, cancel: vi.fn(), t: key => key, autoReplaceDelayMs: () => 700,
+      replaceDiscordInput: async request => { textNode.textContent = request.text; return 'ok' },
+    }))
+    trusted(field, new InputEvent('input', { bubbles: true, composed: true }))
+    await vi.advanceTimersByTimeAsync(700)
+    expect(textNode.textContent).toBe('Translated draft')
+    click('restore')
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(textNode.textContent).toBe('原始中文草稿')
+    expect(translate).toHaveBeenCalledTimes(1)
+    trusted(field, new InputEvent('beforeinput', { bubbles: true, composed: true, cancelable: true, inputType: 'insertText', data: '！' }))
+    textNode.textContent = '原始中文草稿！'
+    trusted(field, new InputEvent('beforeinput', { bubbles: true, composed: true, cancelable: true, inputType: 'deleteContentBackward' }))
+    textNode.textContent = '原始中文草稿'
+    await vi.advanceTimersByTimeAsync(699)
+    expect(translate).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(translate).toHaveBeenCalledTimes(2)
+    expect(textNode.textContent).toBe('Translated draft')
+  } finally { happy.setURL('about:blank') }
+})
