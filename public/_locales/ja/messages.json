@@ -13,8 +13,5 @@
   },
   "cmdTranslateSelection": {
     "message": "選択したテキストを翻訳"
-  },
-  "cmdTranslateInput": {
-    "message": "入力を翻訳して置き換え"
   }
 }

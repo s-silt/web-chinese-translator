@@ -2056,10 +2056,10 @@ describe('快捷键选区读取与空选区提示', () => {
   )
 })
 
-describe('字幕与输入翻译生命周期联动', () => {
-  it('根据 modes.subtitles 与 modes.input 安装并在恢复原文、继续与设置变更时联动', async () => {
+describe('输入翻译生命周期联动', () => {
+  beforeEach(() => { vi.spyOn(document, 'hasFocus').mockReturnValue(true) })
+  it('根据 modes.input 安装并在恢复原文、继续与设置变更时联动', async () => {
     const { sendTranslationMessage } = await import('../../../src/translation/client')
-    let subtitlesAllowed = true
     let inputAllowed = true
     vi.mocked(sendTranslationMessage).mockImplementation((async (message: {
       type: string
@@ -2075,7 +2075,6 @@ describe('字幕与输入翻译生命周期联动', () => {
             auto: false,
             selection: false,
             smart: false,
-            subtitles: subtitlesAllowed,
             input: inputAllowed,
           },
         }
@@ -2091,7 +2090,6 @@ describe('字幕与输入翻译生命周期联动', () => {
 
     await translationConfigItem.setValue({
       ...CONFIG,
-      videoSubtitlesEnabled: true,
       inputTranslationEnabled: true,
       autoInteractionEnabled: true,
     })
@@ -2103,9 +2101,10 @@ describe('字幕与输入翻译生命周期联动', () => {
     await startPageTranslation()
     await settle(100)
 
+    input.focus()
     input.value = '你好世界'
     input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
-    await settle(650)
+    await settle(1100)
 
     expect(vi.mocked(sendTranslationMessage).mock.calls.map(([m]) => m)).toContainEqual(
       expect.objectContaining({ type: 'wt:translate', mode: 'input', texts: ['你好世界'] }),
@@ -2117,23 +2116,21 @@ describe('字幕与输入翻译生命周期联动', () => {
 
     input.value = '再试一次'
     input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
-    await settle(650)
+    await settle(1100)
     expect(vi.mocked(sendTranslationMessage)).not.toHaveBeenCalled()
 
     await triggerMessage({ type: 'wt:page-action', action: 'resume' })
     await settle(50)
     input.value = '恢复后输入'
     input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
-    await settle(650)
+    await settle(1100)
     expect(vi.mocked(sendTranslationMessage).mock.calls.map(([m]) => m)).toContainEqual(
       expect.objectContaining({ type: 'wt:translate', mode: 'input', texts: ['恢复后输入'] }),
     )
 
-    subtitlesAllowed = false
     inputAllowed = false
     await translationConfigItem.setValue({
       ...CONFIG,
-      videoSubtitlesEnabled: false,
       inputTranslationEnabled: false,
     })
     await settle(100)
@@ -2141,7 +2138,7 @@ describe('字幕与输入翻译生命周期联动', () => {
 
     input.value = '关闭后输入'
     input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
-    await settle(650)
+    await settle(1100)
     expect(
       vi.mocked(sendTranslationMessage).mock.calls.some(([m]) => m.type === 'wt:translate'),
     ).toBe(false)
@@ -2190,7 +2187,6 @@ describe('字幕与输入翻译生命周期联动', () => {
             selection: true,
             smart: true,
             floating: true,
-            subtitles: true,
             input: true,
             fixedEntries: DEVIN_ENTRIES,
           },
@@ -2207,7 +2203,6 @@ describe('字幕与输入翻译生命周期联动', () => {
       ...CONFIG,
       inputTranslationEnabled: true,
       inputTargetLanguage: 'es',
-      videoSubtitlesEnabled: true,
       floatingButtonEnabled: true,
     })
 
@@ -2277,8 +2272,8 @@ describe('字幕与输入翻译生命周期联动', () => {
       chat.value = '请检查这段代码'
       chat.focus()
       vi.spyOn(document, 'hasFocus').mockReturnValue(true)
-      expect(await triggerMessage({ type: 'wt:translate-input' })).toEqual({ ok: true })
-      await settle(50)
+      chat.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+      await settle(1100)
       expect(chat.value).toBe('ES:请检查这段代码')
 
       // 父页面变为敏感页时实时阻断输入翻译
@@ -2287,10 +2282,9 @@ describe('字幕与输入翻译生命周期联动', () => {
         value: { location: { href: 'https://www.youtube.com/account' } },
       })
       chat.value = '敏感父页草稿'
-      expect(await triggerMessage({ type: 'wt:translate-input' })).toEqual({
-        ok: false,
-        error: zhCN.wtInputUnavailable,
-      })
+      chat.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+      await settle(1100)
+      expect(chat.value).toBe('敏感父页草稿')
 
       // 恢复父页面后测试 wt:stop-input-frame 与 wt:refresh-input-frame
       Object.defineProperty(window, 'top', {
@@ -2368,7 +2362,7 @@ describe('字幕与输入翻译生命周期联动', () => {
 
       input.value = '失效后输入中文'
       input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
-      await settle(650)
+      await settle(1100)
 
       expect(
         vi.mocked(sendTranslationMessage).mock.calls.some(([m]) => m.type === 'wt:translate'),
@@ -2404,9 +2398,10 @@ describe('字幕与输入翻译生命周期联动', () => {
       await startPageTranslation()
       await settle(100)
 
+      input.focus()
       input.value = '你好世界'
       input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
-      await settle(650)
+      await settle(1100)
 
       expect((globalThis as Record<symbol, unknown>)[SINGLETON_KEY]).toBeUndefined()
       expect(allRootShadowTexts()).not.toContain(BACKGROUND_LOST_ERROR)
@@ -2414,7 +2409,7 @@ describe('字幕与输入翻译生命周期联动', () => {
       vi.mocked(sendTranslationMessage).mockClear()
       input.value = '继续输入中文'
       input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
-      await settle(650)
+      await settle(1100)
       expect(
         vi.mocked(sendTranslationMessage).mock.calls.some(([m]) => m.type === 'wt:translate'),
       ).toBe(false)
@@ -2448,15 +2443,16 @@ describe('字幕与输入翻译生命周期联动', () => {
       await startPageTranslation()
       await settle(100)
 
+      input.focus()
       input.value = '你好世界'
       input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
-      await settle(650)
+      await settle(1100)
 
       expect((globalThis as Record<symbol, unknown>)[SINGLETON_KEY]).toBeDefined()
       expect(allRootShadowTexts()).toContain(BACKGROUND_LOST_ERROR)
     })
 
-    it('输入翻译目标为 zh-CN 时翻译英文草稿，且修改 inputReplaceKey 即时生效无需刷新页面', async () => {
+    it('输入翻译目标为 zh-CN 时翻译英文草稿，且修改自动替换等待时间即时生效无需刷新页面', async () => {
       const { sendTranslationMessage } = await import('../../../src/translation/client')
       vi.mocked(sendTranslationMessage).mockImplementation((async (message: { type: string; texts?: string[] }) => {
         if (message.type === 'wt:page-modes') {
@@ -2477,7 +2473,7 @@ describe('字幕与输入翻译生命周期联动', () => {
         inputTranslationEnabled: true,
         inputSourceLanguage: 'en',
         inputTargetLanguage: 'zh-CN',
-        inputReplaceKey: 'Ctrl+Enter',
+        inputAutoReplaceDelayMs: 1500,
         autoInteractionEnabled: true,
       })
 
@@ -2491,7 +2487,7 @@ describe('字幕与输入翻译生命周期联动', () => {
       input.focus()
       input.value = 'Hello from English draft'
       input.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
-      await settle(650)
+      await settle(1100)
 
       // Tab 不触发替换
       const tabEvent = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, composed: true, cancelable: true })
@@ -2510,7 +2506,9 @@ describe('字幕与输入翻译生命周期联动', () => {
       })
       Object.defineProperty(ctrlEnter, 'isTrusted', { value: true, configurable: true })
       input.dispatchEvent(ctrlEnter)
-      expect(ctrlEnter.defaultPrevented).toBe(true)
+      expect(ctrlEnter.defaultPrevented).toBe(false)
+      expect(input.value).toBe('Hello from English draft')
+      await settle(400)
       expect(input.value).toBe('ZH:Hello from English draft')
 
       // 切换为 auto 模式（1000ms），无需刷新页面即可在停止输入后自动替换
@@ -2537,7 +2535,7 @@ describe('字幕与输入翻译生命周期联动', () => {
   })
 })
 
-describe('wt:translate-input 文档编辑器回退', () => {
+describe('自动文档编辑器翻译接线', () => {
   function mountCmEditor(): { root: HTMLElement; editable: HTMLElement } {
     const root = document.createElement('div')
     root.className = 'cm-editor'
@@ -2552,7 +2550,7 @@ describe('wt:translate-input 文档编辑器回退', () => {
     return { root, editable }
   }
 
-  it('普通输入不可用时经 wt:document-input 读模型并预览译文', async () => {
+  it('文档输入经 wt:document-input 读模型并直接安全写回', async () => {
     const { sendTranslationMessage } = await import('../../../src/translation/client')
     vi.mocked(sendTranslationMessage).mockImplementation((async (message: { type: string; action?: string }) => {
       if (message.type === 'wt:page-modes') {
@@ -2572,17 +2570,17 @@ describe('wt:translate-input 文档编辑器回退', () => {
     await translationConfigItem.setValue({ ...CONFIG, inputTranslationEnabled: true })
     await startPageTranslation()
     await settle(50)
-    mountCmEditor()
-    expect(await triggerMessage({ type: 'wt:translate-input' })).toEqual({ ok: true })
-    await settle(50)
+    const { editable } = mountCmEditor()
+    editable.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+    await settle(1100)
     const calls = vi.mocked(sendTranslationMessage).mock.calls.map(
       ([m]) => m as { type: string; mode?: string; manualInput?: boolean; action?: string },
     )
     expect(calls.some((m) => m.type === 'wt:document-input' && m.action === 'read')).toBe(true)
-    expect(calls.some((m) => m.type === 'wt:translate' && m.mode === 'input' && m.manualInput === true)).toBe(true)
+    expect(calls.some((m) => m.type === 'wt:translate' && m.mode === 'input' && m.manualInput !== true)).toBe(true)
   })
 
-  it('桥接返回 unsupported 时回包 ok:false 供调用方打开文本窗', async () => {
+  it('桥接返回 unsupported 时不请求模型或尝试写入', async () => {
     const { sendTranslationMessage } = await import('../../../src/translation/client')
     vi.mocked(sendTranslationMessage).mockImplementation((async (message: { type: string }) => {
       if (message.type === 'wt:page-modes') {
@@ -2599,7 +2597,11 @@ describe('wt:translate-input 文档编辑器回退', () => {
     await translationConfigItem.setValue({ ...CONFIG, inputTranslationEnabled: true })
     await startPageTranslation()
     await settle(50)
-    mountCmEditor()
-    expect(await triggerMessage({ type: 'wt:translate-input' })).toMatchObject({ ok: false })
+    const { editable } = mountCmEditor()
+    editable.dispatchEvent(Object.assign(new InputEvent('input', { bubbles: true }), { isTrusted: true }))
+    await settle(1100)
+    const calls = vi.mocked(sendTranslationMessage).mock.calls.map(([message]) => message)
+    expect(calls.some(m => m.type === 'wt:document-input')).toBe(true)
+    expect(calls.some(m => m.type === 'wt:translate')).toBe(false)
   })
 })

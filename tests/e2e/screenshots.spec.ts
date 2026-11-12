@@ -138,7 +138,7 @@ test.describe('界面截图', () => {
     }
   })
 
-  test('设置页：常用设置（输入翻译替换方式与快捷键）', async ({ page, extension, extensionId }) => {
+  test('设置页：常用设置（输入翻译自动替换等待时间与全局快捷键）', async ({ page, extension, extensionId }) => {
     test.setTimeout(120_000)
     for (const style of ['classic', 'cyber', 'glass'] as const) {
       for (const theme of style === 'cyber' ? (['dark'] as const) : (['light', 'dark'] as const)) {
@@ -147,9 +147,7 @@ test.describe('界面截图', () => {
           baseUrl: 'https://api.deepseek.com',
           model: 'deepseek-chat',
           inputTranslationEnabled: true,
-          inputReplaceMode: 'auto',
           inputAutoReplaceDelayMs: 1500,
-          inputReplaceKey: 'Ctrl+Enter',
         })
         for (const width of [1280, 420]) {
           await page.setViewportSize({ width, height: 900 })

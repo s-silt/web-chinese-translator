@@ -15,7 +15,6 @@ import { isSiteScopeMode, type SiteScopeMode } from './site-scope'
 import {
   INPUT_AUTO_REPLACE_DELAY_DEFAULT,
   isInputAutoReplaceDelay,
-  isInputReplaceMode,
   type InputReplaceMode,
 } from './input-replace-mode'
 
@@ -50,7 +49,6 @@ export interface TranslationConfig {
   readonly proactiveAssistEnabled: boolean
   readonly floatingButtonEnabled: boolean
   readonly autoInteractionEnabled: boolean
-  readonly videoSubtitlesEnabled: boolean
   readonly inputTranslationEnabled: boolean
   /** 模型翻译单页字符上限；0 为不限 */
   readonly pageCharLimit: number
@@ -80,7 +78,7 @@ export const DEFAULT_TRANSLATION_CONFIG: TranslationConfig = {
   inputTargetLanguage: 'en',
   inputSourceLanguage: 'auto',
   inputReplaceKey: DEFAULT_INPUT_REPLACE_KEY,
-  inputReplaceMode: 'hotkey',
+  inputReplaceMode: 'auto',
   inputAutoReplaceDelayMs: INPUT_AUTO_REPLACE_DELAY_DEFAULT,
   sourceLanguage: 'auto',
   selectionPopupEnabled: false,
@@ -88,7 +86,6 @@ export const DEFAULT_TRANSLATION_CONFIG: TranslationConfig = {
   proactiveAssistEnabled: false,
   floatingButtonEnabled: true,
   autoInteractionEnabled: true,
-  videoSubtitlesEnabled: false,
   inputTranslationEnabled: false,
   pageCharLimit: DEFAULT_PAGE_CHAR_LIMIT,
   excludedHosts: [],
@@ -264,7 +261,7 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
       typeof value.inputReplaceKey === 'string'
         ? normalizeHotkey(value.inputReplaceKey) ?? DEFAULT_INPUT_REPLACE_KEY
         : DEFAULT_INPUT_REPLACE_KEY,
-    inputReplaceMode: isInputReplaceMode(value.inputReplaceMode) ? value.inputReplaceMode : 'hotkey',
+    inputReplaceMode: 'auto',
     inputAutoReplaceDelayMs: isInputAutoReplaceDelay(value.inputAutoReplaceDelayMs)
       ? value.inputAutoReplaceDelayMs
       : INPUT_AUTO_REPLACE_DELAY_DEFAULT,
@@ -274,8 +271,7 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
     proactiveAssistEnabled: selectionOn && !toolbarOn && value.proactiveAssistEnabled === true,
     floatingButtonEnabled: value.floatingButtonEnabled !== false,
     autoInteractionEnabled: value.autoInteractionEnabled !== false,
-    videoSubtitlesEnabled: value.videoSubtitlesEnabled === true,
-    inputTranslationEnabled: value.inputTranslationEnabled === true,
+    inputTranslationEnabled: value.inputTranslationEnabled === true && value.inputReplaceMode === 'auto',
     pageCharLimit: isPageCharLimit(value.pageCharLimit) ? value.pageCharLimit : DEFAULT_PAGE_CHAR_LIMIT,
     excludedHosts: sanitizeExcludedHosts(value.excludedHosts),
     siteScopeMode: isSiteScopeMode(value.siteScopeMode) ? value.siteScopeMode : 'all',

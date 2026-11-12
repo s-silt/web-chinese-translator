@@ -1,8 +1,8 @@
 /** 输入翻译替换方式与自动替换等待时间；不依赖其他模块，供内容脚本直接引用 */
-export type InputReplaceMode = 'hotkey' | 'auto'
+export type InputReplaceMode = 'auto'
 
 export function isInputReplaceMode(value: unknown): value is InputReplaceMode {
-  return value === 'hotkey' || value === 'auto'
+  return value === 'auto'
 }
 
 export const INPUT_AUTO_REPLACE_DELAY_MIN = 500

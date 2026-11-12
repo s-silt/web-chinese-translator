@@ -17,7 +17,7 @@ import {
   replaceDiscordDraftInMainWorld,
   type DiscordReplacementStatus,
 } from '../../../src/translation/discord-input'
-import { createInputTranslation } from '../../../src/translation/input-translation'
+import { createInputTranslation as createInputTranslationController } from '../../../src/translation/input-translation'
 import * as clipboard from '../../../src/translation/clipboard'
 import { isNativeVideoChatEditor, planNativeVideoChatDraft } from '../../../src/translation/video-chat-input'
 import { getCapturedShadowRoot, installShadowRootCapture } from '../shared/shadow-roots'
@@ -25,6 +25,14 @@ import { getCapturedShadowRoot, installShadowRootCapture } from '../shared/shado
 vi.mock('../../../src/translation/clipboard', () => ({
   copySelectionText: vi.fn(async () => true),
 }))
+
+const activeInputWatchers: Array<ReturnType<typeof createInputTranslationController>> = []
+
+function createInputTranslation(...args: Parameters<typeof createInputTranslationController>): ReturnType<typeof createInputTranslationController> {
+  const watcher = createInputTranslationController(...args)
+  activeInputWatchers.push(watcher)
+  return watcher
+}
 
 let restoreShadowCapture: (() => void) | undefined
 
@@ -38,6 +46,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  while (activeInputWatchers.length > 0) activeInputWatchers.pop()?.dispose()
   restoreShadowCapture?.()
   restoreShadowCapture = undefined
   vi.restoreAllMocks()
@@ -45,6 +54,7 @@ afterEach(() => {
 })
 
 function trustedBeforeInput(field: Element, isComposing = false): void {
+  if (field instanceof HTMLElement) focusEditable(field)
   const event = new InputEvent('beforeinput', {
     bubbles: true,
     composed: true,
@@ -58,6 +68,7 @@ function trustedBeforeInput(field: Element, isComposing = false): void {
 }
 
 function trustedInput(target: Element, value?: string, isComposing = false): void {
+  if (target instanceof HTMLElement) focusEditable(target)
   if (value !== undefined) {
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
       target.value = value
@@ -71,6 +82,7 @@ function trustedInput(target: Element, value?: string, isComposing = false): voi
 }
 
 function trustedComposition(target: Element, type: 'compositionstart' | 'compositionend'): void {
+  if (target instanceof HTMLElement) focusEditable(target)
   const event = new CompositionEvent(type, { bubbles: true, composed: true })
   Object.defineProperty(event, 'isTrusted', { value: true, configurable: true })
   target.dispatchEvent(event)
@@ -98,7 +110,7 @@ function isPopoverOpen(): boolean {
 }
 
 describe('输入翻译触发、防抖、IME 与过滤规则', () => {
-  it('初始草稿与仅聚焦不触发，非可信合成事件不触发，英文忽略，IME 结束后防抖 600ms 只发最新值', async () => {
+  it('初始草稿与仅聚焦不触发，非可信合成事件不触发，英文忽略，IME 结束后按默认 1000ms 空闲间隔只发最新值', async () => {
     const input = document.createElement('input')
     input.type = 'text'
     input.value = '页面初始就有的草稿'
@@ -137,15 +149,16 @@ describe('输入翻译触发、防抖、IME 与过滤规则', () => {
     trustedComposition(input, 'compositionend')
     await vi.advanceTimersByTimeAsync(300)
     trustedInput(input, '最终确认的中文草稿')
-    await vi.advanceTimersByTimeAsync(590)
+    await vi.advanceTimersByTimeAsync(990)
     expect(translate).not.toHaveBeenCalled()
 
     await vi.advanceTimersByTimeAsync(20)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
     expect(translate.mock.calls[0]?.[0]).toEqual(['最终确认的中文草稿'])
+    expect(input.value).toBe('EN:最终确认的中文草稿')
     expect(isPopoverOpen()).toBe(true)
-    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('EN:最终确认的中文草稿')
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputRestoreHint)
 
     watcher.dispose()
   })
@@ -183,7 +196,7 @@ describe('输入翻译触发、防抖、IME 与过滤规则', () => {
     watcher.dispose()
   })
 
-  it('网页搜索框（type=search）同样出预览，网址、邮箱、数字等输入框不处理', async () => {
+  it('网页搜索框（type=search）同样直接替换，网址、邮箱、数字等输入框不处理', async () => {
     document.body.innerHTML = `
       <input id="search" type="search" />
       <input id="url" type="url" />
@@ -206,8 +219,8 @@ describe('输入翻译触发、防抖、IME 与过滤规则', () => {
   })
 })
 
-describe('预览替换、还原、复制与安全并发保护', () => {
-  it('textarea 与普通 contenteditable 确认替换、触发 beforeinput/input 且绝不触发提交，支持还原并在被编辑后拒绝还原', async () => {
+describe('直接替换、还原、失败复制与安全并发保护', () => {
+  it('textarea 与普通 contenteditable 自动替换、触发 beforeinput/input 且绝不触发提交，支持还原并在被编辑后拒绝还原', async () => {
     const textarea = document.createElement('textarea')
     const editable = document.createElement('div')
     editable.setAttribute('contenteditable', 'true')
@@ -230,15 +243,12 @@ describe('预览替换、还原、复制与安全并发保护', () => {
     textarea.addEventListener('submit', () => observedEvents.push('submit'))
 
     trustedInput(textarea, '你好，请帮我检查这段代码')
-    await vi.advanceTimersByTimeAsync(650)
+    observedEvents.length = 0
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
 
     const shadow = popoverShadow()!
-    const replaceBtn = shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!
-    expect(replaceBtn).not.toBeNull()
-    observedEvents.length = 0
-    trustedClick(replaceBtn)
-
+    expect(shadow.querySelector('button[data-action="replace"]')).toBeNull()
     expect(textarea.value).toBe('Hello: 你好，请帮我检查这段代码')
     expect(document.activeElement).toBe(textarea)
     expect(observedEvents).toEqual(['beforeinput', 'input'])
@@ -248,9 +258,13 @@ describe('预览替换、还原、复制与安全并发保护', () => {
     trustedClick(restoreBtn)
     expect(textarea.value).toBe('你好，请帮我检查这段代码')
     expect(document.activeElement).toBe(textarea)
+    const statusRightAfterRestore = shadow.querySelector('[role="status"]')?.textContent
+    const actionsRightAfterRestore = shadow.querySelector('.actions')?.children.length
 
-    const replaceAgain = shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!
-    trustedClick(replaceAgain)
+    textarea.focus()
+    expect(watcher.translateAndReplace()).toBe(true)
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
     expect(textarea.value).toBe('Hello: 你好，请帮我检查这段代码')
 
     textarea.value = 'Hello: 你好，用户又手动改了字'
@@ -260,13 +274,14 @@ describe('预览替换、还原、复制与安全并发保护', () => {
     expect(shadow.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputTextChanged)
 
     trustedInput(editable, '纯文本可编辑区域')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    trustedClick(shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!)
     expect(editable.textContent).toBe('Hello: 纯文本可编辑区域')
     expect(document.activeElement).toBe(editable)
 
     watcher.dispose()
+    expect(statusRightAfterRestore).toBe('')
+    expect(actionsRightAfterRestore).toBe(0)
   })
 
   it('普通 contenteditable 多行结构（div/br 与空行）保留逻辑换行，替换与还原保持 BR 节点与文本值且不丢失首尾空白', async () => {
@@ -286,14 +301,13 @@ describe('预览替换、还原、复制与安全并发保护', () => {
 
     editable.innerHTML = '<div>你好</div><div><br></div><div>世界</div>'
     trustedInput(editable)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
 
     expect(translate).toHaveBeenCalledTimes(1)
     expect(translate.mock.calls[0]?.[0]).toEqual(['你好\n\n世界'])
 
     const shadow = popoverShadow()!
-    trustedClick(shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!)
     expect(editable.querySelectorAll('br')).toHaveLength(2)
     expect(editable.innerHTML).toBe('Hello<br><br>World')
     expect(document.activeElement).toBe(editable)
@@ -304,12 +318,11 @@ describe('预览替换、还原、复制与安全并发保护', () => {
 
     editable.innerHTML = '  你好<br>世界  '
     trustedInput(editable)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(2)
     expect(translate.mock.calls[1]?.[0]).toEqual(['  你好\n世界  '])
 
-    trustedClick(shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!)
     expect(editable.innerHTML).toBe('  Line 1<br>Line 2  ')
 
     trustedClick(shadow.querySelector<HTMLButtonElement>('button[data-action="restore"]')!)
@@ -325,7 +338,7 @@ describe('预览替换、还原、复制与安全并发保护', () => {
 
     let pendingResolve: ((value: { ok: true; texts: string[] }) => void) | undefined
     const translate = vi.fn((texts: string[]) => {
-      if (texts[0] === '在途变敏感' || texts[0] === '在途切换字段') {
+      if (texts[0] === '在途变敏感' || texts[0] === '在途切换字段' || texts[0] === '回复后变密码' || texts[0] === '动态切换富文本类名') {
         return new Promise<{ ok: true; texts: string[] }>((resolve) => {
           pendingResolve = resolve
         })
@@ -341,13 +354,13 @@ describe('预览替换、还原、复制与安全并发保护', () => {
     trustedInput(input, '防抖中变成密码')
     await vi.advanceTimersByTimeAsync(200)
     input.type = 'password'
-    await vi.advanceTimersByTimeAsync(500)
+    await vi.advanceTimersByTimeAsync(900)
     expect(translate).not.toHaveBeenCalled()
     expect(isPopoverOpen()).toBe(false)
 
     input.type = 'text'
     trustedInput(input, '在途变敏感')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).toHaveBeenCalledTimes(1)
     input.setAttribute('aria-label', '请输入安全密码')
     pendingResolve?.({ ok: true, texts: ['Should not show'] })
@@ -356,18 +369,15 @@ describe('预览替换、还原、复制与安全并发保护', () => {
     input.removeAttribute('aria-label')
 
     trustedInput(input, '回复后变密码')
-    await vi.advanceTimersByTimeAsync(650)
-    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(1000)
     expect(isPopoverOpen()).toBe(true)
     input.type = 'password'
-    const shadow = popoverShadow()!
-    trustedClick(shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!)
+    pendingResolve?.({ ok: true, texts: ['Should not write'] })
+    await Promise.resolve()
     expect(input.value).toBe('回复后变密码')
 
     input.type = 'text'
     trustedInput(input, '拦截器变密码')
-    await vi.advanceTimersByTimeAsync(650)
-    await Promise.resolve()
     input.addEventListener(
       'beforeinput',
       () => {
@@ -375,14 +385,14 @@ describe('预览替换、还原、复制与安全并发保护', () => {
       },
       { once: true },
     )
-    trustedClick(shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!)
+    await vi.advanceTimersByTimeAsync(1000)
+    await Promise.resolve()
+    const shadow = popoverShadow()!
     expect(input.value).toBe('拦截器变密码')
     expect(shadow.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplaceFailed)
 
     input.type = 'text'
     trustedInput(input, '拦截器移除节点')
-    await vi.advanceTimersByTimeAsync(650)
-    await Promise.resolve()
     input.addEventListener(
       'beforeinput',
       () => {
@@ -390,7 +400,8 @@ describe('预览替换、还原、复制与安全并发保护', () => {
       },
       { once: true },
     )
-    trustedClick(shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!)
+    await vi.advanceTimersByTimeAsync(1000)
+    await Promise.resolve()
     expect(input.value).toBe('拦截器移除节点')
     document.body.append(input)
 
@@ -398,17 +409,17 @@ describe('预览替换、还原、复制与安全并发保护', () => {
     editable.setAttribute('contenteditable', 'true')
     document.body.append(editable)
     trustedInput(editable, '动态切换富文本类名')
-    await vi.advanceTimersByTimeAsync(650)
-    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(1000)
     editable.classList.add('ProseMirror')
-    trustedClick(shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!)
+    pendingResolve?.({ ok: true, texts: ['Should not write'] })
+    await Promise.resolve()
     expect(editable.textContent).toBe('动态切换富文本类名')
 
     const otherInput = document.createElement('input')
     otherInput.type = 'text'
     document.body.append(otherInput)
     trustedInput(input, '在途切换字段')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     otherInput.focus()
     otherInput.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
     watcher.dispose()
@@ -422,9 +433,9 @@ describe('预览替换、还原、复制与安全并发保护', () => {
     input.type = 'text'
     document.body.append(input)
 
-    const translate = vi.fn(async () => ({
-      ok: true as const,
-      texts: ['English result'],
+    let resolveTranslate: ((value: { ok: true; texts: string[] }) => void) | undefined
+    const translate = vi.fn(() => new Promise<{ ok: true; texts: string[] }>((resolve) => {
+      resolveTranslate = resolve
     }))
     const watcher = createInputTranslation({
       translate,
@@ -433,20 +444,19 @@ describe('预览替换、还原、复制与安全并发保护', () => {
     })
 
     trustedInput(input, '原始中文一')
-    await vi.advanceTimersByTimeAsync(650)
-    await Promise.resolve()
-
+    await vi.advanceTimersByTimeAsync(1000)
     input.value = '悄然改变的中文'
-    const shadow = popoverShadow()!
-    trustedClick(shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!)
+    resolveTranslate?.({ ok: true, texts: ['English result'] })
+    await Promise.resolve()
     expect(input.value).toBe('悄然改变的中文')
-    expect(shadow.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputTextChanged)
+    expect(isPopoverOpen()).toBe(false)
 
     trustedInput(input, '测试阻止替换')
-    await vi.advanceTimersByTimeAsync(650)
-    await Promise.resolve()
     input.addEventListener('beforeinput', (e) => e.preventDefault(), { once: true })
-    trustedClick(shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!)
+    await vi.advanceTimersByTimeAsync(1000)
+    resolveTranslate?.({ ok: true, texts: ['English result'] })
+    await Promise.resolve()
+    const shadow = popoverShadow()!
     expect(input.value).toBe('测试阻止替换')
     expect(shadow.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplaceFailed)
 
@@ -468,12 +478,11 @@ describe('预览替换、还原、复制与安全并发保护', () => {
     })
     try {
       trustedInput(input, '你好世界')
-      await vi.advanceTimersByTimeAsync(650)
-      await Promise.resolve()
       const events: string[] = []
       input.addEventListener('beforeinput', () => events.push('beforeinput'))
       input.addEventListener('input', () => events.push('input'))
-      trustedClick(requirePopoverButton('replace'))
+      await vi.advanceTimersByTimeAsync(1000)
+      await Promise.resolve()
       expect(input.value).toBe('你好世界')
       expect(events).toEqual([])
       expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplaceFailed)
@@ -493,12 +502,11 @@ describe('预览替换、还原、复制与安全并发保护', () => {
     })
     try {
       trustedInput(area, '你好世界啊')
-      await vi.advanceTimersByTimeAsync(650)
-      await Promise.resolve()
       area.addEventListener('input', () => {
         area.value = area.value.slice(0, 12)
       })
-      trustedClick(requirePopoverButton('replace'))
+      await vi.advanceTimersByTimeAsync(1000)
+      await Promise.resolve()
       expect(area.value).toBe('Hello wonder')
       expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplacePartial)
       expect(popoverShadow()?.querySelector('button[data-action="restore"]')).toBeNull()
@@ -520,12 +528,11 @@ describe('预览替换、还原、复制与安全并发保护', () => {
     })
     try {
       trustedInput(area, '原始中文')
-      await vi.advanceTimersByTimeAsync(650)
-      await Promise.resolve()
       area.addEventListener('input', () => {
         area.value = '原始中文'
       })
-      trustedClick(requirePopoverButton('replace'))
+      await vi.advanceTimersByTimeAsync(1000)
+      await Promise.resolve()
       expect(area.value).toBe('原始中文')
       expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplaceFailed)
       expect(popoverShadow()?.querySelector('button[data-action="copy-original"]')).toBeNull()
@@ -590,7 +597,7 @@ describe('Discord 纯文本草稿', () => {
     setPageUrl('about:blank')
   })
 
-  it.each(['animation', 'timeout'] as const)('淡出期间重新聚焦同一草稿后，%s 收尾不移除还原入口', async (completion) => {
+  it.each(['animation', 'timeout'] as const)('切换目标后重新聚焦同一草稿，%s 收尾仍使旧还原记录失效', async (completion) => {
     setPageUrl('https://discord.com/channels/@me/1')
     const field = mountSlate(['原始草稿'])
     const outside = document.createElement('button')
@@ -623,13 +630,10 @@ describe('Discord 纯文本草稿', () => {
       field.focus()
       if (completion === 'animation') finishAnimation()
       await vi.advanceTimersByTimeAsync(200)
-      expect(isPopoverOpen()).toBe(true)
-      expect(popover.inert).toBe(false)
-      expect(popover.hasAttribute('aria-hidden')).toBe(false)
-      trustedClick(requirePopoverButton('restore'))
-      await vi.advanceTimersByTimeAsync(300)
-      expect(readDiscordDraft(field)).toBe('原始草稿')
-      expect(replaceDiscordInput).toHaveBeenCalledTimes(2)
+      expect(isPopoverOpen()).toBe(false)
+      expect(popover.querySelector('button[data-action="restore"]')).toBeNull()
+      expect(readDiscordDraft(field)).toBe('Translated draft')
+      expect(replaceDiscordInput).toHaveBeenCalledTimes(1)
     } finally {
       watcher.dispose()
     }
@@ -739,17 +743,17 @@ describe('Discord 纯文本草稿', () => {
     expect(readDiscordDraft(empty)).toBe('')
   })
 
-  it('Discord 网页纯文本草稿出英文预览，其他主机、ProseMirror、提及和 void 不请求', async () => {
+  it('Discord 网页纯文本草稿请求翻译并安全回落复制，其他主机、ProseMirror、提及和 void 不请求', async () => {
     setPageUrl('https://discord.com/channels/@me/1')
     const field = mountSlate(['水水水水水水'])
     const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
     const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
     expect(translate.mock.calls[0]?.[0]).toEqual(['水水水水水水'])
-    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('EN:水水水水水水')
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputEditorUnsupported)
 
     translate.mockClear()
     for (const url of ['https://evil-discord.com/channels/@me/1', 'https://chat.example/channels/1']) {
@@ -785,7 +789,7 @@ describe('Discord 纯文本草稿', () => {
     emptyPlaceholder.textContent = '输入消息'
     empty.querySelector('[data-slate-node="element"]')?.append(emptyPlaceholder)
     trustedInput(empty)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).not.toHaveBeenCalled()
 
     const withPlaceholder = mountSlate(['只要用户正文'])
@@ -795,7 +799,7 @@ describe('Discord 纯文本草稿', () => {
     inlinePlaceholder.textContent = '输入消息'
     withPlaceholder.querySelector('[data-slate-node="element"]')?.append(inlinePlaceholder)
     trustedInput(withPlaceholder)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
     expect(translate.mock.calls[0]?.[0]).toEqual(['只要用户正文'])
@@ -812,12 +816,11 @@ describe('Discord 纯文本草稿', () => {
     await vi.advanceTimersByTimeAsync(1000)
     expect(translate).not.toHaveBeenCalled()
     trustedComposition(field, 'compositionend')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
 
     const shadow = popoverShadow()!
-    trustedClick(shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!)
     await vi.advanceTimersByTimeAsync(0)
     expect(shadow.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputEditorUnsupported)
     expect(shadow.querySelector('button[data-action="copy"]')).not.toBeNull()
@@ -829,10 +832,10 @@ describe('Discord 纯文本草稿', () => {
     const second = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
     trustedComposition(again, 'compositionstart')
     trustedInput(again)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).not.toHaveBeenCalled()
     trustedComposition(again, 'compositionend')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
     expect(translate.mock.calls[0]?.[0]).toEqual(['另一段中文'])
@@ -866,11 +869,11 @@ describe('Discord 纯文本草稿', () => {
     expect(translate).not.toHaveBeenCalled()
 
     untrustedEnd()
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
     expect(translate.mock.calls[0]?.[0]).toEqual(['你好'])
-    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('EN:你好')
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputEditorUnsupported)
     watcher.dispose()
   })
 
@@ -912,7 +915,7 @@ describe('Discord 纯文本草稿', () => {
     // 重新聚焦 A 输入框后，不可信 compositionend 结束合成并在 650ms 后按实时草稿请求一次
     input.focus()
     untrustedEnd(input)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
     expect(translate.mock.calls[0]?.[0]).toEqual(['正在拼音'])
@@ -934,14 +937,14 @@ describe('Discord 纯文本草稿', () => {
     expect(translate).not.toHaveBeenCalled()
 
     editable.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, composed: true, data: '被忽略的事件数据' }))
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
     expect(translate.mock.calls[0]?.[0]).toEqual(['电报网页版实时草稿'])
     watcher.dispose()
   })
 
-  it('确认替换等待 DOM 落地后才显示还原，编辑、合成、超时和 dispose 会去掉标记且旧回复不改草稿', async () => {
+  it('自动替换等待 DOM 落地后才显示还原，编辑、合成、超时和 dispose 会去掉标记且旧回复不改草稿', async () => {
     setPageUrl('https://canary.discord.com/channels/9')
     const field = mountSlate(['水水水水水水'])
     const translate = vi.fn(async () => ({ ok: true as const, texts: ['Hello'] }))
@@ -956,15 +959,11 @@ describe('Discord 纯文本草稿', () => {
       replaceDiscordInput,
     })
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    const shadow = popoverShadow()!
-    trustedClick(shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!)
     await Promise.resolve()
     const token = field.getAttribute('data-wt-discord-input')
     expect(token).toMatch(/^[a-f0-9-]{36}$/i)
-    expect(replaceDiscordInput).toHaveBeenCalledTimes(1)
-    trustedClick(shadow.querySelector<HTMLButtonElement>('button[data-action="replace"]')!)
     expect(replaceDiscordInput).toHaveBeenCalledTimes(1)
     const stringNode = field.querySelector('[data-slate-string="true"]')
     if (!(stringNode instanceof HTMLElement)) throw new Error('missing string')
@@ -986,13 +985,13 @@ describe('Discord 纯文本草稿', () => {
       replaceDiscordInput: late,
     })
     trustedInput(restored)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    const staleReplaceButton = requirePopoverButton('replace')
+    expect(late).toHaveBeenCalledTimes(1)
     trustedComposition(restored, 'compositionstart')
     expect(isPopoverOpen()).toBe(false)
-    trustedClick(staleReplaceButton)
-    expect(late).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(400)
+    expect(late).toHaveBeenCalledTimes(1)
     expect(restored.getAttribute('data-wt-discord-input')).toBeNull()
     composing.dispose()
 
@@ -1005,9 +1004,8 @@ describe('Discord 纯文本草稿', () => {
       replaceDiscordInput: hanging,
     })
     trustedInput(stalled)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    trustedClick(requirePopoverButton('replace'))
     await Promise.resolve()
     expect(stalled.getAttribute('data-wt-discord-input')).not.toBeNull()
     stalledWatcher.dispose()
@@ -1021,9 +1019,8 @@ describe('Discord 纯文本草稿', () => {
       replaceDiscordInput: hanging,
     })
     trustedInput(timeoutField)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    trustedClick(requirePopoverButton('replace'))
     await vi.advanceTimersByTimeAsync(5000)
     await Promise.resolve()
     expect(timeoutField.getAttribute('data-wt-discord-input')).toBeNull()
@@ -1044,9 +1041,8 @@ describe('Discord 纯文本草稿', () => {
       replaceDiscordInput: async () => 'changed',
     })
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    trustedClick(requirePopoverButton('replace'))
     await vi.advanceTimersByTimeAsync(0)
     expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputTextChanged)
     expect(popoverShadow()?.querySelector('button[data-action="copy"]')).not.toBeNull()
@@ -1061,9 +1057,8 @@ describe('Discord 纯文本草稿', () => {
       replaceDiscordInput: async () => 'unsupported',
     })
     trustedInput(unsupportedField)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    trustedClick(requirePopoverButton('replace'))
     await vi.advanceTimersByTimeAsync(0)
     expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputEditorUnsupported)
     expect(popoverShadow()?.querySelector('button[data-action="copy"]')).not.toBeNull()
@@ -1082,9 +1077,8 @@ describe('Discord 纯文本草稿', () => {
       replaceDiscordInput,
     })
     trustedInput(live)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    trustedClick(requirePopoverButton('replace'))
     await vi.advanceTimersByTimeAsync(80)
     await Promise.resolve()
     expect(readDiscordDraft(live)).toBe('Hello')
@@ -1116,10 +1110,9 @@ describe('Discord 纯文本草稿', () => {
         },
       })
       trustedInput(field)
-      await vi.advanceTimersByTimeAsync(650)
+      await vi.advanceTimersByTimeAsync(1000)
       await Promise.resolve()
-      trustedClick(requirePopoverButton('replace'))
-      await vi.advanceTimersByTimeAsync(400)
+        await vi.advanceTimersByTimeAsync(400)
       await Promise.resolve()
       expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplacePartial)
       trustedClick(requirePopoverButton('copy-original'))
@@ -1136,9 +1129,8 @@ describe('Discord 纯文本草稿', () => {
       replaceDiscordInput: async () => 'failed',
     })
     trustedInput(untouched)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    trustedClick(requirePopoverButton('replace'))
     await vi.advanceTimersByTimeAsync(0)
     expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplaceFailed)
     expect(popoverShadow()?.querySelector('button[data-action="copy-original"]')).toBeNull()
@@ -1162,10 +1154,9 @@ describe('Discord 纯文本草稿', () => {
         },
       })
       trustedInput(field)
-      await vi.advanceTimersByTimeAsync(650)
+      await vi.advanceTimersByTimeAsync(1000)
       await Promise.resolve()
-      trustedClick(requirePopoverButton('replace'))
-      await vi.advanceTimersByTimeAsync(0)
+        await vi.advanceTimersByTimeAsync(0)
       expect(readDiscordDraft(field)).toBe('Hello')
       phase = 'restore'
       trustedClick(requirePopoverButton('restore'))
@@ -1200,7 +1191,7 @@ describe('Discord 纯文本草稿', () => {
     await vi.advanceTimersByTimeAsync(1000)
     expect(translate).not.toHaveBeenCalled()
     key({ key: 'ArrowRight' })
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
     expect(translate.mock.calls[0]?.[0]).toEqual(['你好'])
@@ -1294,7 +1285,7 @@ describe('Discord 纯文本草稿', () => {
     trustedBeforeInput(field)
     queueMicrotask(() => writeSlateText(field, '真正提交的中文'))
     await vi.advanceTimersByTimeAsync(0)
-    await vi.advanceTimersByTimeAsync(599)
+    await vi.advanceTimersByTimeAsync(999)
     expect(translate).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
     await Promise.resolve()
@@ -1304,7 +1295,7 @@ describe('Discord 纯文本草稿', () => {
     trustedBeforeInput(field)
     writeSlateText(field, '第二次提交的中文')
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(2)
     expect(translate.mock.calls[1]?.[0]).toEqual(['第二次提交的中文'])
@@ -1329,7 +1320,7 @@ describe('Discord 纯文本草稿', () => {
     trustedComposition(field, 'compositionend')
     queueMicrotask(() => writeSlateText(field, '最终确认中文'))
     await vi.advanceTimersByTimeAsync(0)
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
     expect(translate.mock.calls[0]?.[0]).toEqual(['最终确认中文'])
@@ -1344,14 +1335,14 @@ describe('Discord 纯文本草稿', () => {
     trustedComposition(composing, 'compositionend')
     queueMicrotask(() => writeSlateText(composing, '合成结束后的中文'))
     await vi.advanceTimersByTimeAsync(0)
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(2)
     expect(translate.mock.calls[1]?.[0]).toEqual(['合成结束后的中文'])
     second.dispose()
   })
 
-  it('新的 beforeinput 立刻取消在途请求，旧回复不能预览，新草稿单独请求', async () => {
+  it('新的 beforeinput 立刻取消在途请求，旧回复不能显示，新草稿单独请求', async () => {
     setPageUrl('https://discord.com/channels/@me/1')
     const field = mountSlate(['旧的中文草稿'])
     let resolveOld: (value: { ok: true; texts: string[] }) => void = () => undefined
@@ -1366,7 +1357,7 @@ describe('Discord 纯文本草稿', () => {
     })
     const watcher = createInputTranslation({ translate, cancel, t: (k) => zhCN[k] })
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
     expect(cancel).not.toHaveBeenCalled()
@@ -1380,11 +1371,11 @@ describe('Discord 纯文本草稿', () => {
     await Promise.resolve()
     expect(popoverShadow()?.querySelector('[role="status"]')?.textContent ?? '').not.toBe('OLD')
     await vi.advanceTimersByTimeAsync(0)
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(2)
     expect(translate.mock.calls[1]?.[0]).toEqual(['新的中文草稿'])
-    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('NEW')
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputEditorUnsupported)
     watcher.dispose()
   })
 })
@@ -1482,7 +1473,7 @@ describe('ChatGPT Claude Telegram 纯文本草稿', () => {
     const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
     trustedBeforeInput(field)
     await vi.advanceTimersByTimeAsync(0)
-    await vi.advanceTimersByTimeAsync(599)
+    await vi.advanceTimersByTimeAsync(999)
     expect(translate).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
     await Promise.resolve()
@@ -1507,9 +1498,8 @@ describe('ChatGPT Claude Telegram 纯文本草稿', () => {
     const translate = vi.fn(async () => ({ ok: true as const, texts: ['Hello'] }))
     const missing = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
     trustedBeforeInput(field)
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    trustedClick(requirePopoverButton('replace'))
     await vi.advanceTimersByTimeAsync(0)
     expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputEditorUnsupported)
     expect(popoverShadow()?.querySelector('button[data-action="copy"]')).not.toBeNull()
@@ -1524,9 +1514,8 @@ describe('ChatGPT Claude Telegram 纯文本草稿', () => {
       replaceChatInput: async () => 'unsupported',
     })
     trustedBeforeInput(unsupportedField)
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    trustedClick(requirePopoverButton('replace'))
     await vi.advanceTimersByTimeAsync(0)
     expect(popoverShadow()?.querySelector('button[data-action="copy"]')).not.toBeNull()
     expect(readChatDraft(unsupportedField)).toBe('需要翻译的中文内容')
@@ -1535,21 +1524,22 @@ describe('ChatGPT Claude Telegram 纯文本草稿', () => {
     const live = mountChat(['需要翻译的中文内容'])
     const htmlBefore = live.innerHTML
     const replaceChatInput = vi.fn(async () => 'ok' as const)
+    let resolveComplex!: (reply: { ok: true; texts: string[] }) => void
     const complex = createInputTranslation({
-      translate,
+      translate: () => new Promise(resolve => { resolveComplex = resolve }),
       cancel: () => undefined,
       t: (k) => zhCN[k],
       replaceChatInput,
     })
     trustedBeforeInput(live)
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     live.append(document.createElement('a'))
-    trustedClick(requirePopoverButton('replace'))
+    resolveComplex({ ok: true, texts: ['Hello'] })
     await vi.advanceTimersByTimeAsync(0)
     expect(replaceChatInput).not.toHaveBeenCalled()
     expect(live.innerHTML).toBe(`${htmlBefore}<a></a>`)
-    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputEditorUnsupported)
+    expect(isPopoverOpen()).toBe(false)
     complex.dispose()
 
     const pending = mountChat(['需要翻译的中文内容'])
@@ -1564,9 +1554,8 @@ describe('ChatGPT Claude Telegram 纯文本草稿', () => {
       replaceChatInput: hanging,
     })
     trustedBeforeInput(pending)
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    trustedClick(requirePopoverButton('replace'))
     await Promise.resolve()
     const token = pending.getAttribute('data-wt-chat-input')
     expect(token).toMatch(/^[a-f0-9-]{36}$/i)
@@ -1587,9 +1576,8 @@ describe('ChatGPT Claude Telegram 纯文本草稿', () => {
       replaceChatInput: () => new Promise<ChatReplacementStatus>(() => undefined),
     })
     trustedBeforeInput(disposed)
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    trustedClick(requirePopoverButton('replace'))
     await Promise.resolve()
     expect(disposed.getAttribute('data-wt-chat-input')).not.toBeNull()
     stalled.dispose()
@@ -1692,13 +1680,13 @@ describe('ChatGPT Claude Telegram 纯文本草稿', () => {
     expect(hardBreakText).toBe('Hello')
   })
 
-  it('pending 替换时可信 beforeinput 在 DOM 仍是旧草稿时立刻撤标记，旧回复不能覆盖新预览', async () => {
+  it('pending 替换时可信 beforeinput 在 DOM 仍是旧草稿时立刻撤标记，旧回复不能覆盖新请求状态', async () => {
     setPageUrl('https://chatgpt.com/c/1')
     const field = mountChat(['旧草稿中文'])
     const translate = vi.fn(async (_texts: string[]) => ({ ok: true as const, texts: ['English'] }))
     let resolveReplace: (status: ChatReplacementStatus) => void = () => undefined
     const replaceChatInput = vi.fn(() => new Promise<ChatReplacementStatus>((resolve) => {
-      resolveReplace = resolve
+      if (replaceChatInput.mock.calls.length === 1) resolveReplace = resolve
     }))
     const watcher = createInputTranslation({
       translate,
@@ -1707,10 +1695,9 @@ describe('ChatGPT Claude Telegram 纯文本草稿', () => {
       replaceChatInput,
     })
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('English')
-    trustedClick(requirePopoverButton('replace'))
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtPanelLoading)
     await Promise.resolve()
     expect(field.getAttribute('data-wt-chat-input')).toMatch(/^[a-f0-9-]{36}$/i)
 
@@ -1718,12 +1705,12 @@ describe('ChatGPT Claude Telegram 纯文本草稿', () => {
     expect(field.getAttribute('data-wt-chat-input')).toBeNull()
     queueMicrotask(() => writeChatText(field, '新的中文草稿'))
     await vi.advanceTimersByTimeAsync(0)
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(2)
     expect(translate.mock.calls[1]?.[0]).toEqual(['新的中文草稿'])
     const previewAfterNew = popoverShadow()?.querySelector('[role="status"]')?.textContent
-    expect(previewAfterNew).toBe('English')
+    expect(previewAfterNew).toBe(zhCN.wtPanelLoading)
     resolveReplace('changed')
     await Promise.resolve()
     expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(previewAfterNew)
@@ -1806,13 +1793,13 @@ function focusEditable(field: HTMLElement): void {
 }
 
 describe('直接替换', () => {
-  it('没有预览时立刻请求，只替换返回时仍聚焦的同一快照', async () => {
+  it('自动弹窗偏好关闭时仍按配置时间请求，只替换返回时仍聚焦的快照', async () => {
     const input = document.createElement('textarea')
     document.body.append(input)
     let resolveReply: (value: { ok: true; texts: string[] }) => void = () => undefined
     const translate = vi.fn((_texts: string[], _id: string, manual?: boolean) => new Promise<{ ok: true; texts: string[] }>((resolve) => {
       resolveReply = resolve
-      expect(manual).toBe(true)
+      expect(manual).toBeUndefined()
     }))
     const watcher = createInputTranslation({
       translate,
@@ -1823,9 +1810,7 @@ describe('直接替换', () => {
     focusEditable(input)
     input.value = '请检查这段代码'
     trustedInput(input)
-    await vi.advanceTimersByTimeAsync(650)
-    expect(translate).not.toHaveBeenCalled()
-    expect(watcher.translateAndReplace()).toBe(true)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).toHaveBeenCalledTimes(1)
     resolveReply({ ok: true, texts: ['Please review this code.'] })
     await Promise.resolve()
@@ -1834,7 +1819,7 @@ describe('直接替换', () => {
     watcher.dispose()
   })
 
-  it('自动检测下字形像目标语言的草稿（无重音法语 → 英语、简体 → 繁体）：自动预览跳过，手动快捷键仍翻译', async () => {
+  it('自动检测下字形像目标语言的草稿（无重音法语 → 英语、简体 → 繁体）：自动翻译跳过，内部主动调用仍遵循写入守卫', async () => {
     const input = document.createElement('textarea')
     document.body.append(input)
     let target: 'en' | 'zh-TW' = 'en'
@@ -1848,7 +1833,7 @@ describe('直接替换', () => {
     focusEditable(input)
     input.value = 'Bonjour le monde'
     trustedInput(input)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).not.toHaveBeenCalled()
     expect(watcher.translateAndReplace()).toBe(true)
     await Promise.resolve()
@@ -1859,7 +1844,7 @@ describe('直接替换', () => {
     target = 'zh-TW'
     input.value = '你好'
     trustedInput(input)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).toHaveBeenCalledTimes(1)
     expect(watcher.translateAndReplace()).toBe(true)
     await Promise.resolve()
@@ -1869,7 +1854,7 @@ describe('直接替换', () => {
     watcher.dispose()
   })
 
-  it('在途再次按键不新请求，已有预览不额外请求', async () => {
+  it('在途重复调用不重复请求，自动写入后同一快照不重复翻译', async () => {
     const input = document.createElement('textarea')
     document.body.append(input)
     let resolveReply: (value: { ok: true; texts: string[] }) => void = () => undefined
@@ -1885,7 +1870,7 @@ describe('直接替换', () => {
     focusEditable(input)
     input.value = '请检查这段代码'
     trustedInput(input)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).toHaveBeenCalledTimes(1)
     expect(watcher.translateAndReplace()).toBe(true)
     expect(translate).toHaveBeenCalledTimes(1)
@@ -1905,11 +1890,11 @@ describe('直接替换', () => {
     focusEditable(cached)
     cached.value = '另一段中文'
     trustedInput(cached)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(cachedTranslate).toHaveBeenCalledTimes(1)
-    expect(cached.value).toBe('另一段中文')
-    expect(cachedWatcher.translateAndReplace()).toBe(true)
+    expect(cached.value).toBe('EN:另一段中文')
+    expect(cachedWatcher.translateAndReplace()).toBe(false)
     expect(cachedTranslate).toHaveBeenCalledTimes(1)
     expect(cached.value).toBe('EN:另一段中文')
     watcher.dispose()
@@ -1980,7 +1965,7 @@ describe('直接替换', () => {
     expect(input.value).toBe('卸载前的中文')
   })
 
-  it('托管编辑器热键只调用一次模型桥，还原仍然可用；含汉字的日文结果不会再次替换', async () => {
+  it('托管编辑器内部主动调用只调用一次模型桥，还原仍然可用；含汉字的日文结果不会再次替换', async () => {
     setPageUrl('https://chatgpt.com/c/1')
     const field = mountChat(['请检查这段代码'])
     const translate = vi.fn(async () => ({ ok: true as const, texts: ['Revisa este código.'] }))
@@ -2123,7 +2108,7 @@ describe('WhatsApp Slack Teams 纯文本草稿', () => {
       await vi.advanceTimersByTimeAsync(0)
       trustedBeforeInput(field)
       await vi.advanceTimersByTimeAsync(0)
-      await vi.advanceTimersByTimeAsync(599)
+      await vi.advanceTimersByTimeAsync(999)
       expect(translate).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(1)
       await Promise.resolve()
@@ -2134,11 +2119,11 @@ describe('WhatsApp Slack Teams 纯文本草稿', () => {
       const composingTranslate = vi.fn(async () => ({ ok: true as const, texts: ['Hello'] }))
       const composing = createInputTranslation({ translate: composingTranslate, cancel: () => undefined, t: (key) => zhCN[key] })
       trustedBeforeInput(composingField, true)
-      await vi.advanceTimersByTimeAsync(600)
+      await vi.advanceTimersByTimeAsync(1000)
       expect(composingTranslate).not.toHaveBeenCalled()
       trustedComposition(composingField, 'compositionend')
       await vi.advanceTimersByTimeAsync(0)
-      await vi.advanceTimersByTimeAsync(600)
+      await vi.advanceTimersByTimeAsync(1000)
       await Promise.resolve()
       expect(composingTranslate).toHaveBeenCalledTimes(1)
       composing.dispose()
@@ -2378,11 +2363,11 @@ describe('WhatsApp Slack Teams 纯文本草稿', () => {
     expect(translate).not.toHaveBeenCalled()
 
     untrustedEnd()
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
     expect(translate.mock.calls[0]?.[0]).toEqual(['你好世界'])
-    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('EN:你好世界')
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputEditorUnsupported)
     watcher.dispose()
   })
 })
@@ -2432,7 +2417,7 @@ describe('视频站点输入框 YouTube Bilibili', () => {
     const watcher = createInputTranslation({ translate, cancel: vi.fn(), t: (k) => zhCN[k] })
     focusEditable(field)
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).toHaveBeenCalledWith(['请检查这段代码'], expect.any(String), undefined)
     watcher.dispose()
   })
@@ -2476,7 +2461,7 @@ describe('视频站点输入框 YouTube Bilibili', () => {
     field.focus()
     vi.spyOn(document, 'hasFocus').mockReturnValue(true)
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).toHaveBeenCalledWith(['请检查这段代码'], expect.any(String), undefined)
     watcher.dispose()
   })
@@ -2490,7 +2475,7 @@ describe('视频站点输入框 YouTube Bilibili', () => {
       field.focus()
       vi.spyOn(document, 'hasFocus').mockReturnValue(true)
       trustedInput(field)
-      await vi.advanceTimersByTimeAsync(650)
+      await vi.advanceTimersByTimeAsync(1000)
       expect(translate).not.toHaveBeenCalled()
       watcher.dispose()
     }
@@ -2505,7 +2490,7 @@ describe('视频站点输入框 YouTube Bilibili', () => {
     field.focus()
     vi.spyOn(document, 'hasFocus').mockReturnValue(true)
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).not.toHaveBeenCalled()
     watcher.dispose()
   })
@@ -2524,20 +2509,19 @@ describe('视频站点输入框 YouTube Bilibili', () => {
     const watcher = createInputTranslation({ translate, cancel: vi.fn(), t: (k) => zhCN[k] })
     focusEditable(field)
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).toHaveBeenCalledTimes(1)
-    expect(watcher.translateAndReplace()).toBe(true)
     await vi.advanceTimersByTimeAsync(0)
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
     expect(calls).toContain('insertText')
     expect(field.textContent).toBe('JA:请检查这段代码')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).toHaveBeenCalledTimes(1)
     const shadow = popoverShadow()
     const restore = shadow?.querySelector<HTMLButtonElement>('button[data-action="restore"]')
     expect(restore).not.toBeNull()
     trustedClick(restore!)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(field.textContent).toBe('请检查这段代码')
     expect(translate).toHaveBeenCalledTimes(1)
     watcher.dispose()
@@ -2552,9 +2536,8 @@ describe('视频站点输入框 YouTube Bilibili', () => {
     const watcher = createInputTranslation({ translate, cancel: vi.fn(), t: (k) => zhCN[k] })
     focusEditable(field)
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).toHaveBeenCalledTimes(1)
-    expect(watcher.translateAndReplace()).toBe(true)
     await vi.advanceTimersByTimeAsync(0)
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
     expect(field.textContent).toBe('请检查这段代码')
@@ -2615,10 +2598,9 @@ describe('视频站点输入框 YouTube Bilibili', () => {
     const watcher = createInputTranslation({ translate, cancel: vi.fn(), t: (k) => zhCN[k] })
     focusEditable(field)
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
-    expect(watcher.translateAndReplace()).toBe(true)
     expect(execSpy).not.toHaveBeenCalled()
     expect(beforeInputSpy).not.toHaveBeenCalled()
     expect(field.textContent).toBe('请保留换行')
@@ -2654,9 +2636,8 @@ describe('视频站点输入框 YouTube Bilibili', () => {
     const watcher = createInputTranslation({ translate, cancel: vi.fn(), t: (k) => zhCN[k] })
     focusEditable(field)
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    expect(watcher.translateAndReplace()).toBe(true)
     expect(calls).toEqual(['insertText', 'undo'])
     expect(field.textContent).toBe('请检查这段代码')
     expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplaceFailed)
@@ -2698,9 +2679,8 @@ describe('视频站点输入框 YouTube Bilibili', () => {
     const watcher = createInputTranslation({ translate, cancel: vi.fn(), t: (k) => zhCN[k] })
     focusEditable(field)
     trustedInput(field)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    expect(watcher.translateAndReplace()).toBe(true)
     expect(calls).toEqual(['delete', 'insertText', 'insertLineBreak', 'undo'])
     expect(field.textContent).toBe('一行目')
     expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputReplacePartial)
@@ -2733,9 +2713,8 @@ describe('视频站点输入框 YouTube Bilibili', () => {
     field.querySelector('span')!.textContent = '第二轮原始中文'
     trustedInput(field)
     translate.mockResolvedValueOnce({ ok: true as const, texts: ['Second round translated'] })
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
-    expect(watcher.translateAndReplace()).toBe(true)
     expect(field.textContent).toBe('Second round translated')
     failRestore = true
     copySpy.mockClear()
@@ -2761,7 +2740,7 @@ describe('视频站点输入框 YouTube Bilibili', () => {
     translate.mockClear()
     focusEditable(unsafeField)
     trustedInput(unsafeField)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).not.toHaveBeenCalled()
     styleSpy.mockRestore()
 
@@ -2770,7 +2749,7 @@ describe('视频站点输入框 YouTube Bilibili', () => {
   })
 })
 
-describe('预览弹窗 Tab 快捷键替换', () => {
+describe('输入不再提供替换快捷键', () => {
   afterEach(() => {
     setPageUrl('about:blank')
   })
@@ -2797,7 +2776,7 @@ describe('预览弹窗 Tab 快捷键替换', () => {
     return event
   }
 
-  it('普通 textarea 预览出现后可信 Tab 替换成译文、阻止默认行为并切换为还原状态，且替换按钮带快捷键提示', async () => {
+  it('普通 textarea 直接替换后 Tab 保持原生行为，浮层没有替换按钮或快捷键提示', async () => {
     const textarea = document.createElement('textarea')
     document.body.append(textarea)
     const translate = vi.fn(async (texts: string[]) => ({
@@ -2812,19 +2791,17 @@ describe('预览弹窗 Tab 快捷键替换', () => {
 
     textarea.focus()
     trustedInput(textarea, '需要替换的中文草稿')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
 
-    const replaceBtn = requirePopoverButton('replace')
-    expect(replaceBtn.getAttribute('aria-keyshortcuts')).toBe('Tab')
-    expect(replaceBtn.title).toBe(translateMessage('zh-CN', 'wtInputReplaceHint', { key: 'Tab' }))
+    expect(popoverShadow()?.querySelector('[aria-keyshortcuts]')).toBeNull()
 
     const bubbleSpy = vi.fn()
     textarea.addEventListener('keydown', bubbleSpy)
 
     const tabEvent = dispatchTab(textarea)
-    expect(tabEvent.defaultPrevented).toBe(true)
-    expect(bubbleSpy).not.toHaveBeenCalled()
+    expect(tabEvent.defaultPrevented).toBe(false)
+    expect(bubbleSpy).toHaveBeenCalledTimes(1)
     expect(textarea.value).toBe('Translated: 需要替换的中文草稿')
     expect(popoverShadow()?.querySelector('button[data-action="replace"]')).toBeNull()
     expect(requirePopoverButton('restore')).not.toBeNull()
@@ -2832,7 +2809,7 @@ describe('预览弹窗 Tab 快捷键替换', () => {
     watcher.dispose()
   })
 
-  it('Discord 与 WhatsApp 托管编辑器预览出现后按 Tab 调用对应替换桥一次', async () => {
+  it('Discord 与 WhatsApp 自动写回一次，Tab 不拦截且不追加写回', async () => {
     setPageUrl('https://discord.com/channels/@me/1')
     const discordField = mountSlate(['需要翻译的中文'])
     const translate = vi.fn(async () => ({ ok: true as const, texts: ['Hello Discord'] }))
@@ -2849,11 +2826,11 @@ describe('预览弹窗 Tab 快捷键替换', () => {
 
     discordField.focus()
     trustedInput(discordField)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
 
     const discordTab = dispatchTab(discordField)
-    expect(discordTab.defaultPrevented).toBe(true)
+    expect(discordTab.defaultPrevented).toBe(false)
     expect(replaceDiscordInput).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(20)
     await Promise.resolve()
@@ -2881,11 +2858,11 @@ describe('预览弹窗 Tab 快捷键替换', () => {
 
     waField.focus()
     trustedInput(waField)
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
 
     const waTab = dispatchTab(waField)
-    expect(waTab.defaultPrevented).toBe(true)
+    expect(waTab.defaultPrevented).toBe(false)
     expect(replaceChatInput).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(20)
     await Promise.resolve()
@@ -2894,155 +2871,56 @@ describe('预览弹窗 Tab 快捷键替换', () => {
     waWatcher.dispose()
   })
 
-  it('不满足条件时不拦截 Tab 且不替换：不可信、修饰键、加载中、已替换、报错、合成中、草稿已改、异框、repeat', async () => {
+  it('加载中、已替换和报错状态均不拦截 Tab 或修改草稿', async () => {
     const textarea = document.createElement('textarea')
     const other = document.createElement('textarea')
     document.body.append(textarea, other)
-
-    let resolveTranslate: ((reply: { ok: true; texts: string[] } | { ok: false; error: string }) => void) | undefined
-    const translate = vi.fn(
-      () =>
-        new Promise<{ ok: true; texts: string[] } | { ok: false; error: string }>((resolve) => {
-          resolveTranslate = resolve
-        }),
-    )
-    const watcher = createInputTranslation({
-      translate,
-      cancel: () => undefined,
-      t: (k) => zhCN[k],
-    })
-
-    textarea.focus()
+    let resolveTranslate!: (reply: { ok: true; texts: string[] } | { ok: false; error: string }) => void
+    const translate = vi.fn(() => new Promise<{ ok: true; texts: string[] } | { ok: false; error: string }>(resolve => { resolveTranslate = resolve }))
+    const watcher = createInputTranslation({ translate, cancel: vi.fn(), t: key => zhCN[key] })
     trustedInput(textarea, '初始中文草稿')
-    await vi.advanceTimersByTimeAsync(650)
-    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtPanelLoading)
-
-    // 预览尚未出现（loading 中）
-    const loadingTab = dispatchTab(textarea)
-    expect(loadingTab.defaultPrevented).toBe(false)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(dispatchTab(textarea).defaultPrevented).toBe(false)
     expect(textarea.value).toBe('初始中文草稿')
-
-    resolveTranslate?.({ ok: true, texts: ['Translated draft'] })
-    await Promise.resolve()
-    expect(requirePopoverButton('replace')).not.toBeNull()
-
-    // 不可信 Tab
-    const untrustedTab = dispatchTab(textarea, {}, false)
-    expect(untrustedTab.defaultPrevented).toBe(false)
-    expect(textarea.value).toBe('初始中文草稿')
-
-    // Shift+Tab
-    const shiftTab = dispatchTab(textarea, { shiftKey: true })
-    expect(shiftTab.defaultPrevented).toBe(false)
-    expect(textarea.value).toBe('初始中文草稿')
-
-    // Ctrl+Tab
-    const ctrlTab = dispatchTab(textarea, { ctrlKey: true })
-    expect(ctrlTab.defaultPrevented).toBe(false)
-    expect(textarea.value).toBe('初始中文草稿')
-
-    // isComposing 的 Tab
-    const composingTab = dispatchTab(textarea, { isComposing: true })
-    expect(composingTab.defaultPrevented).toBe(false)
-    expect(textarea.value).toBe('初始中文草稿')
-
-    // event.repeat
-    const repeatTab = dispatchTab(textarea, { repeat: true })
-    expect(repeatTab.defaultPrevented).toBe(false)
-    expect(textarea.value).toBe('初始中文草稿')
-
-    // 焦点在另一个输入框（在另一个输入框上按 Tab，且不触发 focusin 清理预览前先验证 target 校验）
-    const otherTab = dispatchTab(other)
-    expect(otherTab.defaultPrevented).toBe(false)
-    expect(textarea.value).toBe('初始中文草稿')
-
-    // 草稿在预览后被脚本静默改过
-    textarea.value = '预览后被改过的中文草稿'
-    const mutatedTab = dispatchTab(textarea)
-    expect(mutatedTab.defaultPrevented).toBe(false)
-    expect(textarea.value).toBe('预览后被改过的中文草稿')
-
-    // 恢复草稿为快照并正常按 Tab 替换，进入还原状态
-    textarea.value = '初始中文草稿'
-    const okTab = dispatchTab(textarea)
-    expect(okTab.defaultPrevented).toBe(true)
+    resolveTranslate({ ok: true, texts: ['Translated draft'] })
+    await vi.advanceTimersByTimeAsync(0)
     expect(textarea.value).toBe('Translated draft')
-    expect(requirePopoverButton('restore')).not.toBeNull()
-
-    // 替换后（还原状态）再按 Tab
-    const afterReplaceTab = dispatchTab(textarea)
-    expect(afterReplaceTab.defaultPrevented).toBe(false)
-    expect(textarea.value).toBe('Translated draft')
-
-    // 报错状态
-    trustedInput(textarea, '触发报错的中文草稿')
-    await vi.advanceTimersByTimeAsync(650)
-    resolveTranslate?.({ ok: false, error: '服务异常' })
-    await Promise.resolve()
+    for (const init of [{}, { shiftKey: true }, { ctrlKey: true }, { isComposing: true }, { repeat: true }]) {
+      expect(dispatchTab(textarea, init).defaultPrevented).toBe(false)
+      expect(textarea.value).toBe('Translated draft')
+    }
+    expect(dispatchTab(textarea, {}, false).defaultPrevented).toBe(false)
+    expect(dispatchTab(other).defaultPrevented).toBe(false)
+    expect(translate).toHaveBeenCalledTimes(1)
+    trustedInput(textarea, '报错中文草稿')
+    await vi.advanceTimersByTimeAsync(1000)
+    resolveTranslate({ ok: false, error: '服务异常' })
+    await vi.advanceTimersByTimeAsync(0)
     expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('服务异常')
-    const errorTab = dispatchTab(textarea)
-    expect(errorTab.defaultPrevented).toBe(false)
-    expect(textarea.value).toBe('触发报错的中文草稿')
-
+    expect(dispatchTab(textarea).defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('报错中文草稿')
     watcher.dispose()
   })
 
-  it('自定义替换键（如 Ctrl+Enter）生效且 Tab 不再触发；空串时不拦截 Tab 且移除 aria-keyshortcuts', async () => {
+  it('旧替换键配置不再抢占 Tab 或 Ctrl+Enter，也不展示快捷键提示', async () => {
     const textarea = document.createElement('textarea')
     document.body.append(textarea)
     let replaceKey = 'Ctrl+Enter'
-    const translate = vi.fn(async (texts: string[]) => ({
-      ok: true as const,
-      texts: [`Translated: ${texts[0]}`],
-    }))
-    const watcher = createInputTranslation({
-      translate,
-      cancel: () => undefined,
-      t: (k, params) => translateMessage('zh-CN', k, params),
-      replaceKey: () => replaceKey,
-    })
-
-    textarea.focus()
-    trustedInput(textarea, '需要替换的中文草稿')
-    await vi.advanceTimersByTimeAsync(650)
-    await Promise.resolve()
-
-    const replaceBtn = requirePopoverButton('replace')
-    expect(replaceBtn.getAttribute('aria-keyshortcuts')).toBe('Control+Enter')
-    expect(replaceBtn.title).toBe(translateMessage('zh-CN', 'wtInputReplaceHint', { key: 'Ctrl+Enter' }))
-
-    // 按 Tab 不再触发替换
-    const tabEvent = dispatchTab(textarea)
-    expect(tabEvent.defaultPrevented).toBe(false)
-    expect(textarea.value).toBe('需要替换的中文草稿')
-
-    // 按 Ctrl+Enter 触发替换
-    const ctrlEnter = new KeyboardEvent('keydown', {
-      key: 'Enter',
-      ctrlKey: true,
-      bubbles: true,
-      composed: true,
-      cancelable: true,
-    })
-    Object.defineProperty(ctrlEnter, 'isTrusted', { value: true, configurable: true })
-    textarea.dispatchEvent(ctrlEnter)
-    expect(ctrlEnter.defaultPrevented).toBe(true)
-    expect(textarea.value).toBe('Translated: 需要替换的中文草稿')
-
-    // 切换为空串（不使用快捷键）
-    replaceKey = ''
-    trustedInput(textarea, '第二段草稿')
-    await vi.advanceTimersByTimeAsync(650)
-    await Promise.resolve()
-
-    const disabledReplaceBtn = requirePopoverButton('replace')
-    expect(disabledReplaceBtn.hasAttribute('aria-keyshortcuts')).toBe(false)
-    expect(disabledReplaceBtn.title).toBe(zhCN.wtInputReplaceClickHint)
-
-    const tabWhenDisabled = dispatchTab(textarea)
-    expect(tabWhenDisabled.defaultPrevented).toBe(false)
-    expect(textarea.value).toBe('第二段草稿')
-
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`Translated: ${texts[0]}`] }))
+    const watcher = createInputTranslation({ translate, cancel: vi.fn(), t: key => zhCN[key], replaceKey: () => replaceKey })
+    for (const key of ['Ctrl+Enter', '']) {
+      replaceKey = key
+      trustedInput(textarea, `旧配置草稿${key}`)
+      await vi.advanceTimersByTimeAsync(500)
+      expect(dispatchTab(textarea).defaultPrevented).toBe(false)
+      expect(dispatchTab(textarea, { key: 'Enter', ctrlKey: true }).defaultPrevented).toBe(false)
+      expect(textarea.value).toBe(`旧配置草稿${key}`)
+      await vi.advanceTimersByTimeAsync(500)
+      expect(textarea.value).toBe(`Translated: 旧配置草稿${key}`)
+      expect(popoverShadow()?.querySelector('[aria-keyshortcuts]')).toBeNull()
+      expect(popoverShadow()?.querySelector('button[data-action="replace"]')).toBeNull()
+    }
+    expect(translate).toHaveBeenCalledTimes(2)
     watcher.dispose()
   })
 
@@ -3066,12 +2944,12 @@ describe('预览弹窗 Tab 快捷键替换', () => {
     textarea.focus()
     // 目标为 zh-CN 时，中文草稿已是目标语言，不触发
     trustedInput(textarea, '已经是中文草稿')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).not.toHaveBeenCalled()
 
     // 英文草稿在目标为 zh-CN 时触发翻译
     trustedInput(textarea, 'Please review this pull request')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(translate).toHaveBeenCalledTimes(1)
     expect(translate.mock.calls[0]?.[0]).toEqual(['Please review this pull request'])
@@ -3082,7 +2960,7 @@ describe('预览弹窗 Tab 快捷键替换', () => {
     // 指定源语言 en → zh-CN 时标题显示 English → 简体中文
     sourceLang = 'en'
     trustedInput(textarea, 'Another English draft')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(popoverShadow()?.querySelector('.title')?.textContent).toBe(
       `${zhCN.wtInputTranslation} · English → 简体中文`,
@@ -3092,7 +2970,7 @@ describe('预览弹窗 Tab 快捷键替换', () => {
     targetLang = 'en'
     translate.mockClear()
     trustedInput(textarea, 'Same language draft')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).not.toHaveBeenCalled()
 
     watcher.dispose()
@@ -3100,56 +2978,26 @@ describe('预览弹窗 Tab 快捷键替换', () => {
 })
 
 describe('停止输入后自动替换（replaceMode = auto）', () => {
-  it('auto + 1000ms：输入后满 1s 自动替换并显示倒计时提示；未满 1s 再次输入会取消并按最后一次输入重新计时', async () => {
+  it('完整等待配置的 1000ms 才请求，期间再次输入会重新计时且不显示预览倒计时', async () => {
     const textarea = document.createElement('textarea')
     document.body.append(textarea)
-    const translate = vi.fn(async (texts: string[]) => ({
-      ok: true as const,
-      texts: [`EN:${texts[0]}`],
-    }))
-    const watcher = createInputTranslation({
-      translate,
-      cancel: () => undefined,
-      t: (k) => zhCN[k],
-      replaceMode: () => 'auto',
-      autoReplaceDelayMs: () => 1000,
-    })
-
-    focusEditable(textarea)
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
+    const watcher = createInputTranslation({ translate, cancel: vi.fn(), t: key => zhCN[key], autoReplaceDelayMs: () => 1000 })
     trustedInput(textarea, '第一版中文')
-    await vi.advanceTimersByTimeAsync(600)
-    await Promise.resolve()
-
-    // 600ms 时译文返回，预览浮层显示剩余时间「0.4 秒后自动替换」，尚未替换
-    expect(translate).toHaveBeenCalledTimes(1)
-    expect(textarea.value).toBe('第一版中文')
-    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('EN:第一版中文')
-    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')?.textContent).toBe('0.4 秒后自动替换')
-
-    // 800ms（未满 1s）时再次输入：取消上一次自动替换并重新计时
-    await vi.advanceTimersByTimeAsync(200)
-    expect(textarea.value).toBe('第一版中文')
+    await vi.advanceTimersByTimeAsync(800)
+    expect(translate).not.toHaveBeenCalled()
+    expect(isPopoverOpen()).toBe(false)
     trustedInput(textarea, '第二版中文')
-
-    // 到原 1000ms 时刻（再过 200ms）不会替换
-    await vi.advanceTimersByTimeAsync(200)
-    expect(textarea.value).toBe('第二版中文')
-
-    // 距第二次输入 600ms 时发起翻译并返回预览
-    await vi.advanceTimersByTimeAsync(400)
-    await Promise.resolve()
-    expect(translate).toHaveBeenCalledTimes(2)
-    expect(textarea.value).toBe('第二版中文')
-    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')?.textContent).toBe('0.4 秒后自动替换')
-
-    // 距第二次输入满 1000ms（再过 400ms）自动替换
-    await vi.advanceTimersByTimeAsync(399)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(translate).not.toHaveBeenCalled()
     expect(textarea.value).toBe('第二版中文')
     await vi.advanceTimersByTimeAsync(1)
+    expect(translate).toHaveBeenCalledTimes(1)
+    expect(translate).toHaveBeenCalledWith(['第二版中文'], expect.any(String), undefined)
     expect(textarea.value).toBe('EN:第二版中文')
     expect(requirePopoverButton('restore')).not.toBeNull()
     expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')).toBeNull()
-
+    expect(popoverShadow()?.querySelector('[data-action="replace"]')).toBeNull()
     watcher.dispose()
   })
 
@@ -3174,11 +3022,11 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
 
     focusEditable(textarea)
     trustedInput(textarea, '慢速翻译草稿')
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).toHaveBeenCalledTimes(1)
 
     // 再过 600ms（总计 1200ms > 1000ms）译文才返回，应立即替换
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     resolveSlow?.({ ok: true, texts: ['EN:慢速翻译草稿'] })
     await Promise.resolve()
     expect(textarea.value).toBe('EN:慢速翻译草稿')
@@ -3200,10 +3048,8 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
   it('等待中失焦、点关闭、按 Escape、合成开始或内容变化均放弃自动替换且不报错', async () => {
     const textarea = document.createElement('textarea')
     document.body.append(textarea)
-    const translate = vi.fn(async (texts: string[]) => ({
-      ok: true as const,
-      texts: [`EN:${texts[0]}`],
-    }))
+    let finish!: () => void
+    const translate = vi.fn((texts: string[]) => new Promise<{ ok: true; texts: string[] }>(resolve => { finish = () => resolve({ ok: true, texts: [`EN:${texts[0]}`] }) }))
     const watcher = createInputTranslation({
       translate,
       cancel: () => undefined,
@@ -3215,41 +3061,45 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
     // 1. 等待中失焦
     focusEditable(textarea)
     trustedInput(textarea, '失焦测试')
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     textarea.blur()
     vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    finish()
     await vi.advanceTimersByTimeAsync(500)
     expect(textarea.value).toBe('失焦测试')
 
     // 2. 等待中点浮层关闭按钮
     focusEditable(textarea)
     trustedInput(textarea, '点关闭测试')
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     const closeBtn = popoverShadow()!.querySelector<HTMLButtonElement>('button[data-action="close"]')!
     trustedClick(closeBtn)
+    finish()
     expect(isPopoverOpen()).toBe(false)
     await vi.advanceTimersByTimeAsync(500)
     expect(textarea.value).toBe('点关闭测试')
 
     // 3. 等待中按 Escape 关闭浮层
     trustedInput(textarea, '按Esc测试')
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(isPopoverOpen()).toBe(true)
     const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true })
     Object.defineProperty(esc, 'isTrusted', { value: true, configurable: true })
     textarea.dispatchEvent(esc)
+    finish()
     expect(isPopoverOpen()).toBe(false)
     await vi.advanceTimersByTimeAsync(500)
     expect(textarea.value).toBe('按Esc测试')
 
     // 4. 等待中合成开始
     trustedInput(textarea, '合成开始测试')
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     trustedComposition(textarea, 'compositionstart')
+    finish()
     await vi.advanceTimersByTimeAsync(500)
     expect(textarea.value).toBe('合成开始测试')
     trustedComposition(textarea, 'compositionend')
@@ -3258,9 +3108,10 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
 
     // 5. 等待中内容被脚本静默修改（不触发 input 事件）→ 放弃自动替换且不报错
     trustedInput(textarea, '内容静默变化测试')
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     textarea.value = '内容已被静默改掉'
+    finish()
     await vi.advanceTimersByTimeAsync(500)
     expect(textarea.value).toBe('内容已被静默改掉')
     expect(popoverShadow()?.querySelector('.status.is-error')).toBeNull()
@@ -3268,7 +3119,7 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
     watcher.dispose()
   })
 
-  it('等待中按替换键可提前替换，且计时器到期不会二次替换', async () => {
+  it('等待中按 Tab 不提前替换，配置时间到期才写回且不重复', async () => {
     const textarea = document.createElement('textarea')
     document.body.append(textarea)
     const translate = vi.fn(async (texts: string[]) => ({
@@ -3290,7 +3141,7 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
 
     focusEditable(textarea)
     trustedInput(textarea, '提前按键草稿')
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(textarea.value).toBe('提前按键草稿')
 
@@ -3298,9 +3149,9 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
     const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, composed: true, cancelable: true })
     Object.defineProperty(tab, 'isTrusted', { value: true, configurable: true })
     textarea.dispatchEvent(tab)
-    expect(tab.defaultPrevented).toBe(true)
-    expect(textarea.value).toBe('EN:提前按键草稿')
-    expect(inputCount).toBe(1)
+    expect(tab.defaultPrevented).toBe(false)
+    expect(textarea.value).toBe('提前按键草稿')
+    expect(inputCount).toBe(0)
 
     // 再过 2000ms，原计时器已清理，不会二次写入
     await vi.advanceTimersByTimeAsync(2000)
@@ -3310,7 +3161,7 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
     watcher.dispose()
   })
 
-  it('还原原文后不会再次自动替换同一段原文，直到用户再次编辑；西/法/德/葡语译文替换后不会再次触发', async () => {
+  it('还原原文后不会自动替换同一原文，继续编辑后按当前目标语言重新请求', async () => {
     const textarea = document.createElement('textarea')
     document.body.append(textarea)
     let targetLang: 'en' | 'es' = 'en'
@@ -3329,45 +3180,47 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
 
     focusEditable(textarea)
     trustedInput(textarea, '需要还原的草稿')
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     await vi.advanceTimersByTimeAsync(400)
     expect(textarea.value).toBe('Hello 需要还原的草稿')
 
     // 点击「还原原文」
-    const restoreBtn = requirePopoverButton('restore')
-    trustedClick(restoreBtn)
-    expect(textarea.value).toBe('需要还原的草稿')
+    try {
+      const restoreBtn = requirePopoverButton('restore')
+      trustedClick(restoreBtn)
+      expect(textarea.value).toBe('需要还原的草稿')
 
-    // 等待超过 2s，甚至触发不改内容的 input 事件，都不会再次自动替换同一段原文
-    await vi.advanceTimersByTimeAsync(2000)
-    trustedInput(textarea)
-    await vi.advanceTimersByTimeAsync(2000)
-    expect(textarea.value).toBe('需要还原的草稿')
-    expect(translate).toHaveBeenCalledTimes(1)
+      // 等待超过 2s，甚至触发不改内容的 input 事件，都不会再次自动替换同一段原文
+      await vi.advanceTimersByTimeAsync(2000)
+      trustedInput(textarea)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(textarea.value).toBe('需要还原的草稿')
+      expect(translate).toHaveBeenCalledTimes(1)
+      expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('')
+      expect(popoverShadow()?.querySelector('.actions')?.children.length).toBe(0)
+      expect(isPopoverOpen()).toBe(false)
 
-    // 用户再次编辑后正常自动替换，且目标语言为 es 时译文不会再次触发翻译
-    targetLang = 'es'
-    trustedInput(textarea, '修改后的草稿')
-    await vi.advanceTimersByTimeAsync(600)
-    await Promise.resolve()
-    await vi.advanceTimersByTimeAsync(400)
-    expect(textarea.value).toBe('Hola 修改后的草稿')
-    expect(translate).toHaveBeenCalledTimes(2)
+      // 用户再次编辑后正常自动替换，且目标语言为 es 时译文不会再次触发翻译
+      targetLang = 'es'
+      trustedInput(textarea, '修改后的草稿')
+      await vi.advanceTimersByTimeAsync(1000)
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(400)
+      expect(textarea.value).toBe('Hola 修改后的草稿')
+      expect(translate).toHaveBeenCalledTimes(2)
 
-    // 即使派发未改写内容的 input 事件，backupState 仍保护已替换文本不再触发翻译
-    trustedInput(textarea)
-    await vi.advanceTimersByTimeAsync(2000)
-    expect(translate).toHaveBeenCalledTimes(2)
-    expect(textarea.value).toBe('Hola 修改后的草稿')
-
-    watcher.dispose()
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(translate).toHaveBeenCalledTimes(2)
+      expect(textarea.value).toBe('Hola 修改后的草稿')
+    } finally {
+      watcher.dispose()
+    }
   })
 
-  it('autoPreview=false 时 auto 模式仍自动替换；hotkey 模式下不会自动替换（回归）', async () => {
+  it('自动弹窗偏好开关不影响输入翻译的直接替换', async () => {
     const textarea = document.createElement('textarea')
     document.body.append(textarea)
-    let mode: 'auto' | 'hotkey' = 'auto'
     let autoPreview = false
     const translate = vi.fn(async (texts: string[]) => ({
       ok: true as const,
@@ -3378,31 +3231,213 @@ describe('停止输入后自动替换（replaceMode = auto）', () => {
       cancel: () => undefined,
       t: (k) => zhCN[k],
       autoPreview: () => autoPreview,
-      replaceMode: () => mode,
       autoReplaceDelayMs: () => 1000,
     })
 
     focusEditable(textarea)
     trustedInput(textarea, '自动弹窗关闭时的草稿')
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     await vi.advanceTimersByTimeAsync(400)
     expect(translate).toHaveBeenCalledTimes(1)
     expect(textarea.value).toBe('EN:自动弹窗关闭时的草稿')
 
-    // 切回 hotkey 模式且开启 autoPreview：出预览但不会自动替换
-    mode = 'hotkey'
     autoPreview = true
-    trustedInput(textarea, '快捷键模式的草稿')
-    await vi.advanceTimersByTimeAsync(600)
-    await Promise.resolve()
+    trustedInput(textarea, '自动弹窗开启时的草稿')
+    await vi.advanceTimersByTimeAsync(1000)
     expect(translate).toHaveBeenCalledTimes(2)
-    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe('EN:快捷键模式的草稿')
-    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')?.textContent).toBe(zhCN.wtInputPreviewHint)
-    await vi.advanceTimersByTimeAsync(5000)
-    expect(textarea.value).toBe('快捷键模式的草稿')
+    expect(textarea.value).toBe('EN:自动弹窗开启时的草稿')
+    expect(popoverShadow()?.querySelector('[data-action="auto-hint"]')).toBeNull()
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputRestoreHint)
 
     watcher.dispose()
+  })
+
+  it('还原立即清空浮层且旧操作失效；失焦后相同原文不复发，编辑与主动翻译可继续', async () => {
+    const copy = vi.mocked(clipboard.copySelectionText)
+    copy.mockClear()
+
+    const textarea = document.createElement('textarea')
+    document.body.append(textarea)
+    const plainTranslate = vi.fn(async (texts: string[]) => ({
+      ok: true as const,
+      texts: [`EN:${texts[0]}`],
+    }))
+    const plainWatcher = createInputTranslation({
+      translate: plainTranslate,
+      cancel: vi.fn(),
+      t: (k) => zhCN[k],
+    })
+
+    try {
+      focusEditable(textarea)
+      trustedInput(textarea, '需要还原的普通草稿')
+      await vi.advanceTimersByTimeAsync(1000)
+      await Promise.resolve()
+        expect(textarea.value).toBe('EN:需要还原的普通草稿')
+
+      const plainShadow = popoverShadow()!
+      const plainPopover = plainShadow.querySelector<HTMLElement>('.popover')!
+      expect(plainShadow.querySelector('button[data-action="copy"]')).toBeNull()
+      const plainRestoreBtn = requirePopoverButton('restore')
+      let finishPlainFade: () => void = () => undefined
+      const plainFadeDone = new Promise<void>((resolve) => {
+        finishPlainFade = resolve
+      })
+      Object.defineProperty(plainPopover, 'getAnimations', {
+        configurable: true,
+        value: () => [{ animationName: 'wt-surface-exit', finished: plainFadeDone }],
+      })
+
+      plainRestoreBtn.focus()
+      expect(document.activeElement).toBe(document.querySelector('[data-wt-root]'))
+      trustedClick(plainRestoreBtn)
+
+      expect(textarea.value).toBe('需要还原的普通草稿')
+      expect(document.activeElement).toBe(textarea)
+      expect(plainPopover.hasAttribute('data-wt-closing')).toBe(true)
+      expect(plainShadow.querySelector('[role="status"]')?.textContent).toBe('')
+      expect(plainShadow.querySelector('.actions')?.children.length).toBe(0)
+      trustedClick(plainRestoreBtn)
+      await Promise.resolve()
+      expect(copy).not.toHaveBeenCalled()
+      expect(textarea.value).toBe('需要还原的普通草稿')
+
+      finishPlainFade()
+      await vi.advanceTimersByTimeAsync(150)
+      await Promise.resolve()
+      expect(isPopoverOpen()).toBe(false)
+
+      const outside = document.createElement('button')
+      document.body.append(outside)
+      outside.focus()
+      textarea.focus()
+      outside.remove()
+      trustedInput(textarea)
+      const tabAfterRestore = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, composed: true, cancelable: true })
+      Object.defineProperty(tabAfterRestore, 'isTrusted', { value: true, configurable: true })
+      textarea.dispatchEvent(tabAfterRestore)
+      expect(tabAfterRestore.defaultPrevented).toBe(false)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(plainTranslate).toHaveBeenCalledTimes(1)
+      expect(textarea.value).toBe('需要还原的普通草稿')
+      expect(isPopoverOpen()).toBe(false)
+
+      expect(plainWatcher.translateAndReplace()).toBe(true)
+      await vi.advanceTimersByTimeAsync(0)
+      await Promise.resolve()
+      expect(plainTranslate).toHaveBeenCalledTimes(2)
+      expect(textarea.value).toBe('EN:需要还原的普通草稿')
+      delete (plainPopover as { getAnimations?: unknown }).getAnimations
+      trustedClick(requirePopoverButton('restore'))
+      expect(textarea.value).toBe('需要还原的普通草稿')
+      expect(isPopoverOpen()).toBe(false)
+
+      trustedInput(textarea, '继续编辑后的普通草稿')
+      await vi.advanceTimersByTimeAsync(1000)
+      await Promise.resolve()
+      expect(plainTranslate).toHaveBeenCalledTimes(3)
+      expect(plainShadow.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputRestoreHint)
+    } finally {
+      plainWatcher.dispose()
+    }
+
+    setPageUrl('https://discord.com/channels/@me/1')
+    const discordField = mountSlate(['需要还原的托管草稿'])
+    const discordTranslate = vi.fn(async (texts: string[]) => ({
+      ok: true as const,
+      texts: [`Managed:${texts[0]}`],
+    }))
+    const replaceDiscordInput = vi.fn(async (request: { text: string }) => {
+      writeSlateText(discordField, request.text)
+      return 'ok' as const
+    })
+    const discordWatcher = createInputTranslation({
+      translate: discordTranslate,
+      cancel: vi.fn(),
+      t: (k) => zhCN[k],
+      replaceDiscordInput,
+    })
+
+    try {
+      focusEditable(discordField)
+      trustedInput(discordField)
+      await vi.advanceTimersByTimeAsync(1000)
+      await Promise.resolve()
+        await vi.advanceTimersByTimeAsync(20)
+      await Promise.resolve()
+      expect(readDiscordDraft(discordField)).toBe('Managed:需要还原的托管草稿')
+
+      const discordShadow = popoverShadow()!
+      const discordPopover = discordShadow.querySelector<HTMLElement>('.popover')!
+      expect(discordShadow.querySelector('button[data-action="copy"]')).toBeNull()
+      const discordRestoreBtn = requirePopoverButton('restore')
+      let finishDiscordFade: () => void = () => undefined
+      const discordFadeDone = new Promise<void>((resolve) => {
+        finishDiscordFade = resolve
+      })
+      Object.defineProperty(discordPopover, 'getAnimations', {
+        configurable: true,
+        value: () => [{ animationName: 'wt-surface-exit', finished: discordFadeDone }],
+      })
+
+      discordRestoreBtn.focus()
+      trustedClick(discordRestoreBtn)
+      await vi.advanceTimersByTimeAsync(0)
+      await Promise.resolve()
+
+      expect(readDiscordDraft(discordField)).toBe('需要还原的托管草稿')
+      expect(document.activeElement).toBe(discordField)
+      expect(discordPopover.hasAttribute('data-wt-closing')).toBe(true)
+      expect(discordShadow.querySelector('[role="status"]')?.textContent).toBe('')
+      expect(discordShadow.querySelector('.actions')?.children.length).toBe(0)
+      trustedClick(discordRestoreBtn)
+      await Promise.resolve()
+      expect(copy).not.toHaveBeenCalled()
+      expect(replaceDiscordInput).toHaveBeenCalledTimes(2)
+
+      finishDiscordFade()
+      await vi.advanceTimersByTimeAsync(150)
+      await Promise.resolve()
+      expect(isPopoverOpen()).toBe(false)
+
+      const outside = document.createElement('button')
+      document.body.append(outside)
+      outside.focus()
+      discordField.focus()
+      outside.remove()
+      trustedBeforeInput(discordField)
+      trustedInput(discordField)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(discordTranslate).toHaveBeenCalledTimes(1)
+      expect(replaceDiscordInput).toHaveBeenCalledTimes(2)
+      expect(isPopoverOpen()).toBe(false)
+
+      focusEditable(discordField)
+      expect(discordWatcher.translateAndReplace()).toBe(true)
+      await vi.advanceTimersByTimeAsync(20)
+      await Promise.resolve()
+      expect(discordTranslate).toHaveBeenCalledTimes(2)
+      expect(replaceDiscordInput).toHaveBeenCalledTimes(3)
+      expect(readDiscordDraft(discordField)).toBe('Managed:需要还原的托管草稿')
+      delete (discordPopover as { getAnimations?: unknown }).getAnimations
+      trustedClick(requirePopoverButton('restore'))
+      await vi.advanceTimersByTimeAsync(20)
+      await Promise.resolve()
+      expect(readDiscordDraft(discordField)).toBe('需要还原的托管草稿')
+      expect(isPopoverOpen()).toBe(false)
+
+      writeSlateText(discordField, '继续编辑后的托管草稿')
+      trustedBeforeInput(discordField)
+      trustedInput(discordField)
+      await vi.advanceTimersByTimeAsync(1000)
+      await Promise.resolve()
+      expect(discordTranslate).toHaveBeenCalledTimes(3)
+      expect(discordShadow.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputRestoreHint)
+    } finally {
+      discordWatcher.dispose()
+      setPageUrl('about:blank')
+    }
   })
 })
 
@@ -3451,7 +3486,7 @@ describe('外观、标题、焦点与生命周期', () => {
     })
     focusEditable(input)
     trustedInput(input, 'こんにちは')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
 
     const host = document.querySelector<HTMLElement>('[data-wt-root]')!
@@ -3476,22 +3511,23 @@ describe('外观、标题、焦点与生命周期', () => {
     watcher.dispose()
   })
 
-  it('hotkey 模式显示手动提示且不自动替换', async () => {
+  it('普通输入完成后仅显示还原状态，不显示旧手动提示', async () => {
     const input = document.createElement('textarea')
     document.body.append(input)
     const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
     const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
     focusEditable(input)
     trustedInput(input, '手动提示草稿')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     const hint = popoverShadow()?.querySelector('.auto-hint')
-    expect(hint?.textContent).toBe(zhCN.wtInputPreviewHint)
-    expect(input.value).toBe('手动提示草稿')
+    expect(hint).toBeNull()
+    expect(input.value).toBe('EN:手动提示草稿')
+    expect(popoverShadow()?.querySelector('[role="status"]')?.textContent).toBe(zhCN.wtInputRestoreHint)
     watcher.dispose()
   })
 
-  it('auto 模式显示倒计时提示且到期自动替换', async () => {
+  it('自动替换后不显示旧预览倒计时，也不延迟结果', async () => {
     const input = document.createElement('textarea')
     document.body.append(input)
     const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
@@ -3504,12 +3540,11 @@ describe('外观、标题、焦点与生命周期', () => {
     })
     focusEditable(input)
     trustedInput(input, '自动替换草稿')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     const hint = popoverShadow()?.querySelector('.auto-hint')
-    expect(hint?.textContent).toContain('秒后自动替换')
-    expect(hint?.textContent).not.toBe(zhCN.wtInputPreviewHint)
-    expect(input.value).toBe('自动替换草稿')
+    expect(hint).toBeNull()
+    expect(input.value).toBe('EN:自动替换草稿')
     await vi.advanceTimersByTimeAsync(2000)
     await Promise.resolve()
     expect(input.value).toBe('EN:自动替换草稿')
@@ -3524,7 +3559,7 @@ describe('外观、标题、焦点与生命周期', () => {
     focusEditable(input)
     const focusSpy = vi.spyOn(input, 'focus')
     trustedInput(input, '焦点返回草稿')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(isPopoverOpen()).toBe(true)
     const host = document.querySelector<HTMLElement>('[data-wt-root]')!
@@ -3540,11 +3575,12 @@ describe('外观、标题、焦点与生命周期', () => {
 
     focusSpy.mockClear()
     trustedInput(input, '再次焦点草稿')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     expect(isPopoverOpen()).toBe(true)
     expect(document.activeElement).toBe(input)
     const closeBtn2 = popoverShadow()!.querySelector<HTMLButtonElement>('button[data-action="close"]')!
+    focusSpy.mockClear()
     trustedClick(closeBtn2)
     expect(isPopoverOpen()).toBe(false)
     expect(document.activeElement).toBe(input)
@@ -3552,25 +3588,25 @@ describe('外观、标题、焦点与生命周期', () => {
     watcher.dispose()
   })
 
-  it('旧预览的延迟复制完成不会在新预览显示已复制', async () => {
-    const input = document.createElement('textarea')
+  it('旧失败提示的延迟复制完成不会在新提示显示已复制', async () => {
+    const input = document.createElement('input')
     document.body.append(input)
     let resolveCopy: ((value: boolean) => void) | undefined
     const copyGate = new Promise<boolean>((resolve) => {
       resolveCopy = resolve
     })
     vi.mocked(clipboard.copySelectionText).mockImplementationOnce(() => copyGate)
-    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:${texts[0]}`] }))
+    const translate = vi.fn(async (texts: string[]) => ({ ok: true as const, texts: [`EN:\n${texts[0]}`] }))
     const watcher = createInputTranslation({ translate, cancel: () => undefined, t: (k) => zhCN[k] })
     focusEditable(input)
     trustedInput(input, '第一段草稿')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     const copyBtn = popoverShadow()!.querySelector<HTMLButtonElement>('button[data-action="copy"]')!
     expect(copyBtn.textContent).toBe(zhCN.wtToolbarCopy)
     trustedClick(copyBtn)
     trustedInput(input, '第二段全新草稿')
-    await vi.advanceTimersByTimeAsync(650)
+    await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
     resolveCopy?.(true)
     await Promise.resolve()
@@ -3607,7 +3643,7 @@ describe('外观、标题、焦点与生命周期', () => {
       setHidden(false)
       document.dispatchEvent(new Event('visibilitychange'))
       trustedInput(input, '在途隐藏草稿')
-      await vi.advanceTimersByTimeAsync(650)
+      await vi.advanceTimersByTimeAsync(1000)
       await Promise.resolve()
       expect(translate).toHaveBeenCalledTimes(1)
       setHidden(true)
@@ -3636,9 +3672,9 @@ describe('外观、标题、焦点与生命周期', () => {
     try {
       focusEditable(input)
       trustedInput(input, '待替换草稿')
-      await vi.advanceTimersByTimeAsync(650)
+      await vi.advanceTimersByTimeAsync(600)
       await Promise.resolve()
-      expect(popoverShadow()?.querySelector('.auto-hint')?.textContent).toContain('秒后自动替换')
+      expect(translate).not.toHaveBeenCalled()
       expect(input.value).toBe('待替换草稿')
       hidden(true)
       visibility.mockReturnValue('hidden')
@@ -3649,7 +3685,7 @@ describe('外观、标题、焦点与生命周期', () => {
       document.dispatchEvent(new Event('visibilitychange'))
       await vi.advanceTimersByTimeAsync(5000)
       expect(input.value).toBe('待替换草稿')
-      expect(translate).toHaveBeenCalledTimes(1)
+      expect(translate).not.toHaveBeenCalled()
       expect(isPopoverOpen()).toBe(false)
     } finally {
       hidden(false)

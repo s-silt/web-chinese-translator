@@ -100,8 +100,8 @@ describe.skipIf(!App)('设置页组件', () => {
       expect(wrapper.get('[data-test="wt-general-view"]').isVisible()).toBe(true)
       expect(wrapper.get('[data-test="wt-model-view"]').isVisible()).toBe(false)
       expect(wrapper.get('[data-test="wt-sites-view"]').isVisible()).toBe(false)
-      expect(wrapper.findAll('[role="switch"]')).toHaveLength(32)
-      expect(wrapper.get('[data-test="wt-video-subtitles-toggle"] [role="switch"]').attributes('aria-checked')).toBe('false')
+      expect(wrapper.findAll('[role="switch"]')).toHaveLength(31)
+      expect(wrapper.find('[data-test="wt-video-subtitles-toggle"]').exists()).toBe(false)
       expect(wrapper.get('[data-test="wt-input-translation-toggle"] [role="switch"]').attributes('aria-checked')).toBe('false')
       expect(wrapper.get('[data-test="wt-dict-devin"]').find('[role="switch"]').exists()).toBe(true)
       expect(wrapper.get('[data-test="wt-dict-cursor"]').find('[role="switch"]').exists()).toBe(true)
@@ -112,7 +112,7 @@ describe.skipIf(!App)('设置页组件', () => {
       expect(wrapper.findAll('[role="combobox"]')).toHaveLength(14)
       expect(wrapper.find('[data-test="wt-assist-mode"]').exists()).toBe(true)
       expect(wrapper.find('[data-test="wt-shortcuts"]').exists()).toBe(true)
-      expect(wrapper.text()).toContain('输入翻译快捷键在自动弹窗关闭时仍可直接替换')
+      expect(wrapper.text()).toContain('已开启的停输自动替换不受影响')
     })
 
     it('标题后紧跟版本号（不在标题内）', async () => {

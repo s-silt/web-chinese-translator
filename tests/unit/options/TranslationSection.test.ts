@@ -185,7 +185,7 @@ describe('悬浮入口选项', () => {
 })
 
 describe('快捷键展示与管理', () => {
-  it('commands.getAll 返回三项时渲染三行命令加一行替换键，空 shortcut 显示未设置，点击管理调用 tabs.create（Edge 用 edge://）', async () => {
+  it('commands.getAll 返回旧命令时只渲染整页与划词命令，空 shortcut 显示未设置，点击管理调用 tabs.create（Edge 用 edge://）', async () => {
     replies({
       'wt:get-config': () => ({ ok: true, config: CONFIG, keyState: 'ready' }),
     })
@@ -200,15 +200,11 @@ describe('快捷键展示与管理', () => {
     await flushPromises()
     const block = wrapper.get('[data-test="wt-shortcuts"]')
     const items = block.findAll('.wt-shortcut-list > li')
-    expect(items).toHaveLength(4)
+    expect(items).toHaveLength(2)
     expect(items[0]!.text()).toContain(en.wtCmdTogglePage)
     expect(items[0]!.get('kbd').text()).toBe('Alt+T')
     expect(items[1]!.text()).toContain(en.wtCmdTranslateSelection)
     expect(items[1]!.get('kbd').text()).toBe(en.wtShortcutUnset)
-    expect(items[2]!.text()).toContain(en.wtCmdTranslateInput)
-    expect(items[2]!.get('kbd').text()).toBe('Alt+Y')
-    expect(items[3]!.text()).toContain(en.wtShortcutReplaceDraft)
-    expect(items[3]!.get('kbd').text()).toBe('Tab')
     await wrapper.get('[data-test="wt-shortcuts-manage"]').trigger('click')
     await flushPromises()
     expect(create).toHaveBeenCalledWith({ url: 'chrome://extensions/shortcuts' })
@@ -224,7 +220,7 @@ describe('快捷键展示与管理', () => {
     wrapper.unmount()
   })
 
-  it('commands.getAll 不存在时仍渲染替换快捷键这一行', async () => {
+  it('commands.getAll 不存在时不显示旧替换快捷键', async () => {
     replies({
       'wt:get-config': () => ({ ok: true, config: CONFIG, keyState: 'ready' }),
     })
@@ -235,8 +231,7 @@ describe('快捷键展示与管理', () => {
       await flushPromises()
       const block = wrapper.get('[data-test="wt-shortcuts"]')
       const items = block.findAll('.wt-shortcut-list > li')
-      expect(items).toHaveLength(1)
-      expect(items[0]!.text()).toContain(en.wtShortcutReplaceDraft)
+      expect(items).toHaveLength(0)
       wrapper.unmount()
     } finally {
       Object.defineProperty(fakeBrowser, 'commands', { value: original, configurable: true, writable: true })
@@ -259,85 +254,24 @@ describe('快捷键展示与管理', () => {
     expect(items.map((item) => item.text())).toEqual([
       zhCN.wtCmdTogglePage,
       zhCN.wtCmdTranslateSelection,
-      zhCN.wtCmdTranslateInput,
-      zhCN.wtShortcutReplaceDraft,
     ])
     applyUiPreferences({ uiLanguage: 'en', theme: 'auto', uiStyle: 'classic' })
     await flushPromises()
     expect(items.map((item) => item.text())).toEqual([
       en.wtCmdTogglePage,
       en.wtCmdTranslateSelection,
-      en.wtCmdTranslateInput,
-      en.wtShortcutReplaceDraft,
     ])
     wrapper.unmount()
   })
 
-  it('替换快捷键录制：支持合法组合键、Escape/失焦取消、非法按键提示、恢复默认与不使用快捷键', async () => {
-    applyUiPreferences({ uiLanguage: 'zh-CN', theme: 'auto', uiStyle: 'classic' })
-    const saved: Record<string, unknown>[] = []
-    let current: TranslationConfig = { ...CONFIG }
-    replies({
-      'wt:get-config': () => ({ ok: true, config: current, keyState: 'ready' }),
-      'wt:save-config': (message) => {
-        saved.push(message)
-        current = { ...current, ...(message.patch as Partial<TranslationConfig>) }
-        return { ok: true, config: current, keyState: 'ready' }
-      },
-    })
+  it('不再提供替换快捷键录制或默认键入口', async () => {
+    replies({ 'wt:get-config': () => ({ ok: true, config: CONFIG, keyState: 'ready' }) })
     const wrapper = mount(TranslationSection)
-    try {
-      await flushPromises()
-      const recordBtn = wrapper.get('[data-test="wt-replace-key-record"]')
-      const resetBtn = wrapper.get('[data-test="wt-replace-key-reset"]')
-      const disableBtn = wrapper.get('[data-test="wt-replace-key-disable"]')
-      const keyVal = wrapper.get('[data-test="wt-replace-key-value"]')
-
-      expect(keyVal.text()).toBe('Tab')
-      expect(recordBtn.text()).toBe(zhCN.wtShortcutChange)
-
-      // 进入录制，按 Escape 取消
-      await recordBtn.trigger('click')
-      expect(recordBtn.text()).toBe(zhCN.wtShortcutRecording)
-      await recordBtn.trigger('keydown', { key: 'Escape' })
-      expect(recordBtn.text()).toBe(zhCN.wtShortcutChange)
-      expect(saved).toHaveLength(0)
-
-      // 进入录制，失焦取消
-      await recordBtn.trigger('click')
-      expect(recordBtn.text()).toBe(zhCN.wtShortcutRecording)
-      await recordBtn.trigger('blur')
-      expect(recordBtn.text()).toBe(zhCN.wtShortcutChange)
-
-      // 进入录制，按非法单键 a 提示错误且不保存
-      await recordBtn.trigger('click')
-      await recordBtn.trigger('keydown', { key: 'a' })
-      expect(wrapper.get('[data-test="wt-replace-key-error"]').text()).toBe(zhCN.wtShortcutInvalid)
-      expect(saved).toHaveLength(0)
-
-      // 进入录制，只按修饰键不结束录制，接着按 Ctrl+Enter 保存
-      await recordBtn.trigger('click')
-      await recordBtn.trigger('keydown', { key: 'Control', ctrlKey: true })
-      expect(recordBtn.text()).toBe(zhCN.wtShortcutRecording)
-      await recordBtn.trigger('keydown', { key: 'Enter', ctrlKey: true })
-      await flushPromises()
-      expect(saved.at(-1)?.patch).toEqual({ inputReplaceKey: 'Ctrl+Enter' })
-      expect(keyVal.text()).toBe('Ctrl+Enter')
-
-      // 不使用快捷键
-      await disableBtn.trigger('click')
-      await flushPromises()
-      expect(saved.at(-1)?.patch).toEqual({ inputReplaceKey: '' })
-      expect(keyVal.text()).toBe(zhCN.wtShortcutDisabled)
-
-      // 恢复默认（Tab）
-      await resetBtn.trigger('click')
-      await flushPromises()
-      expect(saved.at(-1)?.patch).toEqual({ inputReplaceKey: 'Tab' })
-      expect(keyVal.text()).toBe('Tab')
-    } finally {
-      wrapper.unmount()
+    await flushPromises()
+    for (const id of ['wt-replace-key-row', 'wt-replace-key-record', 'wt-replace-key-reset', 'wt-replace-key-disable']) {
+      expect(wrapper.find(`[data-test="${id}"]`).exists()).toBe(false)
     }
+    wrapper.unmount()
   })
 
   it('切换语言同步更新接口类型、请求地址预览和高级设置标签，无关回复省略 customHeadersState 时保留已保存状态', async () => {
@@ -387,7 +321,7 @@ describe('快捷键展示与管理', () => {
   })
 })
 
-describe('视频字幕与输入翻译开关与权限', () => {
+describe('输入翻译开关与权限', () => {
   it('默认关闭并展示功能说明与限制，启用时申请全站权限，拒绝时不保存，关闭时不申请权限', async () => {
     applyUiPreferences({ uiLanguage: 'zh-CN', theme: 'auto', uiStyle: 'classic' })
     const saved: Record<string, unknown>[] = []
@@ -411,27 +345,18 @@ describe('视频字幕与输入翻译开关与权限', () => {
     const wrapper = mount(TranslationSection)
     try {
       await flushPromises()
-      expect(wrapper.text()).toContain(zhCN.wtVideoSubtitles)
-      expect(wrapper.text()).toContain(zhCN.wtVideoSubtitlesHint)
+      expect(wrapper.find('[data-test="wt-video-subtitles-toggle"]').exists()).toBe(false)
       expect(wrapper.text()).toContain(zhCN.wtInputTranslation)
       expect(wrapper.text()).toContain(zhCN.wtInputTranslationHint)
 
-      const subToggle = wrapper.get('[data-test="wt-video-subtitles-toggle"] [role="switch"]')
       const inToggle = wrapper.get('[data-test="wt-input-translation-toggle"] [role="switch"]')
-      expect(subToggle.attributes('aria-checked')).toBe('false')
       expect(inToggle.attributes('aria-checked')).toBe('false')
 
-      await subToggle.trigger('click')
+      await inToggle.trigger('click')
       await flushPromises()
       expect(request).toHaveBeenCalledWith({ origins: ['http://*/*', 'https://*/*'] })
       expect(saved).toHaveLength(0)
-      expect(subToggle.attributes('aria-checked')).toBe('false')
       expect(wrapper.get('.wt-status').text()).toBe(zhCN.wtPermissionDenied)
-
-      await subToggle.trigger('click')
-      await flushPromises()
-      expect(subToggle.attributes('aria-checked')).toBe('true')
-      expect(saved.at(-1)?.patch).toEqual({ videoSubtitlesEnabled: true })
 
       await inToggle.trigger('click')
       await flushPromises()
@@ -439,11 +364,13 @@ describe('视频字幕与输入翻译开关与权限', () => {
       expect(saved.at(-1)?.patch).toEqual({ inputTranslationEnabled: true })
 
       request.mockClear()
-      await subToggle.trigger('click')
+      await inToggle.trigger('click')
       await flushPromises()
       expect(request).not.toHaveBeenCalled()
-      expect(subToggle.attributes('aria-checked')).toBe('false')
-      expect(saved.at(-1)?.patch).toEqual({ videoSubtitlesEnabled: false })
+      expect(inToggle.attributes('aria-checked')).toBe('false')
+      expect(saved.at(-1)?.patch).toEqual({ inputTranslationEnabled: false })
+      await inToggle.trigger('click')
+      await flushPromises()
 
       // 输入翻译源语言下拉保存，且源与目标相同时显示警告提示
       const sourceSelect = wrapper.get('[data-test="wt-input-source-language"]')
@@ -461,7 +388,7 @@ describe('视频字幕与输入翻译开关与权限', () => {
     }
   })
 
-  it('输入翻译替换方式：模式切换保存、预设延迟保存、自定义秒数失焦/回车保存、非预设值回填与非法值提示', async () => {
+  it('输入翻译无需快捷键：预设延迟保存、自定义秒数失焦/回车保存、非预设值回填与非法值提示', async () => {
     applyUiPreferences({ uiLanguage: 'zh-CN', theme: 'auto', uiStyle: 'classic' })
     const saved: Record<string, unknown>[] = []
     let current: TranslationConfig = { ...CONFIG }
@@ -476,21 +403,8 @@ describe('视频字幕与输入翻译开关与权限', () => {
     const wrapper = mount(TranslationSection)
     try {
       await flushPromises()
-      // 默认 hotkey 模式，不显示等待时间下拉
-      const modeSelect = wrapper.get('[data-test="wt-input-replace-mode"]')
-      expect(modeSelect.text()).toContain(zhCN.wtInputReplaceModeHotkey)
-      expect(wrapper.find('[data-test="wt-input-auto-delay"]').exists()).toBe(false)
-      expect(wrapper.text()).toContain(zhCN.wtInputReplaceModeHint)
-
-      // 切换为 auto 模式并保存
-      await modeSelect.trigger('click')
-      const modeListId = modeSelect.attributes('aria-controls')!
-      const autoOption = wrapper
-        .findAll(`#${modeListId} [role="option"]`)
-        .find((option) => option.text() === zhCN.wtInputReplaceModeAuto)
-      await autoOption?.trigger('click')
-      await flushPromises()
-      expect(saved.at(-1)?.patch).toEqual({ inputReplaceMode: 'auto' })
+      expect(wrapper.find('[data-test="wt-input-replace-mode"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="wt-replace-key-row"]').exists()).toBe(false)
 
       // 显示等待时间下拉，默认 1 秒，不显示自定义输入框
       const delaySelect = wrapper.get('[data-test="wt-input-auto-delay"]')

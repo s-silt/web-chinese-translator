@@ -39,7 +39,6 @@ import {
   type ModelSnapshot,
 } from './model-state'
 import { clearPageContexts, installContextExpiry, recentPageContexts, recordPageContext } from './context-memory'
-import { normalizeHotkey } from './input-hotkey'
 import { isPageId, type PageContext, type TranslationContext } from './reading-context'
 import {
   isApiType,
@@ -100,10 +99,8 @@ import {
   syncSiteTabs,
 } from './registration'
 import {
-  INPUT_FRAME_SCRIPT_FILES,
   inputFrameUrl,
   parseInputFrameDocument,
-  readInputFrameDocuments,
   readInputFrameSnapshot,
 } from './input-frame'
 import { documentEditorInMainWorld, isDocumentEditorResult } from './document-editor'
@@ -447,7 +444,7 @@ interface ManualGrant {
 interface DispatchPolicy {
   origin?: string
   auto?: boolean
-  feature?: 'subtitle' | 'input'
+  feature?: 'input'
   manualInput?: boolean
   assist?: AssistInput
   sensitive?: boolean
@@ -486,9 +483,6 @@ async function assertDispatchAllowed(
       !(policy.feature === 'input' && (policy.manualInput === true || config.inputReplaceMode === 'auto'))
     ) {
       throw new TranslationError('自动弹窗已关闭')
-    }
-    if (policy.feature === 'subtitle' && !config.videoSubtitlesEnabled) {
-      throw new TranslationError('未开启视频字幕翻译')
     }
     if (policy.feature === 'input' && !config.inputTranslationEnabled) {
       throw new TranslationError('未开启输入翻译')
@@ -992,7 +986,6 @@ async function saveConfig(
     const proactiveOn = selectionOn && !toolbarOn && (patch.proactiveAssistEnabled ?? previous.proactiveAssistEnabled)
     if (
       patch.selectionPopupEnabled === true ||
-      patch.videoSubtitlesEnabled === true ||
       patch.inputTranslationEnabled === true
     ) {
       const allowed = await Promise.all(['http://*/*', 'https://*/*'].map(patternAllowed))
@@ -1066,14 +1059,9 @@ async function saveConfig(
       proactiveAssistEnabled: proactiveOn,
       floatingButtonEnabled: patch.floatingButtonEnabled ?? previous.floatingButtonEnabled,
       autoInteractionEnabled: patch.autoInteractionEnabled ?? previous.autoInteractionEnabled,
-      videoSubtitlesEnabled: patch.videoSubtitlesEnabled ?? previous.videoSubtitlesEnabled,
       inputTranslationEnabled: patch.inputTranslationEnabled ?? previous.inputTranslationEnabled,
       inputTargetLanguage: patch.inputTargetLanguage ?? previous.inputTargetLanguage,
       inputSourceLanguage: patch.inputSourceLanguage ?? previous.inputSourceLanguage,
-      inputReplaceKey:
-        patch.inputReplaceKey !== undefined
-          ? normalizeHotkey(patch.inputReplaceKey) ?? previous.inputReplaceKey
-          : previous.inputReplaceKey,
       inputReplaceMode:
         patch.inputReplaceMode !== undefined && isInputReplaceMode(patch.inputReplaceMode)
           ? patch.inputReplaceMode
@@ -1341,7 +1329,7 @@ async function handleTranslate(
     if (controller.cancellationHint === 'settings') return { ...reply, error: TRANSLATION_CONFIG_CHANGED_ERROR }
     return reply
   }
-  const feature = message.mode === 'subtitle' || message.mode === 'input' ? message.mode : undefined
+  const feature = message.mode === 'input' ? message.mode : undefined
   const manualInput = feature === 'input' && message.manualInput === true
   const isInteractive = message.mode === 'selection'
   if (feature !== undefined) {
@@ -1458,21 +1446,11 @@ async function handleTranslate(
             ...snapshot,
             config: {
               ...snapshot.config,
-              sourceLanguage: feature === 'input' ? snapshot.config.inputSourceLanguage : 'auto',
-              targetLanguage:
-                feature === 'input'
-                  ? snapshot.config.inputTargetLanguage
-                  : snapshot.config.targetLanguage === 'zh-TW'
-                    ? 'zh-TW'
-                    : 'zh-CN',
+              sourceLanguage: snapshot.config.inputSourceLanguage,
+              targetLanguage: snapshot.config.inputTargetLanguage,
             },
           }
-    const queueMode =
-      message.mode === 'input'
-        ? 'selection'
-        : message.mode === 'subtitle'
-          ? 'auto'
-          : message.mode
+    const queueMode = message.mode === 'input' ? 'selection' : message.mode
     const outcome = await requestTranslation(
       requestSnapshot,
       queueMode,
@@ -1963,7 +1941,6 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
             selection: false,
             smart: false,
             floating: false,
-            subtitles: false,
             input: allowed && modelReady,
           },
         } satisfies TranslationReply<'wt:page-modes'>
@@ -2004,7 +1981,6 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
           selection,
           smart: selection && !config.selectionToolbarEnabled && config.proactiveAssistEnabled,
           floating: interactiveAllowed && config.floatingButtonEnabled,
-          subtitles: modelAllowed && config.autoInteractionEnabled && config.videoSubtitlesEnabled,
           input: modelAllowed && config.inputTranslationEnabled,
           ...(fixed ? { fixedEntries: merged } : {}),
         },
@@ -2570,7 +2546,7 @@ function installCommandListener(): void {
     browser.commands.onCommand.addListener((command, passedTab) => {
       void (async () => {
         try {
-          if (command !== 'toggle-page-translation' && command !== 'translate-selection' && command !== 'translate-input') return
+          if (command !== 'toggle-page-translation' && command !== 'translate-selection') return
           const tab =
             passedTab ??
             (typeof browser.tabs?.query === 'function'
@@ -2580,75 +2556,6 @@ function installCommandListener(): void {
           const tabId = tab.id
           const url = tab.url
           if (await shortcutBlocked(url, tabId)) return
-          if (command === 'translate-input') {
-            const config = await getTranslationConfig()
-            if (!config.inputTranslationEnabled) return
-            const documents = await readInputFrameDocuments(tabId)
-            const candidates = documents.filter(
-              (item) =>
-                item.snapshot.focused &&
-                item.snapshot.topUrl === url &&
-                ((item.frameId === 0 && item.snapshot.url === url) ||
-                  (item.frameId > 0 && inputFrameUrl(url, item.snapshot.url) !== undefined)),
-            )
-            if (candidates.length !== 1) {
-              await openTextTranslationWindow().catch(reportError)
-              return
-            }
-            const chosen = candidates[0]!
-            if (chosen.frameId > 0) {
-              const effectiveUrl = inputFrameUrl(url, chosen.snapshot.url)
-              if (effectiveUrl === undefined) {
-                await openTextTranslationWindow().catch(reportError)
-                return
-              }
-              const candidateSender: MessageSender = {
-                id: browser.runtime.id,
-                tab: { id: tabId, url, incognito: false } as Browser.tabs.Tab,
-                frameId: chosen.frameId,
-                documentId: chosen.documentId,
-                url: chosen.snapshot.url,
-                origin: normalizeOrigin(effectiveUrl),
-              }
-              if (!(await inputFrameAllowed(candidateSender, config))) return
-              if (typeof browser.scripting?.executeScript !== 'function') {
-                await openTextTranslationWindow().catch(reportError)
-                return
-              }
-              try {
-                await browser.scripting.executeScript({
-                  target: { tabId, documentIds: [chosen.documentId] },
-                  files: INPUT_FRAME_SCRIPT_FILES,
-                  injectImmediately: true,
-                })
-              } catch {
-                await openTextTranslationWindow().catch(reportError)
-                return
-              }
-            } else if (typeof browser.scripting?.executeScript === 'function') {
-              await browser.scripting
-                .executeScript({
-                  target: { tabId, documentIds: [chosen.documentId] },
-                  files: SITE_SCRIPT_FILES,
-                  injectImmediately: true,
-                })
-                .catch(() => undefined)
-            }
-            const freshTab = await browser.tabs.get(tabId).catch(() => undefined)
-            if (freshTab === undefined || freshTab.url !== url) return
-            if (await shortcutBlocked(url, tabId)) return
-            const reply = await browser.tabs
-              .sendMessage(
-                tabId,
-                { type: 'wt:translate-input' } satisfies ContentTranslationMessage,
-                { frameId: chosen.frameId, documentId: chosen.documentId },
-              )
-              .catch(() => undefined)
-            const accepted =
-              isContentTranslationReply(reply, { type: 'wt:translate-input' }) && reply.ok
-            if (!accepted) await openTextTranslationWindow().catch(reportError)
-            return
-          }
           if (command === 'toggle-page-translation') {
             const isGithub = parseGitHubUrl(url) !== undefined
             const statusMessage: ContentTranslationMessage = { type: 'wt:status' }

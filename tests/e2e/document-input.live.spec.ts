@@ -7,9 +7,9 @@ import {
   inspectClosedShadowPage,
   installClosedShadowInspection,
   NATIVE_ACCESSIBILITY_ARGS,
-  sendOwnedBrowserAltShortcut,
   test,
   waitForSiteScriptRegistration,
+  waitForSiteContentReady,
 } from './fixtures'
 import { startMock } from './mock-server'
 
@@ -88,26 +88,6 @@ async function openOptions(context: BrowserContext, extensionId: string): Promis
   const options = await context.newPage()
   await options.goto(`chrome-extension://${extensionId}/options.html#wt-title`)
   return options
-}
-
-async function sendTranslateInput(
-  extensionPage: Page,
-  url: string,
-  frameId?: number,
-): Promise<unknown> {
-  return extensionPage.evaluate(
-    async ({ targetUrl, frame }) => {
-      const { chrome } = globalThis as unknown as { chrome: ChromeApiLike }
-      const [tab] = await chrome.tabs.query({ url: targetUrl })
-      if (tab?.id === undefined) throw new Error(`owned tab not found: ${targetUrl}`)
-      return chrome.tabs.sendMessage(
-        tab.id,
-        { type: 'wt:translate-input' },
-        frame === undefined ? undefined : { frameId: frame },
-      )
-    },
-    { targetUrl: url, frame: frameId },
-  )
 }
 
 async function blockExternalWrites(context: BrowserContext): Promise<string[]> {
@@ -324,7 +304,7 @@ headedTest.describe('文档输入与文本窗：真实扩展 + 真实 Chromium',
     }
   })
 
-  headedTest('CKEditor5（texteditor.cn）：原生 Alt+Y 纯文本替换并可还原，富文本仅预览不写回', async ({
+  headedTest('CKEditor5（texteditor.cn）：可信停输纯文本自动替换并可还原，富文本仅预览不写回', async ({
     context,
     extensionId,
     extension,
@@ -387,56 +367,47 @@ headedTest.describe('文档输入与文本窗：真实扩展 + 真实 Chromium',
           else editor.data?.set(source)
         }, html)
 
-      const focusCk = (): Promise<void> =>
-        page.evaluate(() => {
-          const candidates = [
-            ...document.querySelectorAll('.ck-editor__editable'),
-            ...document.querySelectorAll('[contenteditable="true"]'),
-          ]
-          const el = candidates.find(
-            (node) => (node as { ckeditorInstance?: unknown }).ckeditorInstance !== undefined,
-          ) as HTMLElement | undefined
-          el?.focus()
-        })
+      const focusCk = (): Promise<void> => page.locator('.ck-editor__editable').first().click()
 
-      await setCk('<p>你好</p><p>第二行</p>')
+      await setCk('<p>你好</p>')
       await expect.poll(readCk).toContain('你好')
-      const originalHtml = await readCk()
       await focusCk()
-
-      await inspectClosedShadowPage(page)
-      const docHost = page.locator('[data-wt-root]:has([data-action="hint"])')
-      const status = docHost.locator('[role="status"]')
-      const shortcut = await sendOwnedBrowserAltShortcut(page, 'Y', async () => {
-        await inspectClosedShadowPage(page)
-        return (await status.isVisible().catch(() => false)) && (await status.textContent()) === 'Hello\nWorld'
-      })
-      await test.info().attach('native-input-shortcut', {
-        body: Buffer.from(JSON.stringify(shortcut)),
-        contentType: 'application/json',
-      })
-      expect(shortcut.sent, shortcut.reason).toBe(true)
+      await page.keyboard.press('End')
+      await page.keyboard.press('Enter')
+      await page.keyboard.type('第二行')
+      await expect.poll(readCk).toContain('第二行')
+      const originalHtml = await readCk()
+      expect(originalHtml).toContain('你好')
+      expect(originalHtml).toContain('第二行')
 
       await expect
         .poll(async () => {
-          await inspectClosedShadowPage(page)
-          return (await status.isVisible().catch(() => false)) ? status.textContent() : ''
-        }, { timeout: 15000 })
-        .toBe('Hello\nWorld')
-      const replace = docHost.locator('button[data-action="replace"]')
-      await expect(replace).toBeVisible()
-      await page.screenshot({ path: test.info().outputPath('ckeditor-preview.png') })
-
-      await replace.click()
-      await expect.poll(readCk).toContain('Hello')
+          const current = (await readCk()) ?? ''
+          return current.includes('Hello') && current.includes('World') ? current : ''
+        }, { timeout: 20_000 })
+        .not.toBe('')
       const afterReplace = await readCk()
+      expect(afterReplace).toContain('Hello')
       expect(afterReplace).toContain('World')
       expect(afterReplace).not.toContain('你好')
+
+      await inspectClosedShadowPage(page)
+      const docHost = page.locator('[data-wt-root]:has(button[data-action="restore"])').first()
+      const status = docHost.locator('[role="status"]')
+      const restore = docHost.locator('button[data-action="restore"]')
+      const replace = docHost.locator('button[data-action="replace"]')
+      await expect(restore).toBeVisible()
+      await expect(replace).toBeHidden()
+      await expect(status).not.toHaveText('Hello\nWorld')
+      await expect(status).not.toHaveText('')
       await page.screenshot({ path: test.info().outputPath('ckeditor-replaced.png') })
 
-      await docHost.locator('button[data-action="restore"]').click()
+      const callsBeforeRestore = api.calls.length
+      await restore.click()
       await expect.poll(readCk).toBe(originalHtml)
       await expect(docHost.locator('.popover')).toBeHidden()
+      await page.waitForTimeout(1_200)
+      expect(api.calls.length).toBe(callsBeforeRestore)
       await page.screenshot({ path: test.info().outputPath('ckeditor-restored.png') })
 
       await focusCk()
@@ -445,17 +416,23 @@ headedTest.describe('文档输入与文本窗：真实扩展 + 真实 Chromium',
 
       await setCk('<p><strong>你好</strong></p>')
       await focusCk()
-      await sendTranslateInput(extension.page, targetUrl, 0)
+      await page.keyboard.press('End')
+      await page.keyboard.type('世界')
+      await expect.poll(readCk).toContain('你好世界')
+      const previewHost = docHost
+      const previewStatus = previewHost.locator('[role="status"]')
       await expect
         .poll(async () => {
           await inspectClosedShadowPage(page)
-          return (await status.isVisible().catch(() => false)) ? status.textContent() : ''
-        }, { timeout: 15000 })
-        .toBe('EN:你好')
-      await expect(replace).toBeHidden()
+          return (await previewStatus.isVisible().catch(() => false)) ? previewStatus.textContent() : ''
+        }, { timeout: 20_000 })
+        .toBe('EN:你好世界')
+      await expect(previewHost.locator('button[data-action="replace"]')).toBeHidden()
+      await expect(previewHost.locator('button[data-action="restore"]')).toBeHidden()
+      await expect(previewHost.locator('button[data-action="copy"]')).toBeVisible()
       const boldState = await readCk()
       expect(boldState).toContain('strong')
-      expect(boldState).toContain('你好')
+      expect(boldState).toContain('你好世界')
 
       expect(blockedWrites.filter((entry) => entry.includes('127.0.0.1'))).toEqual([])
       expect(api.calls.length).toBeGreaterThan(0)
@@ -464,7 +441,7 @@ headedTest.describe('文档输入与文本窗：真实扩展 + 真实 Chromium',
     }
   })
 
-  headedTest('TinyMCE4（cn.anotepad.com/richtext）：原生 Alt+Y 按需注入帧桥读写并可还原，无外发保存', async ({
+  headedTest('TinyMCE4（cn.anotepad.com/richtext）：可信停输帧桥自动替换并可还原，无外发保存', async ({
     context,
     extensionId,
     extension,
@@ -529,7 +506,7 @@ headedTest.describe('文档输入与文本窗：真实扩展 + 真实 Chromium',
       const tinyScope = tinyInTop ? page : editorFrame
       await tinyScope.evaluate(() => {
         const tiny = (window as { tinymce?: { editors?: Array<{ setContent(html: string): void }> } }).tinymce
-        tiny?.editors?.[0]?.setContent('<p>你好<br>第二行</p>')
+        tiny?.editors?.[0]?.setContent('<p>你好</p>')
       })
       const readTinyText = (): Promise<string> =>
         tinyScope.evaluate(() => {
@@ -537,41 +514,26 @@ headedTest.describe('文档输入与文本窗：真实扩展 + 真实 Chromium',
           return tiny?.editors?.[0]?.getContent({ format: 'text' }) ?? ''
         })
       await expect.poll(readTinyText).toContain('你好')
-      const originalText = await readTinyText()
 
       const editorScope = page.frameLocator('iframe[data-wt-e2e-frame]')
-      const docHost = editorScope.locator('[data-wt-root]:has([data-action="hint"])')
-      const status = docHost.locator('[role="status"]')
-
       const body = editorFrame.locator('.mce-content-body')
       await body.click()
-      const shortcut = await sendOwnedBrowserAltShortcut(page, 'Y', async () => {
-        await inspectClosedShadowPage(page)
-        return (await status.isVisible().catch(() => false)) && (await status.textContent()) === 'Hello\nWorld'
-      })
-      await test.info().attach('native-input-shortcut', {
-        body: Buffer.from(JSON.stringify(shortcut)),
-        contentType: 'application/json',
-      })
-      expect(shortcut.sent, shortcut.reason).toBe(true)
-
+      await page.keyboard.press('End')
+      await page.keyboard.press('Shift+Enter')
+      await page.keyboard.type('第二行')
       await expect
         .poll(async () => {
-          await inspectClosedShadowPage(page)
-          return (await status.isVisible().catch(() => false)) ? status.textContent() : ''
-        }, { timeout: 20000 })
-        .toBe('Hello\nWorld')
-
-      const replace = docHost.locator('button[data-action="replace"]')
-      await expect(replace).toBeVisible()
-      await page.screenshot({ path: test.info().outputPath('tinymce-preview.png') })
-      await replace.click()
+          const text = await readTinyText()
+          return text.includes('你好') && text.includes('第二行') ? text : ''
+        })
+        .not.toBe('')
+      const originalText = await readTinyText()
 
       await expect
         .poll(async () => {
           const text = await readTinyText()
           return text.includes('Hello') && text.includes('World') ? text : ''
-        }, { timeout: 20000 })
+        }, { timeout: 20_000 })
         .not.toBe('')
       const finalText = await readTinyText()
       expect(finalText).not.toContain('你好')
@@ -580,11 +542,23 @@ headedTest.describe('文档输入与文本窗：真实扩展 + 真实 Chromium',
         return tiny?.editors?.[0]?.getContent() ?? ''
       })
       expect(finalHtml).toContain('Hello')
+
+      await inspectClosedShadowPage(page)
+      const docHost = editorScope.locator('[data-wt-root]:has(button[data-action="restore"])').first()
+      const status = docHost.locator('[role="status"]')
+      const restore = docHost.locator('button[data-action="restore"]')
+      await expect(restore).toBeVisible()
+      await expect(docHost.locator('button[data-action="replace"]')).toBeHidden()
+      await expect(status).not.toHaveText('Hello\nWorld')
+      await expect(status).not.toHaveText('')
       await page.screenshot({ path: test.info().outputPath('tinymce-replaced.png') })
 
-      await docHost.locator('button[data-action="restore"]').click()
+      const callsBeforeRestore = api.calls.length
+      await restore.click()
       await expect.poll(readTinyText).toBe(originalText)
       await expect(docHost.locator('.popover')).toBeHidden()
+      await page.waitForTimeout(1_200)
+      expect(api.calls.length).toBe(callsBeforeRestore)
       await page.screenshot({ path: test.info().outputPath('tinymce-restored.png') })
 
       const blockedLocal = blockedWrites.filter((entry) => entry.includes('127.0.0.1'))
@@ -595,7 +569,7 @@ headedTest.describe('文档输入与文本窗：真实扩展 + 真实 Chromium',
     }
   })
   for (const version of [5, 6] as const) {
-    headedTest(`CodeMirror ${version} 官方线上编辑器：预览、替换、还原与继续编辑`, async ({ context, extensionId, extension }, info) => {
+    headedTest(`CodeMirror ${version} 官方线上编辑器：可信停输自动替换、还原与继续编辑`, async ({ context, extensionId, extension }, info) => {
       const api = await startMock()
       await blockExternalWrites(context)
       try {
@@ -608,6 +582,7 @@ headedTest.describe('文档输入与文本窗：真实扩展 + 真实 Chromium',
         await waitForSiteScriptRegistration(extension.page, { url: targetUrl })
         const page = await context.newPage()
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
+        await waitForSiteContentReady(extension.page, page)
         const editor = page.locator(version === 5 ? '.CodeMirror' : '.cm-content').first()
         await expect(editor).toBeVisible({ timeout: 30000 })
         const readModel = () => page.evaluate((v) => {
@@ -629,38 +604,32 @@ headedTest.describe('文档输入与文本窗：真实扩展 + 真实 Chromium',
         await page.keyboard.press('Control+a')
         await page.keyboard.insertText('你好\n第二行')
         await expect.poll(readModel).toBe('你好\n第二行')
-        const host = page.locator('[data-wt-root]:has([data-action="hint"])')
+        await expect.poll(readModel, { timeout: 20_000 }).toBe('Hello\nWorld')
+        await inspectClosedShadowPage(page)
+        const host = page.locator('[data-wt-root]:has([data-action="restore"])').first()
         const status = host.locator('[role="status"]')
-        const preview = async () => {
-          const shortcut = await sendOwnedBrowserAltShortcut(page, 'Y', async () => {
-            await inspectClosedShadowPage(page)
-            return await status.isVisible().catch(() => false) && await status.textContent() === 'Hello\nWorld'
-          })
-          expect(shortcut.sent, shortcut.reason).toBe(true)
-          await expect.poll(async () => {
-            await inspectClosedShadowPage(page)
-            return await status.isVisible().catch(() => false) ? status.textContent() : ''
-          }).toBe('Hello\nWorld')
-        }
-        await preview()
-        const replace = host.locator('[data-action="replace"]')
-        await expect(replace).toBeVisible()
-        await page.screenshot({ path: info.outputPath(`cm${version}-preview.png`) })
-        await replace.click()
-        await expect.poll(readModel).toBe('Hello\nWorld')
+        await expect(host.locator('[data-action="restore"]')).toBeVisible()
+        await expect(host.locator('[data-action="replace"]')).toBeHidden()
+        await expect(status).not.toHaveText('Hello\nWorld')
+        await expect(status).not.toHaveText('')
         await page.screenshot({ path: info.outputPath(`cm${version}-replaced.png`) })
+        const callsBeforeRestore = api.calls.length
         await host.locator('[data-action="restore"]').click()
         await expect.poll(readModel).toBe('你好\n第二行')
         await expect(host.locator('.popover')).toBeHidden()
+        await page.waitForTimeout(1200)
+        expect(api.calls.length).toBe(callsBeforeRestore)
         await editor.click()
-        await preview()
-        await replace.click()
-        await expect.poll(readModel).toBe('Hello\nWorld')
+        await page.keyboard.press('End')
+        await page.keyboard.insertText('！')
+        await page.keyboard.press('Backspace')
+        await expect.poll(readModel, { timeout: 20_000 }).toBe('Hello\nWorld')
         await page.keyboard.insertText('追加')
         await expect.poll(readModel).toContain('追加')
+        await inspectClosedShadowPage(page)
         await expect(host.locator('[data-action="restore"]')).toBeHidden()
         await page.screenshot({ path: info.outputPath(`cm${version}-continued-edit.png`) })
-        await info.attach('real-site-result', { contentType: 'application/json', body: Buffer.from(JSON.stringify({ targetUrl, version, modelText: await readModel(), mockCalls: api.calls.length, shortcutCoverage: true })) })
+        await info.attach('real-site-result', { contentType: 'application/json', body: Buffer.from(JSON.stringify({ targetUrl, version, modelText: await readModel(), mockCalls: api.calls.length, autoInputCoverage: true })) })
       } finally { await api.close() }
     })
   }

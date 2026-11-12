@@ -121,7 +121,6 @@ export default defineConfig({
           commands: {
             'toggle-page-translation': { suggested_key: { default: 'Alt+T' }, description: '__MSG_cmdTogglePage__' },
             'translate-selection': { suggested_key: { default: 'Alt+S' }, description: '__MSG_cmdTranslateSelection__' },
-            'translate-input': { suggested_key: { default: 'Alt+Y', mac: 'Command+Shift+Y' }, description: '__MSG_cmdTranslateInput__' },
           },
           web_accessible_resources: [
             { resources: ['locale-*.js'], matches: GITHUB_ORIGINS, use_dynamic_url: true },

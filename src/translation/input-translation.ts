@@ -9,7 +9,6 @@ import { copySelectionText } from './clipboard'
 import {
   INPUT_AUTO_REPLACE_DELAY_DEFAULT,
   isInputAutoReplaceDelay,
-  isInputReplaceMode,
   type InputReplaceMode,
 } from './input-replace-mode'
 import {
@@ -26,7 +25,7 @@ import {
   planNativeVideoChatDraft,
   readNativeVideoChatDraft,
 } from './video-chat-input'
-import { DEFAULT_INPUT_REPLACE_KEY, formatHotkey, matchesHotkey, normalizeHotkey } from './input-hotkey'
+import { formatHotkey } from './input-hotkey'
 import type { TranslationReply } from './messages'
 import { closestComposed } from './sites'
 import {
@@ -582,13 +581,11 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   const popoverExit = createSurfaceExit(popover, host)
 
   function currentReplaceKey(): string {
-    const raw = options.replaceKey === undefined ? DEFAULT_INPUT_REPLACE_KEY : options.replaceKey()
-    return normalizeHotkey(raw) ?? DEFAULT_INPUT_REPLACE_KEY
+    return ''
   }
 
   function currentReplaceMode(): InputReplaceMode {
-    const raw = options.replaceMode?.()
-    return isInputReplaceMode(raw) ? raw : 'hotkey'
+    return 'auto'
   }
 
   function currentAutoReplaceDelayMs(): number {
@@ -733,6 +730,12 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     } else popoverExit.hide(finalize)
   }
 
+  function clearPopoverContent(): void {
+    statusNode.textContent = ''
+    statusNode.className = 'status'
+    actions.textContent = ''
+  }
+
   function releasePendingManagedToken(): void {
     const pending = pendingManagedToken
     if (pending === undefined) return
@@ -783,11 +786,6 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     clearAutoReplace()
     cancelInFlight()
     composingField = undefined
-    if (managedBackupStillLive()) {
-      hidePopover(false)
-      return
-    }
-    suppressedSnapshot = undefined
     clearAllState(true)
   }
 
@@ -800,26 +798,10 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     showPopover()
   }
 
-  function renderPreview(translation: string, autoHint?: string): void {
-    popover.setAttribute('aria-busy', 'false')
+  function renderPreview(translation: string, _autoHint?: string): void {
     const normalized = translation.replace(/\r\n?/g, '\n')
     previewVisible = true
     previewTranslation = normalized
-    statusNode.className = 'status'
-    statusNode.textContent = normalized
-    actions.textContent = ''
-    actions.append(replaceButton, copyButton)
-    const hint =
-      autoHint !== undefined && autoHint !== ''
-        ? autoHint
-        : currentReplaceMode() === 'hotkey'
-          ? options.t('wtInputPreviewHint')
-          : ''
-    if (hint !== '') {
-      autoHintNode.textContent = hint
-      actions.append(autoHintNode)
-    }
-    showPopover()
   }
 
   function renderReplaced(inserted: string): void {
@@ -828,9 +810,9 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     previewVisible = false
     previewTranslation = normalized
     statusNode.className = 'status'
-    statusNode.textContent = normalized
+    statusNode.textContent = options.t('wtInputRestoreHint')
     actions.textContent = ''
-    actions.append(restoreButton, copyButton)
+    actions.append(restoreButton)
     showPopover()
   }
 
@@ -890,7 +872,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   }
 
   function startTranslationForField(field: EditableElement, manualInput = false): void {
-    if (disposed || composingField === field) return
+    if (disposed || composingField === field || focusedField() !== field || document.hidden) return
     if (!isCurrentEditable(field)) {
       clearAllState(true)
       return
@@ -927,7 +909,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
         if (inFlightId === requestId) {
           inFlightId = undefined
         }
-        if (!isCurrentEditable(field) || composingField === field || readFieldValue(field) !== snapshotText) {
+        if (!isCurrentEditable(field) || focusedField() !== field || composingField === field || readFieldValue(field) !== snapshotText) {
           if (directReplaceRequestId === requestId) directReplaceRequestId = undefined
           hidePopover(true)
           return
@@ -1001,7 +983,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     // 用户选择「停止输入后自动替换」即表示同意自动处理草稿，不应被「自动弹窗」开关阻断
     const autoMode = currentReplaceMode() === 'auto'
     if (!autoMode && options.autoPreview?.() === false) return
-    const debounceMs = autoMode ? Math.min(DEBOUNCE_MS, currentAutoReplaceDelayMs()) : DEBOUNCE_MS
+    const debounceMs = autoMode ? currentAutoReplaceDelayMs() : DEBOUNCE_MS
     debounceTimer = setTimeout(() => {
       debounceTimer = undefined
       startTranslationForField(field)
@@ -1028,6 +1010,18 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     if (disposed || !event.isTrusted || !(event instanceof InputEvent) || isEventInsidePopover(event)) return
     const field = resolveEditableField(eventTarget(event))
     if (field !== undefined && field === ownInputWrite) return
+    backupState = undefined
+    if (activeField !== undefined) clearAllState(true)
+    if (field !== undefined && (event.inputType === 'historyUndo' || event.inputType === 'historyRedo')) {
+      activeField = field
+      beforeInputTimer = setTimeout(() => {
+        beforeInputTimer = undefined
+        if (!disposed && activeField === field && focusedField() === field) {
+          suppressedSnapshot = { field, value: readFieldValue(field) }
+        }
+      }, 0)
+      return
+    }
     if (field === undefined || !isManagedPlainEditor(field)) return
     clearBeforeInput()
     releasePendingManagedToken()
@@ -1048,6 +1042,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     releasePendingManagedToken()
     const field = resolveEditableField(eventTarget(event))
     if (field === undefined) return
+    backupState = undefined
     composingField = field
     epoch += 1
     clearDebounce()
@@ -1077,24 +1072,6 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
 
   function onKeyDown(event: KeyboardEvent): void {
     if (disposed || !event.isTrusted) return
-    const replaceKey = currentReplaceKey()
-    if (
-      replaceKey !== '' &&
-      matchesHotkey(event, replaceKey) &&
-      previewVisible &&
-      host.style.display !== 'none' &&
-      !replacementBusy &&
-      previewTranslation !== '' &&
-      activeField !== undefined &&
-      resolveEditableField(eventTarget(event)) === activeField &&
-      composingField !== activeField &&
-      readFieldValue(activeField) === snapshotText
-    ) {
-      event.preventDefault()
-      event.stopPropagation()
-      replacePreview()
-      return
-    }
     if (
       event.key === 'Escape' &&
       !event.ctrlKey &&
@@ -1130,10 +1107,16 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     if (isEventInsidePopover(event)) return
     const field = resolveEditableField(eventTarget(event))
     if (field !== undefined && field === ownInputWrite) return
+    backupState = undefined
     clearBeforeInput()
     releasePendingManagedToken()
     if (field === undefined) {
       if (activeField !== undefined) clearAllState(true)
+      return
+    }
+    if (event instanceof InputEvent && (event.inputType === 'historyUndo' || event.inputType === 'historyRedo')) {
+      suppressedSnapshot = { field, value: readFieldValue(field) }
+      clearAllState(true)
       return
     }
     if (event instanceof InputEvent && event.isComposing) {
@@ -1175,7 +1158,6 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
         return
       }
       clearAutoReplace()
-      if (!(docActive instanceof Element) || docActive === document.body || docActive === document.documentElement) return
       leaveFieldForFocus()
     })
   }
@@ -1309,12 +1291,9 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
         renderReplaced(normalizedNext)
         return
       }
-      const translated = expected.replace(/\r\n?/g, '\n')
-      backupState = undefined
       suppressedSnapshot = { field, value: normalizedNext }
-      snapshotText = normalizedNext
-      previewTranslation = translated
-      renderPreview(translated)
+      clearPopoverContent()
+      clearAllState(true)
     } finally {
       replacementBusy = false
     }
@@ -1441,11 +1420,9 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     }
     const outcome = commitPlainDraft(field, inserted, normalizedOriginal)
     if (outcome === 'ok') {
-      backupState = undefined
       suppressedSnapshot = { field, value: normalizedOriginal }
-      snapshotText = normalizedOriginal
-      previewTranslation = inserted
-      renderPreview(inserted)
+      clearPopoverContent()
+      clearAllState(true)
       return
     }
     backupState = undefined
@@ -1500,6 +1477,10 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     if (document.hidden) leaveFieldForFocus()
   }
 
+  function onWindowBlur(): void {
+    if (!disposed) leaveFieldForFocus()
+  }
+
   document.addEventListener('beforeinput', onBeforeInput, true)
   document.addEventListener('compositionstart', onCompositionStart, true)
   document.addEventListener('compositionend', onCompositionEnd, true)
@@ -1510,6 +1491,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   document.addEventListener('visibilitychange', onVisibilityChange)
   window.addEventListener('scroll', onViewportChange, true)
   window.addEventListener('resize', onViewportChange)
+  window.addEventListener('blur', onWindowBlur)
 
   return {
     translateAndReplace,
@@ -1526,6 +1508,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('scroll', onViewportChange, true)
       window.removeEventListener('resize', onViewportChange)
+      window.removeEventListener('blur', onWindowBlur)
       composingField = undefined
       suppressedSnapshot = undefined
       activeField = undefined

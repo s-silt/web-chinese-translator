@@ -48,11 +48,9 @@ import { parseGitHubUrl } from '../shared/github'
 import { fixedTranslationWith } from './dictionaries/index'
 import { isExcludedSite, isSensitivePage } from './page-policy'
 import { isSiteScopeAllowed, SITE_SCOPE_BLOCKED_ERROR } from './site-scope'
-import type { LiveTranslationWatcher } from './live-translation'
-import { createSubtitleTranslation } from './subtitles'
 import { DEFAULT_INPUT_REPLACE_KEY } from './input-hotkey'
 import { createInputTranslation, type InputTranslationWatcher } from './input-translation'
-import { createDocumentInputTranslation, type DocumentInputWatcher } from './document-input'
+import { createDocumentInputTranslation, type DocumentInputWatcher, type DocumentInputOptions } from './document-input'
 import type { DocumentEditorRequest, DocumentEditorResult } from './document-editor'
 import { currentInputFrameTopUrl, inputFrameUrl } from './input-frame'
 import { DEFAULT_SURFACE_PREFERENCES, type SurfacePreferences } from './ui-surface'
@@ -96,7 +94,6 @@ function createInstance(inputOnly = false): Instance {
   let watcher: SelectionWatcher | undefined
   let toolbarSelection: ToolbarSelection | undefined
   let reading: { dispose(): void; reset(): void } | undefined
-  let subtitles: LiveTranslationWatcher | undefined
   let inputTranslation: InputTranslationWatcher | undefined
   let documentInput: DocumentInputWatcher | undefined
   let disposed = false
@@ -179,10 +176,6 @@ function createInstance(inputOnly = false): Instance {
     return smartOn() && !proactiveSuppressed
   }
 
-  function subtitlesOn(): boolean {
-    return modes.enabled && modes.subtitles === true && !suspended && !pageRestored && config?.autoInteractionEnabled !== false
-  }
-
   function inputFrameLiveAllowed(): boolean {
     if (config === undefined || !config.inputTranslationEnabled) return false
     const topUrl = currentInputFrameTopUrl()
@@ -206,7 +199,6 @@ function createInstance(inputOnly = false): Instance {
         (modes.fixed ||
           modes.auto ||
           modes.selection ||
-          modes.subtitles === true ||
           (inputOnly ? inputTranslationOn() : modes.input === true)),
       fixed: fixedActive && !pageRestored,
       auto: autoActive && engine !== undefined && !engine.isAutoPaused() && !engine.isCapped() && !pageRestored,
@@ -556,23 +548,6 @@ function createInstance(inputOnly = false): Instance {
     })
   }
 
-  function ensureSubtitles(): void {
-    if (subtitles !== undefined) return
-    subtitles = createSubtitleTranslation({
-      translate: (texts, requestId) =>
-        sendMessage({
-          type: 'wt:translate',
-          mode: 'subtitle',
-          texts,
-          requestId,
-        }),
-      cancel: (requestId) => {
-        void sendTranslationMessage({ type: 'wt:cancel-assist', requestId })
-      },
-      t: (key) => t(key),
-    })
-  }
-
   function ensureInputTranslation(): void {
     if (inputTranslation !== undefined) return
     inputTranslation = createInputTranslation({
@@ -580,7 +555,7 @@ function createInstance(inputOnly = false): Instance {
       sourceLanguage: () => config?.inputSourceLanguage ?? 'auto',
       targetLanguage: () => config?.inputTargetLanguage ?? 'en',
       replaceKey: () => config?.inputReplaceKey ?? DEFAULT_INPUT_REPLACE_KEY,
-      replaceMode: () => config?.inputReplaceMode ?? 'hotkey',
+      replaceMode: () => config?.inputReplaceMode ?? 'auto',
       autoReplaceDelayMs: () => config?.inputAutoReplaceDelayMs ?? INPUT_AUTO_REPLACE_DELAY_DEFAULT,
       translate: async (texts, requestId, manualInput) => {
         if (!inputTranslationOn()) {
@@ -616,8 +591,9 @@ function createInstance(inputOnly = false): Instance {
     if (documentInput === undefined) {
       documentInput = createDocumentInputTranslation({
         enabled: inputTranslationOn,
+        autoReplaceDelayMs: () => config?.inputAutoReplaceDelayMs ?? INPUT_AUTO_REPLACE_DELAY_DEFAULT,
         translate: (texts, requestId) =>
-          sendMessage({ type: 'wt:translate', mode: 'input', texts, requestId, manualInput: true }),
+          sendMessage({ type: 'wt:translate', mode: 'input', texts, requestId }),
         cancel: (requestId) => {
           void sendTranslationMessage({ type: 'wt:cancel-assist', requestId })
         },
@@ -640,13 +616,11 @@ function createInstance(inputOnly = false): Instance {
         iconUrl: browser.runtime.getURL('/icon/48.png' as Parameters<typeof browser.runtime.getURL>[0]),
         sourceLanguage: () => config?.inputSourceLanguage ?? 'auto',
         targetLanguage: () => config?.inputTargetLanguage ?? 'en',
-      })
+      } as DocumentInputOptions & { readonly autoReplaceDelayMs: () => number })
     }
   }
 
   function disposeLiveFeatures(): void {
-    subtitles?.dispose()
-    subtitles = undefined
     inputTranslation?.dispose()
     inputTranslation = undefined
     documentInput?.dispose()
@@ -672,11 +646,6 @@ function createInstance(inputOnly = false): Instance {
     else if (reading !== undefined) {
       reading.dispose()
       reading = undefined
-    }
-    if (subtitlesOn()) ensureSubtitles()
-    else if (subtitles !== undefined) {
-      subtitles.dispose()
-      subtitles = undefined
     }
     if (inputTranslationOn()) ensureInputTranslation()
     else {
@@ -928,7 +897,6 @@ function createInstance(inputOnly = false): Instance {
             selection: false,
             smart: false,
             floating: false,
-            subtitles: false,
             input: rawModes.input === true,
           }
         : rawModes
@@ -937,7 +905,6 @@ function createInstance(inputOnly = false): Instance {
         (nextModes.enabled !== hadEnabled ||
           nextModes.fixed !== hadFixed ||
           nextModes.auto !== hadAuto ||
-          nextModes.subtitles !== modes.subtitles ||
           nextModes.input !== modes.input)
       ) {
         pageRestored = false
@@ -945,7 +912,6 @@ function createInstance(inputOnly = false): Instance {
       const connectionChanged = translationOutputChanged(previousConfig, nextConfig)
       if (
         connectionChanged ||
-        nextConfig.videoSubtitlesEnabled !== previousConfig.videoSubtitlesEnabled ||
         nextConfig.inputTranslationEnabled !== previousConfig.inputTranslationEnabled ||
         nextConfig.inputTargetLanguage !== previousConfig.inputTargetLanguage ||
         nextConfig.inputSourceLanguage !== previousConfig.inputSourceLanguage ||
@@ -953,7 +919,6 @@ function createInstance(inputOnly = false): Instance {
         nextConfig.inputReplaceMode !== previousConfig.inputReplaceMode ||
         nextConfig.inputAutoReplaceDelayMs !== previousConfig.inputAutoReplaceDelayMs ||
         nextConfig.autoInteractionEnabled !== previousConfig.autoInteractionEnabled ||
-        nextModes.subtitles !== modes.subtitles ||
         nextModes.input !== modes.input
       ) {
         disposeLiveFeatures()
@@ -1043,8 +1008,7 @@ function createInstance(inputOnly = false): Instance {
       inputOnly &&
       message.type !== 'wt:refresh' &&
       message.type !== 'wt:stop' &&
-      message.type !== 'wt:status' &&
-      message.type !== 'wt:translate-input'
+      message.type !== 'wt:status'
     ) {
       return undefined
     }
@@ -1073,34 +1037,6 @@ function createInstance(inputOnly = false): Instance {
         case 'wt:read-selection':
           sendResponse({ ok: true, text: readSelectionText() } satisfies ContentTranslationReply<'wt:read-selection'>)
           return
-        case 'wt:translate-input': {
-          if (inputTranslationOn()) ensureInputTranslation()
-          const accepted = inputTranslationOn() && inputTranslation?.translateAndReplace() === true
-          if (accepted) {
-            sendResponse({ ok: true } satisfies ContentTranslationReply<'wt:translate-input'>)
-            return
-          }
-          if (!inputTranslationOn() || documentInput === undefined) {
-            sendResponse(
-              { ok: false, error: t('wtInputUnavailable') } satisfies ContentTranslationReply<'wt:translate-input'>,
-            )
-            return
-          }
-          void documentInput
-            .translate()
-            .then((handled) => {
-              sendResponse(
-                handled
-                  ? ({ ok: true } satisfies ContentTranslationReply<'wt:translate-input'>)
-                  : ({ ok: false, error: t('wtInputUnavailable') } satisfies ContentTranslationReply<'wt:translate-input'>),
-              )
-            })
-            .catch(() => {
-              sendResponse(
-                { ok: false, error: t('wtInputUnavailable') } satisfies ContentTranslationReply<'wt:translate-input'>,
-              )
-            })
-        }
       }
     })
     return true

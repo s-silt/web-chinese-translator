@@ -57,7 +57,7 @@ function withPageSession<M extends TranslationMessage>(message: M): M {
 
 function queueWaitMs(message: TranslationMessage): number {
   if (message.type === 'wt:translate') {
-    return message.mode === 'auto' || message.mode === 'subtitle'
+    return message.mode === 'auto'
       ? QUEUE_WAIT_LIMIT_MS.automatic
       : QUEUE_WAIT_LIMIT_MS.interactive
   }
