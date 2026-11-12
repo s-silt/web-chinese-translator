@@ -4,9 +4,9 @@
 
 ## Draft translation
 
-Translate a comment draft or web search query. Preview and press Tab, press Alt+Y for direct replacement, or enable replacement after you pause typing. You still choose when to submit the draft.
+Enable Input translation to replace a comment draft or web search query after the configured typing pause. Restore original recovers the exact draft saved temporarily in local memory. Editing, changing targets or closing the panel invalidates the record. You still choose when to submit.
 
-![Draft translation](demos/en-US/01-input.gif)
+![Draft translation and exact restoration](demos/en-US/01-input.gif)
 
 ## Webpage translation
 
@@ -14,17 +14,17 @@ Translate the page from the floating menu. Visible text continues to translate a
 
 ![Webpage translation](demos/en-US/02-webpage.gif)
 
-## Selected text and video captions
+## Selected text
 
-Select a sentence to see a translation next to it. On supported videos with English text captions enabled, read the Chinese translation while the video plays.
+Select a sentence to see a translation next to it. Video subtitle translation has been removed.
 
-![Selected text and video captions](demos/en-US/03-reading.gif)
+![Selected text translation](demos/en-US/03-reading.gif)
 
 ## Multilingual drafts
 
-Use auto-detection to translate Arabic, French, and Swahili drafts into Chinese. You can also translate the same English draft into Japanese, Korean, or French.
+The demo auto-detects Arabic, French, and Swahili drafts and translates them into Chinese. Choose a different target language in settings.
 
-![Multilingual drafts](demos/en-US/04-languages.gif)
+![Multilingual drafts translated into Chinese](demos/en-US/04-languages.gif)
 
 ## Offline interface dictionaries
 
@@ -34,6 +34,8 @@ Translate menus and buttons on GitHub and Hacker News with local dictionaries. T
 
 ## Extension popup
 
-![Extension popup](images/popup.png)
+![Extension popup](images/popup.en.png)
 
-The GIFs show the v0.4.2 extension running in a test browser. The translations come from a local demo endpoint. Results depend on the model you configure.
+![Model settings with a local demo endpoint](images/options-model.en.png)
+
+The GIFs and screenshots show the v0.4.4 extension running on synthetic pages. The translations come from a local demo endpoint. Results depend on the model you configure.

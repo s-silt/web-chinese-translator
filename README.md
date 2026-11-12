@@ -5,25 +5,26 @@
 <p align="center">简体中文 · <a href="README.en.md">English</a></p>
 
 <p align="center">
-  用你自己的模型接口翻译网页、草稿和字幕<br>
+  用你自己的模型接口翻译网页和草稿<br>
   <sub>译文可以写回原网页或输入框。GitHub 和常用网站的界面还可通过本地词典汉化。</sub>
 </p>
 
 <p align="center">
   <a href="https://github.com/s-silt/web-chinese-translator/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/s-silt/web-chinese-translator/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/s-silt/web-chinese-translator/releases/latest">最新版本</a> &nbsp;·&nbsp; <a href="https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe">Chrome 应用商店</a> &nbsp;·&nbsp; Chrome / Edge（MV3）&nbsp;·&nbsp; Firefox 140+（仅 GitHub 汉化）&nbsp;·&nbsp; <a href="LICENSE">MIT</a>
+  <a href="https://github.com/s-silt/web-chinese-translator/releases/latest">最新版本</a> &nbsp;·&nbsp; <a href="https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe">Chrome 应用商店</a> &nbsp;·&nbsp; Chrome（MV3）&nbsp;·&nbsp; <a href="LICENSE">MIT</a>
 </p>
 
 ## 功能演示
 
-<p align="center"><img src="docs/demos/zh-CN/01-input.gif" width="840" alt="在评论和网页搜索框预览译文并原位替换，支持快捷键和停顿后自动替换"></p>
+![停输后翻译并还原原稿](docs/demos/zh-CN/01-input.gif)
 
-译文可先预览，再按 Tab 写回同一个输入框。[查看整页翻译、划词字幕、多语言输入和本地词典演示](docs/DEMOS.md)。
+[查看全部动图与截图](docs/DEMOS.md)
+输入翻译在停输后直接替换；可从本地临时记录还原准确原稿。视频字幕翻译已移除。
 
 | 核心能力 | 说明 |
 | --- | --- |
 | **网页翻译** | 接入 OpenAI 兼容接口（DeepSeek、OpenAI、Claude 或自建中继），整页或逐站自动翻译，滚动到哪翻到哪 |
-| **阅读与输入** | 划词翻译与释义、视频字幕、聊天输入框和网页搜索框的草稿多语言互译 |
+| **阅读与输入** | 划词翻译与释义、聊天输入框和网页搜索框的草稿多语言互译 |
 | **离线界面词典** | 26 组常用网站（Cursor、Claude、Vercel、Linear 等）和 GitHub 的菜单按钮直接本地替换，不调用模型 |
 | **可控** | 总开关、排除本站、单页上限、运行范围名单；状态和失败原因写在弹出页上 |
 
@@ -37,12 +38,10 @@
 
 ## 快速开始
 
-1. Chrome 从 [Chrome 应用商店](https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe) 安装，商店版自动更新。
-2. 也可以手动安装：从 [Releases](https://github.com/s-silt/web-chinese-translator/releases/latest) 下载 `web-chinese-translator-<版本>-chrome.zip` 并解压，打开 `chrome://extensions`，开启「开发者模式」，「加载已解压的扩展程序」，选择解压出的文件夹。
+1. 推荐在 Chrome 中从 [Chrome 应用商店](https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe) 安装，商店版自动更新。
+2. [Releases](https://github.com/s-silt/web-chinese-translator/releases/latest) 仅提供 `web-chinese-translator-<版本>-chrome.crx` 与 `SHA256SUMS.txt` 校验和文件；CRX 仅适用于允许自行分发安装的环境（如企业策略、Linux 或开发调试环境，普通 Windows / macOS 正式版 Chrome 通常限制直接侧载 CRX），普通用户请通过 Chrome 应用商店安装。
 3. 点弹出页「配置模型」或「模型设置」：选服务商预设，填 API Key 和模型名，点「保存并连接」。连接徽章显示延迟，失败时写明原因。
 4. 打开支持的英文网页，点弹出页「翻译本页」。常去的网站可开启「本站自动翻译」。
-
-Edge 用 `-edge.zip`，在 `edge://extensions` 加载；Firefox 安装 `-firefox.xpi`。手动安装的版本更新时替换原目录文件并点「重新加载」，换目录会丢失配置。发布页附 `SHA256SUMS.txt` 供核对。
 
 | 任务 | 入口 |
 | --- | --- |
@@ -50,8 +49,8 @@ Edge 用 `-edge.zip`，在 `edge://extensions` 加载；Firefox 安装 `-firefox
 | 某个网站一直自动翻译 | 弹出页「本站自动翻译」 |
 | 某个网站不调用模型 | 弹出页「排除本站」（本地词典仍生效） |
 | 翻译选中文字 | 选中后右键「翻译选中文字」，或 `Alt+S` |
-| 翻译输入框或搜索框草稿 | 设置页开启「输入翻译」，可选预览后按替换键（默认 `Tab`，可在设置页修改）或停止输入后自动替换，也可直接按 `Alt+Y`（macOS `Command+Shift+Y`）替换 |
-| 翻译在线文档编辑区 | 开启「输入翻译」并授权网站，聚焦编辑区后按 `Alt+Y` 查看预览；可识别且安全的简单文本可替换和还原，复杂格式仅预览/复制，不强行改写 |
+| 翻译输入框或搜索框草稿 | 设置页开启「输入翻译」并授权，停输达到设定时间后直接替换；可点「还原原文」，无需快捷键，不自动发送消息 |
+| 翻译在线文档编辑区 | 开启「输入翻译」并授权，编辑停止后翻译；已支持且安全的纯文本直接替换，复杂格式仅预览和复制 |
 | 粘贴任意文字或 Markdown | 弹出页或网页悬浮菜单的「文本翻译」，每次最多 6000 字符；复用现有模型配置，关闭窗口后不恢复草稿 |
 | 长文翻到一半停住 | 设置页调高「单页翻译上限」，或点「继续翻译」 |
 | 补充或改写界面词条 | 设置页「网站与词典」；GitHub 在「GitHub 规则」 |
