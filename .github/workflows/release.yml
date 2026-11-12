@@ -58,15 +58,7 @@ jobs:
           bun run test
 
       - name: 打包 zip
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          bun run zip:all
-          bun run lint:firefox
-          mkdir -p "$OUT"
-          for target in chrome edge firefox sources; do
-            cp ".output/web-chinese-translator-$VERSION-$target.zip" "$OUT/"
-          done
+        run: bun run zip
 
       - name: 打包 crx
         env:
@@ -77,7 +69,9 @@ jobs:
             echo "::error title=crx::请先配置固定的 CRX_PRIVATE_KEY；禁止使用临时私钥发布不同扩展 ID 的安装包"
             exit 1
           fi
-          bun run pack:crx --expected-id "$CRX_EXPECTED_ID" "$OUT/web-chinese-translator-$VERSION-chrome.zip" "$OUT/web-chinese-translator-$VERSION-edge.zip"
+          bun run pack:crx --expected-id "$CRX_EXPECTED_ID" ".output/web-chinese-translator-$VERSION-chrome.zip"
+          mkdir -p "$OUT"
+          cp ".output/web-chinese-translator-$VERSION-chrome.crx" "$OUT/"
 
       # 先建 Release 草稿：签名后的 xpi 立即存进去，重跑时沿用（AMO 同一版本号只能提交一次）
       - name: 创建 Release 草稿
@@ -94,12 +88,11 @@ jobs:
           fi
 
       - name: 打包 xpi
+        if: false
         env:
           VERSION: ${{ steps.version.outputs.version }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
-          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
         run: |
           name="web-chinese-translator-$VERSION-firefox.xpi"
           xpi="$OUT/$name"
@@ -128,7 +121,7 @@ jobs:
       - name: 校验和
         working-directory: ${{ env.OUT }}
         run: |
-          sha256sum -- *.zip *.crx *.xpi > SHA256SUMS.txt
+          sha256sum -- *.crx > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: 上传产物
