@@ -687,7 +687,7 @@ test.describe('UI redesign baseline capture', () => {
     }
   })
 
-  test('页面浮层基线：输入预览/复制/还原、划词面板、悬浮菜单、文本窗', async () => {
+  test('页面浮层基线：输入自动直写/还原、划词面板、悬浮菜单、文本窗', async () => {
     const { context, extensionId } = await launch()
     try {
       await runMeta()
@@ -703,7 +703,6 @@ test.describe('UI redesign baseline capture', () => {
       await enableFloating(options)
       await enableInputTranslation(options)
       await enableSelection(options)
-      await setAutoInteractionOff(options)
       await context.route('**/ui-input', (route) =>
         route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: UI_INPUT_HTML }),
       )
@@ -715,29 +714,23 @@ test.describe('UI redesign baseline capture', () => {
       const input = page.locator('#ui-input')
       await input.click()
       await input.fill('你好\n第二行')
-      const reply = await sendToTab(context, page.url(), { type: 'wt:translate-input' })
-      expect(reply).toMatchObject({ ok: true })
-      await expect(input).toHaveValue('Hello\nWorld')
+      await expect(input).toHaveValue('Hello\nWorld', { timeout: 10_000 })
       const popover = page.locator('[data-wt-root] .popover')
       const status = popover.locator('[role="status"]')
-      await expect(status).toHaveText('Hello\nWorld')
+      await expect(popover.locator('button[data-action="restore"]')).toBeVisible()
+      await expect(popover.locator('button[data-action="replace"]')).toBeHidden()
+      await expect(status).not.toHaveText('Hello\nWorld')
+      await expect(status).not.toHaveText('')
       await shot(page, 'input-translated.png')
-
-      const copyButton = popover.locator('button[data-action="copy"]')
-      const copyLabel = ((await copyButton.textContent()) ?? '').trim()
-      await copyButton.click()
-      await expect
-        .poll(async () => ((await copyButton.textContent()) ?? '').trim(), { timeout: 5_000 })
-        .not.toBe(copyLabel)
-      await shot(page, 'input-copy-feedback.png')
 
       await popover.locator('button[data-action="restore"]').click()
       await expect(input).toHaveValue('你好\n第二行')
-      await expect(status).toHaveText('Hello\nWorld')
-      await shot(page, 'input-restored.png')
-      await popover.locator('button[data-action="close"]').click()
+      await expect(status).toHaveText('')
       await expect(popover).toBeHidden()
+      await expect(input).toBeFocused()
+      await shot(page, 'input-restored.png')
 
+      await setAutoInteractionOff(options)
       const selectionReply = await sendToTab(context, page.url(), { type: 'wt:show-selection', text: '你好，世界' })
       expect(selectionReply).toMatchObject({ ok: true })
       await expect(page.locator('.panel-target')).toHaveText('Hello, world')

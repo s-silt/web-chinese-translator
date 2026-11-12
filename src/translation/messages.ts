@@ -44,7 +44,6 @@ export interface PageModes {
   readonly selection: boolean
   readonly smart: boolean
   readonly floating?: boolean
-  readonly subtitles?: boolean
   readonly input?: boolean
   /** fixed === true 时页面可立即用于词典替换的完整词条表（含 COMMON_UI 底表）。 */
   readonly fixedEntries?: Readonly<Record<string, string>>
@@ -70,7 +69,7 @@ export type TranslationMessage =
   | { type: 'wt:test' }
   | {
       type: 'wt:translate'
-      mode: 'selection' | 'auto' | 'subtitle' | 'input'
+      mode: 'selection' | 'auto' | 'input'
       texts: string[]
       requestId?: string
       page?: PageContext
@@ -193,7 +192,6 @@ export type ContentTranslationMessage =
   | { type: 'wt:stop' }
   | { type: 'wt:status' }
   | { type: 'wt:read-selection' }
-  | { type: 'wt:translate-input' }
   | { type: 'wt:refresh-input-frame' }
   | { type: 'wt:stop-input-frame' }
 
@@ -228,7 +226,6 @@ interface ContentPayloads {
   'wt:stop': AckPayload
   'wt:status': { status: PageTranslationStatus }
   'wt:read-selection': { text: string }
-  'wt:translate-input': AckPayload
   'wt:refresh-input-frame': AckPayload
   'wt:stop-input-frame': AckPayload
 }
@@ -292,11 +289,9 @@ const PATCH_KEYS = new Set([
   'proactiveAssistEnabled',
   'floatingButtonEnabled',
   'autoInteractionEnabled',
-  'videoSubtitlesEnabled',
   'inputTranslationEnabled',
   'inputTargetLanguage',
   'inputSourceLanguage',
-  'inputReplaceKey',
   'inputReplaceMode',
   'inputAutoReplaceDelayMs',
   'pageCharLimit',
@@ -317,7 +312,6 @@ function isSaveConfig(value: unknown): boolean {
     if (key === 'sourceLanguage' && !isSourceLanguage((patch as Record<string, unknown>)[key])) return false
     if (key === 'siteScopeMode' && !isSiteScopeMode((patch as Record<string, unknown>)[key])) return false
     if (key === 'inputSourceLanguage' && !isSourceLanguage((patch as Record<string, unknown>)[key])) return false
-    if (key === 'inputReplaceKey' && normalizeHotkey((patch as Record<string, unknown>)[key]) === undefined) return false
     if (key === 'inputReplaceMode' && !isInputReplaceMode((patch as Record<string, unknown>)[key])) return false
     if (key === 'inputAutoReplaceDelayMs' && !isInputAutoReplaceDelay((patch as Record<string, unknown>)[key])) return false
     if (key === 'apiType' && !isApiType((patch as Record<string, unknown>)[key])) return false
@@ -327,7 +321,7 @@ function isSaveConfig(value: unknown): boolean {
   }
   if (patch.baseUrl !== undefined && (typeof patch.baseUrl !== 'string' || patch.baseUrl.length > 2048)) return false
   if (patch.model !== undefined && (typeof patch.model !== 'string' || patch.model.length > 200)) return false
-  for (const key of ['selectionPopupEnabled', 'selectionToolbarEnabled', 'proactiveAssistEnabled', 'floatingButtonEnabled', 'autoInteractionEnabled', 'videoSubtitlesEnabled', 'inputTranslationEnabled'] as const) {
+  for (const key of ['selectionPopupEnabled', 'selectionToolbarEnabled', 'proactiveAssistEnabled', 'floatingButtonEnabled', 'autoInteractionEnabled', 'inputTranslationEnabled'] as const) {
     if (patch[key] !== undefined && typeof patch[key] !== 'boolean') return false
   }
   if (!isOptionalApiKey(value.apiKey)) return false
@@ -381,17 +375,6 @@ function isTranslateTexts(value: unknown): value is string[] {
 
 const FEATURE_TRANSLATE_KEYS = new Set(['type', 'mode', 'texts', 'requestId', 'pageSession', 'manualInput'])
 
-function isSubtitleTexts(value: unknown): value is string[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 5) return false
-  let total = 0
-  for (const item of value) {
-    if (typeof item !== 'string' || item.length < 1 || item.length > 1500) return false
-    total += item.length
-    if (total > 4000) return false
-  }
-  return true
-}
-
 function isInputTexts(value: unknown): value is string[] {
   return Array.isArray(value) && value.length === 1 && typeof value[0] === 'string' && value[0].length >= 1 && value[0].length <= 6000
 }
@@ -400,13 +383,13 @@ function isTranslateMessage(value: Record<string, unknown>): boolean {
   if ('targetLanguage' in value || 'sourceLanguage' in value) return false
   if (value.mode !== 'input' && 'manualInput' in value) return false
   if ('manualInput' in value && typeof value.manualInput !== 'boolean') return false
-  if (value.mode === 'subtitle' || value.mode === 'input') {
+  if (value.mode === 'input') {
     for (const key of Object.keys(value)) {
       if (!FEATURE_TRANSLATE_KEYS.has(key)) return false
     }
     if (!isRequestId(value.requestId)) return false
     if (value.pageSession !== undefined && !isPageId(value.pageSession)) return false
-    return value.mode === 'subtitle' ? isSubtitleTexts(value.texts) : isInputTexts(value.texts)
+    return isInputTexts(value.texts)
   }
   return (
     (value.mode === 'selection' || value.mode === 'auto') &&
@@ -580,7 +563,6 @@ export function isContentTranslationMessage(value: unknown): value is ContentTra
     case 'wt:status':
     case 'wt:read-selection':
       return true
-    case 'wt:translate-input':
     case 'wt:refresh-input-frame':
     case 'wt:stop-input-frame':
       return Object.keys(value).length === 1
@@ -634,7 +616,6 @@ function isConfigShape(value: unknown): value is TranslationConfig {
     typeof value.proactiveAssistEnabled === 'boolean' &&
     typeof value.floatingButtonEnabled === 'boolean' &&
     typeof value.autoInteractionEnabled === 'boolean' &&
-    typeof value.videoSubtitlesEnabled === 'boolean' &&
     typeof value.inputTranslationEnabled === 'boolean' &&
     isTargetLanguage(value.inputTargetLanguage) &&
     isSourceLanguage(value.inputSourceLanguage) &&
@@ -663,7 +644,6 @@ function isModes(value: unknown): value is PageModes {
     typeof value.selection === 'boolean' &&
     typeof value.smart === 'boolean' &&
     (value.floating === undefined || typeof value.floating === 'boolean') &&
-    (value.subtitles === undefined || typeof value.subtitles === 'boolean') &&
     (value.input === undefined || typeof value.input === 'boolean') &&
     (value.fixedEntries === undefined ||
       (isRecord(value.fixedEntries) &&

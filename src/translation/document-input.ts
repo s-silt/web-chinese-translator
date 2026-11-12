@@ -10,6 +10,8 @@ import {
 } from './input-translation'
 import type { LiveTranslationOptions } from './live-translation'
 import type { DocumentEditorRequest, DocumentEditorResult } from './document-editor'
+import { INPUT_AUTO_REPLACE_DELAY_DEFAULT, isInputAutoReplaceDelay } from './input-replace-mode'
+import { isCandidateDraft } from './target-language'
 import {
   applySurfacePreferences,
   createProgressIndicator,
@@ -20,6 +22,7 @@ import {
 
 export interface DocumentInputOptions extends LiveTranslationOptions, Pick<InputTranslationOptions, 'sourceLanguage' | 'targetLanguage'> {
   readonly enabled: () => boolean
+  readonly autoReplaceDelayMs?: () => number
   readonly editor: (request: DocumentEditorRequest) => Promise<DocumentEditorResult>
 }
 
@@ -63,6 +66,8 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   let verifyRun = 0
   let knownText: string | undefined
   let statusFailed = false
+  let autoTimer: ReturnType<typeof setTimeout> | undefined
+  let composingRoot: Element | undefined
 
   let host: HTMLElement | undefined
   let shadow: ShadowRoot | undefined
@@ -248,23 +253,23 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     }
     const hasTranslation = translationText !== '' && !busy
     const armed = insertedText !== undefined
-    replaceButton.style.display = canReplaceDocument && hasTranslation && !armed ? '' : 'none'
+    replaceButton.style.display = 'none'
     restoreButton.style.display = canReplaceDocument && hasTranslation && armed ? '' : 'none'
     replaceButton.disabled = busy
     restoreButton.disabled = busy
-    copyButton.style.display = hasTranslation ? '' : 'none'
-    copyOriginalButton.style.display = originalText !== '' ? '' : 'none'
+    copyButton.style.display = hasTranslation && !armed && !canReplaceDocument ? '' : 'none'
+    copyOriginalButton.style.display = originalText !== '' && (statusFailed || (!busy && !canReplaceDocument)) ? '' : 'none'
     if (hintNode !== undefined) {
       hintNode.textContent = armed
-        ? options.t('wtInputRestoreHint')
+        ? ''
         : translationText === ''
           ? ''
           : !canReplaceDocument
             ? options.t('wtInputEditorUnsupported')
-            : options.t('wtInputPreviewHint')
+            : ''
     }
     if (keyHintNode !== undefined) {
-      const focusable = hasTranslation && !statusFailed
+      const focusable = hasTranslation && !statusFailed && !canReplaceDocument
       keyHintNode.textContent = focusable ? options.t('wtInputPanelKeyHint') : ''
       keyHintNode.style.display = focusable ? '' : 'none'
     }
@@ -359,6 +364,8 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   }
 
   function closeSession(restoreFocus = false): void {
+    if (autoTimer !== undefined) clearTimeout(autoTimer)
+    autoTimer = undefined
     const returnRoot =
       restoreFocus && host !== undefined && document.activeElement === host ? token?.root : undefined
     sessionEpoch += 1
@@ -413,16 +420,49 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
 
   function onTrustedEdit(event: Event): void {
     if (!event.isTrusted || disposed) return
-    if (token === undefined && translationText === '' && originalText === '') return
+    const root = candidateRoot()
     invalidateSession()
+    if (event.type === 'compositionstart' || (event instanceof InputEvent && event.isComposing)) {
+      composingRoot = root
+      return
+    }
+    if (event instanceof InputEvent && (event.inputType === 'historyUndo' || event.inputType === 'historyRedo')) return
+    if (root !== undefined && composingRoot === undefined) scheduleAutomatic(root)
+  }
+
+  function scheduleAutomatic(root: Element): void {
+    if (autoTimer !== undefined) clearTimeout(autoTimer)
+    autoTimer = undefined
+    if (disposed || !options.enabled() || document.hidden || composingRoot !== undefined) return
+    const delay = options.autoReplaceDelayMs?.()
+    autoTimer = setTimeout(() => {
+      autoTimer = undefined
+      if (candidateRoot() === root && !document.hidden && composingRoot === undefined) void translate(true)
+    }, isInputAutoReplaceDelay(delay) ? delay : INPUT_AUTO_REPLACE_DELAY_DEFAULT)
+  }
+
+  function onCompositionEnd(event: CompositionEvent): void {
+    if (disposed || composingRoot === undefined) return
+    const root = candidateRoot()
+    if (root !== composingRoot) return
+    const target = event.composedPath()[0] ?? event.target
+    if (!(target instanceof Element) || composedClosest(target, EDITOR_ROOT_SELECTOR) !== root) return
+    composingRoot = undefined
+    if (root !== undefined) scheduleAutomatic(root)
   }
 
   function onEditorGesture(event: Event): void {
-    if (!event.isTrusted || disposed || token === undefined) return
+    if (!event.isTrusted || disposed) return
     if (event instanceof KeyboardEvent) {
       if (event.key === 'Shift' || event.key === 'Control' || event.key === 'Alt' || event.key === 'Meta') return
       if (NAVIGATION_KEYS.has(event.key) && !event.ctrlKey && !event.altKey && !event.metaKey) return
+      if (event.isComposing || event.ctrlKey || event.altKey || event.metaKey) return
+      if (event.key.length !== 1 && event.key !== 'Backspace' && event.key !== 'Delete' && event.key !== 'Enter') return
     }
+    const root = candidateRoot()
+    if (root === undefined || !event.composedPath().includes(root)) return
+    if (root !== undefined && composingRoot === undefined) scheduleAutomatic(root)
+    if (token === undefined) return
     if (!event.composedPath().includes(token.root)) return
     if (originalText === '') {
       editedBeforeSnapshot = true
@@ -432,8 +472,12 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   }
 
   function onFocusChange(event: Event): void {
-    if (!event.isTrusted || disposed || token === undefined) return
+    if (!event.isTrusted || disposed) return
     if (isEventInsidePanel(event)) return
+    if (autoTimer !== undefined) clearTimeout(autoTimer)
+    autoTimer = undefined
+    composingRoot = undefined
+    if (token === undefined) return
     const target = event.composedPath()[0] ?? event.target
     if (!(target instanceof Element)) {
       invalidateSession()
@@ -444,6 +488,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   }
 
   function onPageHide(): void {
+    composingRoot = undefined
     invalidateSession()
   }
 
@@ -451,7 +496,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     if (!event.isTrusted || disposed) return
     if (event.key !== 'Escape' || event.isComposing) return
     if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
-    if (token === undefined) return
+    if (token === undefined && autoTimer === undefined) return
     const inside = isEventInsidePanel(event)
     closeSession(true)
     if (inside) {
@@ -466,13 +511,15 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   }
 
   function onWindowBlur(): void {
-    if (disposed || token === undefined) return
+    if (disposed) return
+    composingRoot = undefined
     invalidateSession()
   }
 
   document.addEventListener('input', onTrustedEdit, true)
   document.addEventListener('beforeinput', onTrustedEdit, true)
   document.addEventListener('compositionstart', onTrustedEdit, true)
+  document.addEventListener('compositionend', onCompositionEnd, true)
   document.addEventListener('focusin', onFocusChange, true)
   document.addEventListener('keydown', onEscapeKey, true)
   document.addEventListener('keydown', onEditorGesture, true)
@@ -521,16 +568,6 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     }
   }
 
-  function focusPanel(): void {
-    const target = [restoreButton, replaceButton, copyButton, copyOriginalButton, closeButtonNode].find(
-      (button) => button !== undefined && button.style.display !== 'none' && !button.disabled,
-    )
-    if (target === undefined) return
-    target.classList.add('is-key-focus')
-    target.addEventListener('blur', () => target.classList.remove('is-key-focus'), { once: true })
-    target.focus({ preventScroll: true })
-  }
-
   async function onReplace(restore = false): Promise<void> {
     if (disposed || !options.enabled()) {
       closeSession()
@@ -550,7 +587,11 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     const epoch = sessionEpoch
     const expectedText = restore ? insertedText! : originalText
     const text = restore ? originalText : translationText
-    focusEditor(current.root)
+    if (restore) focusEditor(current.root)
+    else if (candidateRoot() !== current.root || composingRoot !== undefined || document.hidden) {
+      closeSession()
+      return
+    }
     replacing = true
     busy = true
     writeCount += 1
@@ -576,13 +617,15 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     if (result.status === 'ok') {
       if (restore) {
         closeSession()
+        setStatus('')
+        syncActions()
         return
       }
       translationText = result.text
       knownText = result.text
       insertedText = result.canReplace ? result.text : undefined
       canReplaceDocument = result.canReplace
-      setStatus(result.text)
+      setStatus(options.t(result.canReplace ? 'wtInputRestoreHint' : 'wtInputEditorUnsupported'), !result.canReplace)
     } else if (result.status === 'unsupported' && !restore) {
       canReplaceDocument = false
       setStatus(translationText)
@@ -595,14 +638,13 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     syncActions()
   }
 
-  async function translate(): Promise<boolean> {
-    if (disposed || !options.enabled()) return false
+  async function translate(automatic = false): Promise<boolean> {
+    if (disposed || !options.enabled() || composingRoot !== undefined || document.hidden) return false
     if (replacing) return true
     if (token !== undefined && host !== undefined && document.activeElement === host) return true
     const root = candidateRoot()
     if (root === undefined) return false
     if (token?.root === root && !busy && translationText !== '' && !statusFailed) {
-      focusPanel()
       return true
     }
     ensureDom()
@@ -622,9 +664,11 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     canReplaceDocument = false
     busy = true
     requestId = request
-    setStatus(options.t('wtPanelLoading'))
-    showPanel()
-    syncActions()
+    if (!automatic) {
+      setStatus(options.t('wtPanelLoading'))
+      showPanel()
+      syncActions()
+    }
 
     let snapshot: DocumentEditorResult
     try {
@@ -646,20 +690,32 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
       busy = false
       requestId = undefined
       setStatus(options.t('wtInputReplaceFailed'), true)
+      showPanel()
       syncActions()
       return true
     }
     if (snapshot.text.trim() === '' || snapshot.text.length > 6000) {
+      if (automatic) {
+        closeSession()
+        return true
+      }
       busy = false
       requestId = undefined
       setStatus(options.t('wtInputReplaceFailed'), true)
       syncActions()
       return true
     }
+    if (automatic && !isCandidateDraft(snapshot.text, options.sourceLanguage?.() ?? 'auto', options.targetLanguage?.() ?? 'en')) {
+      closeSession()
+      return true
+    }
 
     originalText = snapshot.text
     knownText = snapshot.text
     canReplaceDocument = snapshot.canReplace
+    setStatus(options.t('wtPanelLoading'))
+    showPanel()
+    syncActions()
     if (editedBeforeSnapshot) {
       editedBeforeSnapshot = false
       scheduleVerify()
@@ -672,7 +728,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     }
     if (disposed || epoch !== sessionEpoch || token?.id !== id) return true
     requestId = undefined
-    if (reply === undefined || !reply.ok || reply.texts === undefined || reply.texts.length !== 1) {
+    if (reply === undefined || !reply.ok || reply.texts === undefined || reply.texts.length !== 1 || (reply.texts[0] ?? '').trim() === '') {
       busy = false
       setStatus(
         reply !== undefined && reply.ok === false ? reply.error : options.t('wtInputReplaceFailed'),
@@ -687,8 +743,11 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     }
     translationText = (reply.texts[0] ?? '').replace(/\r\n?/g, '\n')
     busy = false
-    setStatus(translationText)
-    syncActions()
+    if (canReplaceDocument) await onReplace()
+    else {
+      setStatus(translationText)
+      syncActions()
+    }
     return true
   }
 
@@ -701,6 +760,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
       document.removeEventListener('input', onTrustedEdit, true)
       document.removeEventListener('beforeinput', onTrustedEdit, true)
       document.removeEventListener('compositionstart', onTrustedEdit, true)
+      document.removeEventListener('compositionend', onCompositionEnd, true)
       document.removeEventListener('focusin', onFocusChange, true)
       document.removeEventListener('keydown', onEscapeKey, true)
       document.removeEventListener('keydown', onEditorGesture, true)

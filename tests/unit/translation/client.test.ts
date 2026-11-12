@@ -77,7 +77,6 @@ describe('sendTranslationMessage', () => {
 
   it.each([
     ['自动翻译', { type: 'wt:translate', mode: 'auto', texts: ['a'], requestId: 'r' }, AUTO_WATCHDOG_MS],
-    ['字幕翻译', { type: 'wt:translate', mode: 'subtitle', texts: ['a'], requestId: 'r' }, AUTO_WATCHDOG_MS],
     ['选区翻译', { type: 'wt:translate', mode: 'selection', texts: ['a'], requestId: 'r' }, INTERACTIVE_WATCHDOG_MS],
     ['输入翻译', { type: 'wt:translate', mode: 'input', texts: ['你好'], requestId: 'r' }, INTERACTIVE_WATCHDOG_MS],
     ['主动辅助', { type: 'wt:assist', requestId: 'r', input: { trigger: 'revisit' } }, AUTO_WATCHDOG_MS],

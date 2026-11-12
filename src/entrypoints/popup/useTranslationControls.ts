@@ -94,7 +94,6 @@ export interface UseTranslationControls {
   readonly canTranslate: ComputedRef<boolean>
   readonly floatingEnabled: ComputedRef<boolean>
   readonly autoInteractionEnabled: ComputedRef<boolean>
-  readonly videoSubtitlesEnabled: ComputedRef<boolean>
   readonly inputTranslationEnabled: ComputedRef<boolean>
   readonly configurationReady: ComputedRef<boolean>
   readonly masterEnabled: ComputedRef<boolean>
@@ -117,7 +116,6 @@ export interface UseTranslationControls {
   setFloating(enabled: boolean): Promise<void>
   setAutoInteraction(enabled: boolean): Promise<void>
   setAuto(enabled: boolean): Promise<void>
-  setVideoSubtitles(enabled: boolean): Promise<void>
   setInputTranslation(enabled: boolean): Promise<void>
   restore(): Promise<void>
   resume(): Promise<void>
@@ -219,7 +217,6 @@ export function useTranslationControls(): UseTranslationControls {
   })
   const floatingEnabled = computed(() => config.value?.floatingButtonEnabled === true)
   const autoInteractionEnabled = computed(() => config.value?.autoInteractionEnabled !== false)
-  const videoSubtitlesEnabled = computed(() => config.value?.videoSubtitlesEnabled === true)
   const inputTranslationEnabled = computed(() => config.value?.inputTranslationEnabled === true)
   const canTranslate = computed(() =>
     supported.value && masterEnabled.value && configurationReady.value && !outOfScope.value,
@@ -427,10 +424,10 @@ export function useTranslationControls(): UseTranslationControls {
   }
 
   async function setRealtimeFeature(
-    key: 'videoSubtitlesEnabled' | 'inputTranslationEnabled',
+    key: 'inputTranslationEnabled',
     enabled: boolean,
   ): Promise<void> {
-    const current = key === 'videoSubtitlesEnabled' ? videoSubtitlesEnabled.value : inputTranslationEnabled.value
+    const current = inputTranslationEnabled.value
     if (disposed || busy.value || !configurationReady.value || enabled === current) return
     busy.value = true
     autoError.value = ''
@@ -580,7 +577,6 @@ export function useTranslationControls(): UseTranslationControls {
     canTranslate,
     floatingEnabled,
     autoInteractionEnabled,
-    videoSubtitlesEnabled,
     inputTranslationEnabled,
     configurationReady,
     masterEnabled: masterOn,
@@ -602,7 +598,6 @@ export function useTranslationControls(): UseTranslationControls {
     setFloating,
     setAutoInteraction,
     setAuto,
-    setVideoSubtitles: (enabled: boolean) => setRealtimeFeature('videoSubtitlesEnabled', enabled),
     setInputTranslation: (enabled: boolean) => setRealtimeFeature('inputTranslationEnabled', enabled),
     restore: () => pageAction('restore'),
     resume: () => pageAction('resume'),

@@ -3,7 +3,7 @@ import { isExcludedSite } from './page-policy'
 import { requestOptionsKey } from './request-options'
 import { isSiteScopeAllowed } from './site-scope'
 
-export type RequestKind = 'auto' | 'selection' | 'subtitle' | 'input' | 'assist' | 'test' | 'catalog'
+export type RequestKind = 'auto' | 'selection' | 'input' | 'assist' | 'test' | 'catalog'
 
 export interface RequestScope {
   readonly kind: RequestKind
@@ -44,7 +44,6 @@ export function requestAffected(request: RequestScope, previous: TranslationConf
   if (request.kind === 'test' || request.kind === 'catalog') return false
   if (isExcludedSite(request.url, previous.excludedHosts) !== isExcludedSite(request.url, next.excludedHosts)) return true
   if (isSiteScopeAllowed(request.url, previous) !== isSiteScopeAllowed(request.url, next)) return true
-  if (request.kind === 'subtitle') return previous.videoSubtitlesEnabled !== next.videoSubtitlesEnabled || previous.autoInteractionEnabled !== next.autoInteractionEnabled
   if (request.kind === 'input') {
     return previous.inputTranslationEnabled !== next.inputTranslationEnabled ||
       (previous.autoInteractionEnabled !== next.autoInteractionEnabled && next.inputReplaceMode !== 'auto') ||

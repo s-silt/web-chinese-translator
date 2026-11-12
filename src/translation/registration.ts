@@ -7,8 +7,7 @@ import { getCustomDictionaries, watchCustomDictionaries } from './custom-diction
 import {
   INPUT_FRAME_SCRIPT_FILES,
   INPUT_FRAME_SCRIPT_ID,
-  isYouTubeInputFramePair,
-  isYouTubePageUrl,
+  inputFrameUrl,
   readInputFrameDocuments,
 } from './input-frame'
 import { isExcludedSite, isSensitivePage } from './page-policy'
@@ -18,19 +17,6 @@ export const SITE_SCRIPT_ID = 'wt-sites'
 const REGISTERED_JS = 'web-translate.js'
 export const SITE_SCRIPT_FILES: ScriptPublicPath[] = ['/web-translate.js']
 const REGISTERED_INPUT_FRAME_JS = 'input-frame.js'
-
-const YOUTUBE_INPUT_FRAME_TARGETS = [
-  {
-    origin: 'https://www.youtube.com',
-    url: 'https://www.youtube.com/live_chat',
-    match: 'https://www.youtube.com/live_chat*',
-  },
-  {
-    origin: 'https://youtube.com',
-    url: 'https://youtube.com/live_chat',
-    match: 'https://youtube.com/live_chat*',
-  },
-] as const
 
 function reportError(_error: unknown): void {
   console.error('[网页汉化助手] 站点脚本同步失败')
@@ -73,7 +59,6 @@ export async function siteScriptMatches(config: TranslationConfig): Promise<stri
   if (
     config.selectionPopupEnabled ||
     config.floatingButtonEnabled ||
-    config.videoSubtitlesEnabled ||
     config.inputTranslationEnabled
   ) {
     const grantedAll = await Promise.all(ALL_HTTP_MATCHES.map(granted))
@@ -87,14 +72,27 @@ export async function siteScriptMatches(config: TranslationConfig): Promise<stri
 export async function inputFrameScriptMatches(config: TranslationConfig): Promise<string[]> {
   if (!config.inputTranslationEnabled) return []
   const matches: string[] = []
-  for (const target of YOUTUBE_INPUT_FRAME_TARGETS) {
-    if (!isSiteScopeAllowed(target.url, config)) continue
-    if (isExcludedSite(target.url, config.excludedHosts)) continue
-    if (await granted(hostPermissionPattern(target.origin))) {
-      matches.push(target.match)
-    }
+  const grantedAll = await Promise.all(ALL_HTTP_MATCHES.map(granted))
+  if (grantedAll.every(Boolean)) {
+    return restrictSitePatterns([...ALL_HTTP_MATCHES], config).sort()
   }
-  return matches.sort()
+  if (grantedAll[1]) matches.push('https://*/*')
+  if (grantedAll[0]) matches.push('http://*/*')
+  const disabled = new Set(config.disabledDictionaries)
+  const custom = await getCustomDictionaries().catch(() => [])
+  const dictionaryHosts = [
+    ...BUILTIN_DICTIONARY_META.filter((d) => !disabled.has(d.id)).flatMap((d) => d.hosts),
+    ...custom.filter((d) => d.enabled).flatMap((d) => d.hosts),
+  ]
+  for (const host of new Set(dictionaryHosts)) {
+    const pattern = hostMatchPattern(host)
+    if (await granted(pattern)) matches.push(pattern)
+  }
+  for (const origin of config.autoOrigins) {
+    const pattern = hostPermissionPattern(origin)
+    if (await granted(pattern)) matches.push(pattern)
+  }
+  return restrictSitePatterns([...new Set(matches)], config).sort()
 }
 
 function isDuplicateId(error: unknown): boolean {
@@ -102,6 +100,7 @@ function isDuplicateId(error: unknown): boolean {
 }
 
 let queue: Promise<void> = Promise.resolve()
+let matchOriginAsFallbackSupported = true
 
 async function syncMainScript(config: TranslationConfig, masterOn: boolean): Promise<void> {
   const scripting = browser.scripting
@@ -159,6 +158,7 @@ async function syncInputFrameScript(config: TranslationConfig, masterOn: boolean
     current.runAt === 'document_idle' &&
     current.persistAcrossSessions !== false &&
     current.allFrames === true &&
+    (!matchOriginAsFallbackSupported || (current as { matchOriginAsFallback?: boolean }).matchOriginAsFallback === true) &&
     sameSet(current.js?.map((path) => path.replace(/^\//, '')), [REGISTERED_INPUT_FRAME_JS]) &&
     sameSet(current.matches, matches) &&
     sameSet(current.excludeMatches ?? [], exclusions)
@@ -172,16 +172,31 @@ async function syncInputFrameScript(config: TranslationConfig, masterOn: boolean
     js: [REGISTERED_INPUT_FRAME_JS],
     runAt: 'document_idle' as const,
     allFrames: true,
+    ...(matchOriginAsFallbackSupported ? { matchOriginAsFallback: true } : {}),
     persistAcrossSessions: true,
   }
-  if (current !== undefined) {
-    await scripting.updateContentScripts([script])
-    return
+  const apply = async (): Promise<void> => {
+    if (current !== undefined) {
+      await scripting.updateContentScripts([script])
+      return
+    }
+    try {
+      await scripting.registerContentScripts([script])
+    } catch (error) {
+      if (!isDuplicateId(error)) throw error
+    }
   }
   try {
-    await scripting.registerContentScripts([script])
+    await apply()
   } catch (error) {
-    if (!isDuplicateId(error)) throw error
+    if (
+      !matchOriginAsFallbackSupported ||
+      !(error instanceof Error) ||
+      !/Unexpected property: ['"]matchOriginAsFallback['"]\.?/.test(error.message)
+    ) throw error
+    matchOriginAsFallbackSupported = false
+    delete script.matchOriginAsFallback
+    await apply()
   }
 }
 
@@ -251,7 +266,7 @@ async function sendInputFrameControl(
   }
 }
 
-async function syncYouTubeInputFramesInTab(
+async function syncInputFramesInTab(
   tabId: number,
   tabUrl: string,
   config: TranslationConfig,
@@ -272,12 +287,16 @@ async function syncYouTubeInputFramesInTab(
   })
   if (!enabled || typeof scripting?.executeScript !== 'function') return
   const docs = await readInputFrameDocuments(tabId)
-  const matching = docs.filter(
-    (doc) =>
-      doc.frameId > 0 &&
-      doc.snapshot.topUrl === tabUrl &&
-      isYouTubeInputFramePair(tabUrl, doc.snapshot.url),
-  )
+  const matching = docs.filter((doc) => {
+    if (doc.frameId <= 0 || doc.snapshot.topUrl !== tabUrl) return false
+    const effectiveUrl = inputFrameUrl(tabUrl, doc.snapshot.url)
+    return (
+      effectiveUrl !== undefined &&
+      isSiteScopeAllowed(effectiveUrl, config) &&
+      !isExcludedSite(effectiveUrl, config.excludedHosts) &&
+      !isSensitivePage(effectiveUrl)
+    )
+  })
   await Promise.all(
     matching.map(async (doc) => {
       try {
@@ -306,7 +325,7 @@ export async function syncSiteTabs(previous: TranslationConfig, next: Translatio
   const masterOn = settings?.enabled === true
   const current = await getTranslationConfig().catch(() => next)
   const after = masterOn ? new Set(await siteScriptMatches(current).catch(() => [] as string[])) : new Set<string>()
-  void previous
+  const syncFrames = masterOn && (previous.inputTranslationEnabled || current.inputTranslationEnabled)
   const allTabs = (await tabs.query({}).catch(() => [] as Browser.tabs.Tab[])).filter(
     (tab) => typeof tab.id === 'number',
   )
@@ -321,11 +340,12 @@ export async function syncSiteTabs(previous: TranslationConfig, next: Translatio
   for (const tab of allTabs) {
     const id = tab.id
     if (id === undefined) continue
-    if (typeof tab.url === 'string' && isYouTubePageUrl(tab.url)) {
-      jobs.push(syncYouTubeInputFramesInTab(id, tab.url, current, masterOn).catch(() => undefined))
+    if (syncFrames && typeof tab.url === 'string' && normalizeOrigin(tab.url) !== '') {
+      jobs.push(syncInputFramesInTab(id, tab.url, current, masterOn).catch(() => undefined))
     }
     if (!masterOn) {
       jobs.push(sendToTab(id, { type: 'wt:stop' }).catch(() => undefined))
+      jobs.push(sendInputFrameControl(id, { type: 'wt:stop-input-frame' }).catch(() => undefined))
       continue
     }
     if (eligibleIds.has(id)) {

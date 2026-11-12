@@ -114,26 +114,17 @@ describe('配置变更影响判定', () => {
     expect(requestAffected({ kind: 'catalog', url: '', recentSites: [] }, BASE, { ...BASE, excludedHosts: ['a.example'], selectionPopupEnabled: false, siteScopeMode: 'include' })).toBe(false)
   })
 
-  it('字幕与输入翻译请求仅受对应开关、自动弹窗、站点排除及网站范围影响', () => {
-    const subOn = { ...BASE, videoSubtitlesEnabled: true, inputTranslationEnabled: true }
-    expect(requestAffected(request('subtitle'), subOn, { ...subOn, videoSubtitlesEnabled: false })).toBe(true)
-    expect(requestAffected(request('subtitle'), subOn, { ...subOn, autoInteractionEnabled: false })).toBe(true)
-    expect(requestAffected(request('subtitle'), subOn, { ...subOn, inputTranslationEnabled: false })).toBe(false)
-    expect(requestAffected(request('subtitle'), subOn, { ...subOn, autoOrigins: [] })).toBe(false)
-    expect(requestAffected(request('subtitle'), subOn, { ...subOn, excludedHosts: ['a.example'] })).toBe(true)
-    expect(requestAffected(request('subtitle'), subOn, { ...subOn, siteScopeMode: 'include', siteScopeHosts: ['b.example'] })).toBe(true)
+  it('输入翻译请求仅受对应开关、自动弹窗、站点排除及网站范围影响', () => {
+    const subOn = { ...BASE, inputTranslationEnabled: true }
 
     expect(requestAffected(request('input'), subOn, { ...subOn, inputTranslationEnabled: false })).toBe(true)
-    expect(requestAffected(request('input'), subOn, { ...subOn, autoInteractionEnabled: false })).toBe(true)
+    expect(requestAffected(request('input'), subOn, { ...subOn, autoInteractionEnabled: false })).toBe(false)
     expect(requestAffected(request('input'), { ...subOn, inputReplaceMode: 'auto' }, { ...subOn, inputReplaceMode: 'auto', autoInteractionEnabled: false })).toBe(false)
-    expect(requestAffected(request('input'), subOn, { ...subOn, inputReplaceMode: 'auto' })).toBe(true)
-    expect(requestAffected(request('input'), subOn, { ...subOn, videoSubtitlesEnabled: false })).toBe(false)
+    expect(requestAffected(request('input'), subOn, { ...subOn, inputReplaceMode: 'auto' })).toBe(false)
     expect(requestAffected(request('input'), subOn, { ...subOn, autoOrigins: [] })).toBe(false)
     expect(requestAffected(request('input'), subOn, { ...subOn, excludedHosts: ['a.example'] })).toBe(true)
     expect(requestAffected(request('input'), subOn, { ...subOn, inputTargetLanguage: 'es' })).toBe(true)
     expect(requestAffected(request('input'), subOn, { ...subOn, inputSourceLanguage: 'ja' })).toBe(true)
-    expect(requestAffected(request('subtitle'), subOn, { ...subOn, inputTargetLanguage: 'ja' })).toBe(false)
-    expect(requestAffected(request('subtitle'), subOn, { ...subOn, inputSourceLanguage: 'ja' })).toBe(false)
     expect(requestAffected(request('auto'), subOn, { ...subOn, inputTargetLanguage: 'fr' })).toBe(false)
     expect(translationOutputChanged(subOn, { ...subOn, inputTargetLanguage: 'de' })).toBe(false)
     expect(translationOutputChanged(subOn, { ...subOn, inputSourceLanguage: 'de' })).toBe(false)

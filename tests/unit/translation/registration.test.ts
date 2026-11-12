@@ -8,7 +8,7 @@ import {
   readInputFrameDocuments,
   readInputFrameSnapshot,
 } from '../../../src/translation/input-frame'
-import { installSiteScriptSync, SITE_SCRIPT_ID, siteScriptMatches, syncAllSiteScripts } from '../../../src/translation/registration'
+import { inputFrameScriptMatches, installSiteScriptSync, SITE_SCRIPT_ID, siteScriptMatches, syncAllSiteScripts, syncSiteTabs } from '../../../src/translation/registration'
 import { customDictionariesItem } from '../../../src/translation/custom-dictionaries'
 import { fakeBrowser } from 'wxt/testing/fake-browser'
 import { translationConfigItem, DEFAULT_TRANSLATION_CONFIG } from '../../../src/translation/config'
@@ -29,6 +29,129 @@ beforeEach(async () => {
   await translationConfigItem.setValue(CONFIG)
   await settingsItem.setValue(DEFAULT_SETTINGS)
   vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async () => true)
+})
+
+describe('输入子框架注册兼容性', () => {
+  async function freshSync(): Promise<() => Promise<void>> {
+    vi.resetModules()
+    return (await import('../../../src/translation/registration')).syncSiteScript
+  }
+
+  it.each(['register', 'update'] as const)('%s 遇到旧浏览器不识别属性时降级一次，重复同步不重新写入', async (operation) => {
+    const sync = await freshSync()
+    const scripts = fakeContentScripts()
+    await translationConfigItem.setValue({ ...CONFIG, inputTranslationEnabled: true })
+    if (operation === 'update') {
+      scripts.registered.push({
+        id: INPUT_FRAME_SCRIPT_ID,
+        matches: ['https://editor.example/*'],
+        js: ['input-frame.js'],
+        allFrames: true,
+        runAt: 'document_idle',
+        persistAcrossSessions: true,
+      })
+    }
+    const method = operation === 'register' ? 'registerContentScripts' : 'updateContentScripts'
+    const apply = vi.mocked(fakeBrowser.scripting[method]).getMockImplementation()!
+    let rejectedProperty = 0
+    const attempts: Array<{ id: string; matchOriginAsFallback?: boolean }> = []
+    vi.spyOn(fakeBrowser.scripting, method).mockImplementation(async (definitions) => {
+      for (const definition of definitions) {
+        if (definition.id === INPUT_FRAME_SCRIPT_ID) {
+          const snapshot = { ...definition } as { id: string; matchOriginAsFallback?: boolean }
+          attempts.push(snapshot)
+          if ('matchOriginAsFallback' in snapshot) {
+            rejectedProperty += 1
+            throw new TypeError("Error at parameter 'scripts': Error at index 0: Unexpected property: 'matchOriginAsFallback'.")
+          }
+        }
+      }
+      await apply(definitions, () => undefined)
+    })
+
+    await sync()
+    expect(rejectedProperty).toBe(1)
+    expect(attempts).toHaveLength(2)
+    expect(attempts[0]?.matchOriginAsFallback).toBe(true)
+    expect(attempts[1]).not.toHaveProperty('matchOriginAsFallback')
+    expect(scripts.registered.find((script) => script.id === INPUT_FRAME_SCRIPT_ID)).toMatchObject({
+      allFrames: true,
+      matches: ['http://*/*', 'https://*/*'],
+      persistAcrossSessions: true,
+    })
+    const registerCount = vi.mocked(fakeBrowser.scripting.registerContentScripts).mock.calls.length
+    const updateCount = vi.mocked(fakeBrowser.scripting.updateContentScripts).mock.calls.length
+    await sync()
+    expect(vi.mocked(fakeBrowser.scripting.registerContentScripts).mock.calls).toHaveLength(registerCount)
+    expect(vi.mocked(fakeBrowser.scripting.updateContentScripts).mock.calls).toHaveLength(updateCount)
+
+    await translationConfigItem.setValue({
+      ...CONFIG,
+      inputTranslationEnabled: true,
+      siteScopeMode: 'exclude',
+      siteScopeHosts: ['blocked.example'],
+    })
+    await sync()
+    expect(scripts.registered.find((script) => script.id === INPUT_FRAME_SCRIPT_ID)).toMatchObject({
+      excludeMatches: ['http://*.blocked.example/*', 'https://*.blocked.example/*'],
+    })
+    expect(scripts.registered.find((script) => script.id === INPUT_FRAME_SCRIPT_ID)).not.toHaveProperty('matchOriginAsFallback')
+    expect(rejectedProperty).toBe(1)
+  })
+
+  it.each([
+    'Cannot access contents of url: missing host permission',
+    "Unexpected property: 'unrelatedProperty'.",
+    'matchOriginAsFallback: permission denied',
+  ])('注册的非兼容性错误原样抛出且不重试：%s', async (message) => {
+    const sync = await freshSync()
+    fakeContentScripts()
+    await translationConfigItem.setValue({ ...CONFIG, inputTranslationEnabled: true })
+    const apply = vi.mocked(fakeBrowser.scripting.registerContentScripts).getMockImplementation()!
+    const error = new Error(message)
+    let inputAttempts = 0
+    vi.spyOn(fakeBrowser.scripting, 'registerContentScripts').mockImplementation(async (definitions) => {
+      if (definitions.some((definition) => definition.id === INPUT_FRAME_SCRIPT_ID)) {
+        inputAttempts += 1
+        throw error
+      }
+      await apply(definitions, () => undefined)
+    })
+    await expect(sync()).rejects.toBe(error)
+    expect(inputAttempts).toBe(1)
+  })
+
+  it('更新的权限错误原样抛出，不触发降级或注册', async () => {
+    const sync = await freshSync()
+    const scripts = fakeContentScripts()
+    scripts.registered.push({ id: INPUT_FRAME_SCRIPT_ID, matches: ['https://old.example/*'] })
+    await translationConfigItem.setValue({ ...CONFIG, inputTranslationEnabled: true })
+    const error = new Error('Permission denied')
+    const update = vi.spyOn(fakeBrowser.scripting, 'updateContentScripts').mockRejectedValue(error)
+    await expect(sync()).rejects.toBe(error)
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fakeBrowser.scripting.registerContentScripts).mock.calls.flatMap(([definitions]) => definitions))
+      .not.toContainEqual(expect.objectContaining({ id: INPUT_FRAME_SCRIPT_ID }))
+  })
+
+  it('降级后仍失败时保留错误，不循环重试', async () => {
+    const sync = await freshSync()
+    fakeContentScripts()
+    await translationConfigItem.setValue({ ...CONFIG, inputTranslationEnabled: true })
+    const apply = vi.mocked(fakeBrowser.scripting.registerContentScripts).getMockImplementation()!
+    const error = new Error('Permission denied after fallback')
+    let inputAttempts = 0
+    vi.spyOn(fakeBrowser.scripting, 'registerContentScripts').mockImplementation(async (definitions) => {
+      if (definitions.some((definition) => definition.id === INPUT_FRAME_SCRIPT_ID)) {
+        inputAttempts += 1
+        if (inputAttempts === 1) throw new TypeError("Unexpected property: 'matchOriginAsFallback'.")
+        throw error
+      }
+      await apply(definitions, () => undefined)
+    })
+    await expect(sync()).rejects.toBe(error)
+    expect(inputAttempts).toBe(2)
+  })
 })
 
 describe('syncSiteTabs/sendToTab', () => {
@@ -119,6 +242,19 @@ describe('installSiteScriptSync', () => {
 })
 
 describe('siteScriptMatches', () => {
+  it('输入子框架同时保留 HTTPS 全站权限与单独授予的 HTTP 来源', async () => {
+    vi.mocked(fakeBrowser.permissions.contains).mockImplementation(async (permission) =>
+      (permission.origins ?? []).every((origin) => origin === 'https://*/*' || origin === 'http://editor.example/*'),
+    )
+    const matches = await inputFrameScriptMatches({
+      ...CONFIG,
+      inputTranslationEnabled: true,
+      autoOrigins: ['http://editor.example'],
+    })
+    expect(matches).toEqual(['http://editor.example/*', 'https://*/*'])
+    expect(matches).not.toContain('http://*/*')
+  })
+
   it('已授权的内置与自定义词典 host 进入 matches，未授权与 disabled 不进入', async () => {
     await customDictionariesItem.setValue([
       { id: 'custom:ok12', label: 'T', hosts: ['tools.example.com'], entries: { A: 'a' }, enabled: true },
@@ -282,8 +418,8 @@ describe('网站运行范围脚本注册', () => {
     expect(denied).toEqual([])
   })
 
-  it('仅开启视频字幕或输入翻译时匹配已授权全站并遵守网站运行范围', async () => {
-    for (const flag of [{ videoSubtitlesEnabled: true }, { inputTranslationEnabled: true }] as const) {
+  it('仅开启输入翻译时匹配已授权全站并遵守网站运行范围', async () => {
+    for (const flag of [{ inputTranslationEnabled: true }] as const) {
       const matches = await siteScriptMatches({
         ...DEFAULT_TRANSLATION_CONFIG,
         selectionPopupEnabled: false,
@@ -349,7 +485,60 @@ describe('网站运行范围脚本注册', () => {
   })
 })
 
-describe('YouTube live_chat 输入子框架注册与同步', () => {
+describe('同源输入子框架注册与同步', () => {
+  it('普通编辑器仅注入同源与继承来源框架，排除站、敏感页和范围外仍停止', async () => {
+    let topUrl = 'https://editor.example/document'
+    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [{ id: 19, url: topUrl }] as never)
+    const send = vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async () => ({ ok: true }))
+    const injected: unknown[] = []
+    vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation((async (injection: {
+      target: unknown; files?: unknown; func?: unknown
+    }) => {
+      if (injection.func === readInputFrameSnapshot) {
+        return [
+          { frameId: 0, documentId: 'top', result: { url: topUrl, topUrl, focused: false } },
+          { frameId: 2, documentId: 'same', result: { url: 'https://editor.example/frame', topUrl, focused: true } },
+          { frameId: 3, documentId: 'blank', result: { url: 'about:blank', topUrl, focused: false } },
+          { frameId: 4, documentId: 'srcdoc', result: { url: 'about:srcdoc', topUrl, focused: false } },
+          { frameId: 5, documentId: 'cross', result: { url: 'https://other.example/frame', topUrl, focused: false } },
+          { frameId: 6, documentId: 'sensitive', result: { url: 'https://editor.example/account', topUrl, focused: false } },
+          { frameId: 7, documentId: 'stale', result: { url: 'https://editor.example/frame', topUrl: 'https://editor.example/previous', focused: false } },
+        ]
+      }
+      injected.push(injection.target)
+      return []
+    }) as never)
+    await translationConfigItem.setValue({ ...CONFIG, inputTranslationEnabled: true })
+    await syncAllSiteScripts()
+    expect(injected).toEqual([
+      { tabId: 19, documentIds: ['same'] },
+      { tabId: 19, documentIds: ['blank'] },
+      { tabId: 19, documentIds: ['srcdoc'] },
+    ])
+    for (const patch of [
+      { excludedHosts: ['editor.example'] },
+      { siteScopeMode: 'include' as const, siteScopeHosts: ['other.example'] },
+      { inputTranslationEnabled: false },
+    ]) {
+      injected.length = 0
+      send.mockClear()
+      await translationConfigItem.setValue({ ...CONFIG, inputTranslationEnabled: true, ...patch })
+      await syncSiteTabs(
+        { ...CONFIG, inputTranslationEnabled: true },
+        { ...CONFIG, inputTranslationEnabled: true, ...patch },
+      )
+      expect(injected).toEqual([])
+      expect(send).toHaveBeenCalledWith(19, { type: 'wt:stop-input-frame' })
+    }
+    injected.length = 0
+    send.mockClear()
+    topUrl = 'https://editor.example/account'
+    await translationConfigItem.setValue({ ...CONFIG, inputTranslationEnabled: true })
+    await syncAllSiteScripts()
+    expect(injected).toEqual([])
+    expect(send).toHaveBeenCalledWith(19, { type: 'wt:stop-input-frame' })
+  })
+
   it('URL 纯函数与快照解析严格校验同源 YouTube live_chat', async () => {
     expect(isYouTubePageUrl('https://www.youtube.com/watch?v=fixture')).toBe(true)
     expect(isYouTubePageUrl('https://youtube.com/live/fixture')).toBe(true)
@@ -455,7 +644,7 @@ describe('YouTube live_chat 输入子框架注册与同步', () => {
     ])
   })
 
-  it('独立注册 wt-input-frames (allFrames: true) 而 wt-sites 保持 allFrames: false；关闭 input、总开关、撤权或排除时注销子脚本', async () => {
+  it('独立注册 wt-input-frames，遵守网站范围，关闭 input、总开关或撤权时注销子脚本', async () => {
     const scripts = fakeContentScripts()
     vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [] as never)
     vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async () => ({ ok: true }))
@@ -463,7 +652,6 @@ describe('YouTube live_chat 输入子框架注册与同步', () => {
     await translationConfigItem.setValue({
       ...CONFIG,
       inputTranslationEnabled: true,
-      videoSubtitlesEnabled: true,
     })
     await syncAllSiteScripts()
 
@@ -478,9 +666,10 @@ describe('YouTube live_chat 输入子框架注册与同步', () => {
     expect(frameScript).toMatchObject({
       id: INPUT_FRAME_SCRIPT_ID,
       js: ['input-frame.js'],
-      matches: ['https:// www.youtube.com/live_chat*'.replace(' ', ''), 'https://youtube.com/live_chat*'],
+      matches: ['http://*/*', 'https://*/*'],
       excludeMatches: [],
       allFrames: true,
+      matchOriginAsFallback: true,
       persistAcrossSessions: true,
     })
 
@@ -493,27 +682,26 @@ describe('YouTube live_chat 输入子框架注册与同步', () => {
     })
     await syncAllSiteScripts()
     expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toMatchObject({
-      matches: ['https://www.youtube.com/live_chat*'],
+      matches: ['http://*.www.youtube.com/*', 'https://*.www.youtube.com/*'],
     })
 
     // 关闭 inputTranslationEnabled 注销子脚本，保留主脚本
     await translationConfigItem.setValue({
       ...CONFIG,
       inputTranslationEnabled: false,
-      videoSubtitlesEnabled: true,
     })
     await syncAllSiteScripts()
     expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toBeUndefined()
     expect(scripts.registered.find((s) => s.id === SITE_SCRIPT_ID)).toBeDefined()
 
-    // 重新开启后再测排除 youtube.com 注销子脚本
+    // 重新开启后再测排除 youtube.com 不影响其他站点的子脚本注册
     await translationConfigItem.setValue({
       ...CONFIG,
       inputTranslationEnabled: true,
       excludedHosts: ['youtube.com'],
     })
     await syncAllSiteScripts()
-    expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toBeUndefined()
+    expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toBeDefined()
 
     // 恢复非排除后测试撤权注销子脚本
     await translationConfigItem.setValue({
@@ -524,10 +712,7 @@ describe('YouTube live_chat 输入子框架注册与同步', () => {
     await syncAllSiteScripts()
     expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toBeDefined()
 
-    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (perm) => {
-      const origins = perm.origins ?? []
-      return !origins.some((o) => o.includes('youtube.com'))
-    })
+    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async () => false)
     await syncAllSiteScripts()
     expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toBeUndefined()
 
@@ -541,7 +726,7 @@ describe('YouTube live_chat 输入子框架注册与同步', () => {
     expect(scripts.registered.find((s) => s.id === INPUT_FRAME_SCRIPT_ID)).toBeUndefined()
   })
 
-  it('已打开 YouTube 标签页只注入发现的同源 live_chat documentId，撤权发送专用 stop 且不停止父字幕', async () => {
+  it('已打开标签页只向同源子框架注入，撤权发送专用 stop 且不停止父页面', async () => {
     const ytTopUrl = 'https://www.youtube.com/watch?v=fixture'
     const tabs = [
       { id: 10, url: ytTopUrl },
@@ -605,7 +790,6 @@ describe('YouTube live_chat 输入子框架注册与同步', () => {
 
     await translationConfigItem.setValue({
       ...CONFIG,
-      videoSubtitlesEnabled: true,
       inputTranslationEnabled: true,
     })
     await syncAllSiteScripts()
@@ -613,6 +797,10 @@ describe('YouTube live_chat 输入子框架注册与同步', () => {
     expect(injectedTargets).toEqual([
       {
         target: { tabId: 10, documentIds: ['yt-live-chat-doc'] },
+        files: INPUT_FRAME_SCRIPT_FILES,
+      },
+      {
+        target: { tabId: 10, documentIds: ['yt-replay-doc'] },
         files: INPUT_FRAME_SCRIPT_FILES,
       },
     ])
@@ -626,9 +814,13 @@ describe('YouTube live_chat 输入子框架注册与同步', () => {
       message: { type: 'wt:refresh-input-frame' },
       options: { documentId: 'yt-live-chat-doc' },
     })
-    expect(sent.some((item) => item.tabId === 11 && (item.message as { type?: string }).type === 'wt:refresh-input-frame')).toBe(false)
+    expect(sent).toContainEqual({
+      tabId: 11,
+      message: { type: 'wt:refresh-input-frame' },
+      options: undefined,
+    })
 
-    // 撤销 YouTube 权限或关闭输入翻译：发送专用 wt:stop-input-frame，不向父页面发 wt:stop（不停止父视频字幕）
+    // 撤销 YouTube 权限或关闭输入翻译：发送专用 wt:stop-input-frame，不向父页面发 wt:stop
     sent.length = 0
     injectedTargets.length = 0
     vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (perm) => {

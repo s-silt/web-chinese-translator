@@ -1,6 +1,7 @@
 import { customDictionariesItem } from '../../../src/translation/custom-dictionaries'
 import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { fakeBrowser } from 'wxt/testing/fake-browser'
+import type { Browser } from 'wxt/browser'
 import { installTranslationBackground } from '../../../src/translation/background'
 import { replaceChatDraftInMainWorld } from '../../../src/translation/chat-input'
 import { replaceDiscordDraftInMainWorld } from '../../../src/translation/discord-input'
@@ -875,8 +876,8 @@ describe('模型隐私边界真实消息入口', () => {
     expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputSourceLanguage: 'auto' } })).toBe(true)
     expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputSourceLanguage: 'ja' } })).toBe(true)
     expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputSourceLanguage: 'xx' } })).toBe(false)
-    expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputReplaceKey: 'Ctrl+Enter' } })).toBe(true)
-    expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputReplaceKey: '' } })).toBe(true)
+    expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputReplaceKey: 'Ctrl+Enter' } })).toBe(false)
+    expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputReplaceKey: '' } })).toBe(false)
     expect(isTranslationMessage({ type: 'wt:save-config', patch: { inputReplaceKey: 'a' } })).toBe(false)
     const { sourceLanguage: _source, ...missingSource } = VALID_CONFIG
     expect(isTranslationReply({ ok: true, config: missingSource })).toBe(false)
@@ -2874,68 +2875,16 @@ describe('浏览器快捷键', () => {
     expect(sent).toEqual([])
   })
 
-  it('translate-input 只在已授权的普通标签页发送 wt:translate-input，不读取选区', async () => {
-    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true, autoInteractionEnabled: false })
-    const inject = vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation((async (opts: {
-      target?: { allFrames?: boolean; documentIds?: string[] }
-      files?: string[]
-    }) => {
-      if (opts.files !== undefined) return []
-      return [
-        {
-          frameId: 0,
-          documentId: 'doc-top',
-          result: { url: contentSender.url, topUrl: contentSender.url, focused: true },
-        },
-      ]
-    }) as never)
-    const sent: unknown[] = []
-    vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async (_tabId, message) => {
-      sent.push(message)
-      return { ok: true }
-    })
-    vi.spyOn(fakeBrowser.tabs, 'get').mockImplementation(
-      async (id) => ({ id, url: contentSender.url }) as never,
-    )
-    commandTrigger!('translate-input', { id: contentSender.tab.id, url: contentSender.url } as never)
-    await vi.waitFor(() => expect(sent).toEqual([{ type: 'wt:translate-input' }]))
-    // 新路由先全帧读取焦点快照，再向选中的 document 定向注入/投递
-    expect(inject).toHaveBeenCalled()
-    expect(inject.mock.calls[0]?.[0]).toMatchObject({ target: { tabId: contentSender.tab.id, allFrames: true } })
-
-    sent.length = 0
-    commandTrigger!('translate-input', { id: contentSender.tab.id, url: contentSender.url, incognito: true } as never)
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    expect(sent).toEqual([])
-
-    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: false })
-    commandTrigger!('translate-input', { id: contentSender.tab.id, url: contentSender.url } as never)
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    expect(sent).toEqual([])
-  })
-
-  it.each([true, false])('Alt+Y 全帧注入失败后只回退顶层实际焦点：%s', async (focused) => {
+  it('已移除的输入命令不会注入、写入或打开文本窗口', async () => {
     await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true })
-    const inject = vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation((async (opts: {
-      target?: { allFrames?: boolean; frameIds?: number[] }
-      files?: string[]
-    }) => {
-      if (opts.target?.allFrames === true) throw new Error('Cannot access contents of the page')
-      if (opts.files !== undefined) return []
-      return [{ frameId: 0, documentId: 'doc-top', result: { url: contentSender.url, topUrl: contentSender.url, focused } }]
-    }) as never)
-    vi.spyOn(fakeBrowser.tabs, 'get').mockResolvedValue({ id: contentSender.tab.id, url: contentSender.url } as never)
-    const send = vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async () => ({ ok: true }))
-    const open = vi.spyOn(fakeBrowser.windows, 'create').mockResolvedValue({ id: 88 } as never)
+    const inject = vi.spyOn(fakeBrowser.scripting, 'executeScript')
+    const send = vi.spyOn(fakeBrowser.tabs, 'sendMessage')
+    const open = vi.spyOn(fakeBrowser.windows, 'create')
     commandTrigger!('translate-input', { id: contentSender.tab.id, url: contentSender.url } as never)
-    if (focused) {
-      await vi.waitFor(() => expect(send).toHaveBeenCalledWith(contentSender.tab.id, { type: 'wt:translate-input' }, { frameId: 0, documentId: 'doc-top' }))
-      expect(open).not.toHaveBeenCalled()
-    } else {
-      await vi.waitFor(() => expect(open).toHaveBeenCalled())
-      expect(send).not.toHaveBeenCalled()
-    }
-    expect(inject.mock.calls[1]?.[0]).toMatchObject({ target: { tabId: contentSender.tab.id, frameIds: [0] } })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(inject).not.toHaveBeenCalled()
+    expect(send).not.toHaveBeenCalled()
+    expect(open).not.toHaveBeenCalled()
   })
 
   it('Alt+S 焦点在已授权跨源 iframe 时优先读取该 frame 并展示到 top doc，不聚合其他 frame，且语境仅用源 frame 站点', async () => {
@@ -4186,302 +4135,86 @@ describe('悬浮模型设置入口', () => {
   })
 })
 
-describe('视频字幕与输入翻译后台策略与方向控制', () => {
-  beforeEach(async () => {
-    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [] as never)
-    await settingsItem.setValue(DEFAULT_SETTINGS)
-    await clearPersistentTranslations()
-    vi.mocked(readPersistentTranslations).mockClear()
-    vi.mocked(writePersistentTranslations).mockClear()
+describe('输入翻译自动处理边界与字幕移除', () => {
+  it('仅保留 input 模式，自动弹窗关闭不阻断明确开启的自动输入', async () => {
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true, autoOrigins: [], autoInteractionEnabled: false })
+    const reply = await trigger({ type: 'wt:page-modes' }, contentSender)
+    expect(reply).toMatchObject({ ok: true, modes: { auto: false, input: true } })
+    expect(reply).not.toHaveProperty('modes.subtitles')
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completionReply(['English']))
+    expect(await trigger({ type: 'wt:translate', mode: 'input', texts: ['中文'], requestId: 'auto-input-1' }, contentSender)).toEqual({ ok: true, texts: ['English'] })
+    expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
-  it('开启视频字幕或输入翻译时检查全站访问权限，未获授时拒绝保存', async () => {
-    await translationConfigItem.setValue(VALID_CONFIG)
-    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (perm) => {
-      const origins = perm.origins ?? []
-      return !origins.includes('http://*/*')
-    })
-    expect(
-      await trigger({ type: 'wt:save-config', patch: { videoSubtitlesEnabled: true } }, extSender),
-    ).toEqual({ ok: false, error: '未授权访问站点' })
-    expect(
-      await trigger({ type: 'wt:save-config', patch: { inputTranslationEnabled: true } }, extSender),
-    ).toEqual({ ok: false, error: '未授权访问站点' })
-
-    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async () => true)
-    expect(
-      await trigger(
-        { type: 'wt:save-config', patch: { videoSubtitlesEnabled: true, inputTranslationEnabled: true } },
-        extSender,
-      ),
-    ).toMatchObject({
-      ok: true,
-      config: { videoSubtitlesEnabled: true, inputTranslationEnabled: true },
-    })
-  })
-
-  it('page-modes 按总开关、模型配置、自动弹窗与功能开关计算 subtitles 和 input，且不依赖 autoOrigins', async () => {
-    await translationConfigItem.setValue({
-      ...VALID_CONFIG,
-      autoOrigins: [],
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-    })
-    expect(await trigger({ type: 'wt:page-modes' }, contentSender)).toMatchObject({
-      ok: true,
-      modes: { auto: false, subtitles: true, input: true },
-    })
-
-    await translationConfigItem.setValue({
-      ...VALID_CONFIG,
-      autoOrigins: [],
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-      autoInteractionEnabled: false,
-    })
-    expect(await trigger({ type: 'wt:page-modes' }, contentSender)).toMatchObject({
-      ok: true,
-      modes: { subtitles: false, input: true },
-    })
-  })
-
-  it('功能未开启、自动弹窗关闭、无站点权限、敏感页、排除站点、网站范围外或非顶层 frame 均拒绝且不发起网络请求', async () => {
-    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completionReply(['out']))
-    const subMsg = { type: 'wt:translate', mode: 'subtitle', texts: ['Hello'], requestId: 'sub-deny-1' } as const
-    const inMsg = { type: 'wt:translate', mode: 'input', texts: ['你好'], requestId: 'in-deny-1' } as const
-
-    await translationConfigItem.setValue({
-      ...VALID_CONFIG,
-      autoOrigins: [],
-      videoSubtitlesEnabled: false,
-      inputTranslationEnabled: false,
-    })
-    expect(await trigger(subMsg, contentSender)).toMatchObject({ ok: false })
-    expect(await trigger(inMsg, contentSender)).toMatchObject({ ok: false })
-
-    await translationConfigItem.setValue({
-      ...VALID_CONFIG,
-      autoOrigins: [],
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-      autoInteractionEnabled: false,
-    })
-    expect(await trigger({ ...subMsg, requestId: 'sub-deny-2' }, contentSender)).toMatchObject({ ok: false })
-    expect(await trigger({ ...inMsg, requestId: 'in-deny-2' }, contentSender)).toMatchObject({ ok: false })
-
-    await translationConfigItem.setValue({
-      ...VALID_CONFIG,
-      autoOrigins: [],
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-    })
-    expect(
-      await trigger({ ...subMsg, requestId: 'sub-deny-frame' }, { ...contentSender, frameId: 1 }),
-    ).toMatchObject({ ok: false })
-    expect(
-      await trigger({ ...subMsg, requestId: 'sub-deny-sens' }, { ...contentSender, url: 'https://app.devin.ai/settings/tokens' }),
-    ).toMatchObject({ ok: false })
-
-    await translationConfigItem.setValue({
-      ...VALID_CONFIG,
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-      excludedHosts: ['app.devin.ai'],
-    })
-    expect(await trigger({ ...subMsg, requestId: 'sub-deny-excl' }, contentSender)).toMatchObject({ ok: false })
-
-    await translationConfigItem.setValue({
-      ...VALID_CONFIG,
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-      siteScopeMode: 'include',
-      siteScopeHosts: ['other.example'],
-    })
-    expect(await trigger({ ...inMsg, requestId: 'in-deny-scope' }, contentSender)).toMatchObject({ ok: false })
-
-    await translationConfigItem.setValue({
-      ...VALID_CONFIG,
-      autoOrigins: [],
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-    })
-    await putManualPageGrant({ id: 'manual-1', tabId: 7, documentId: 'doc-top', url: contentSender.url })
-    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (perm) => {
-      const origins = perm.origins ?? []
-      return !origins.includes('https://app.devin.ai/*')
-    })
-    expect(await trigger({ ...subMsg, requestId: 'sub-deny-perm' }, contentSender)).toMatchObject({ ok: false })
+  it('已移除的字幕模式及输入命令被拒绝，不发起请求', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    const reply = vi.fn()
+    const handled = await fakeBrowser.runtime.onMessage.trigger({ type: 'wt:translate', mode: 'subtitle', texts: ['English'], requestId: 'removed-sub' }, contentSender as Browser.runtime.MessageSender, reply)
+    expect(handled).not.toContain(true)
+    expect(reply).not.toHaveBeenCalled()
     expect(fetcher).not.toHaveBeenCalled()
   })
 
-  it('方向固定：input 固定译为英文且 source=auto，subtitle 除 zh-TW 外固定译为 zh-CN 且不读写持久缓存、不附带阅读语境', async () => {
+  it('未开启、无站点权限、敏感页、排除站点及网站范围外均拒绝输入处理', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completionReply(['English']))
+    const message = { type: 'wt:translate', mode: 'input', texts: ['中文'], requestId: 'input-denied' } as const
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: false })
+    expect(await trigger(message, contentSender)).toMatchObject({ ok: false })
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true })
+    expect(await trigger(message, { ...contentSender, url: 'https://app.devin.ai/settings/tokens' })).toMatchObject({ ok: false })
+    expect(await trigger(message, { ...contentSender, frameId: 1 })).toMatchObject({ ok: false })
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true, excludedHosts: ['app.devin.ai'] })
+    expect(await trigger(message, contentSender)).toMatchObject({ ok: false })
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true, siteScopeMode: 'include', siteScopeHosts: ['other.example'] })
+    expect(await trigger(message, contentSender)).toMatchObject({ ok: false })
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true })
+    await putManualPageGrant({ id: 'manual-input-deny', tabId: 7, documentId: 'doc-top', url: contentSender.url })
+    vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async permission => !(permission.origins ?? []).includes('https://app.devin.ai/*'))
+    expect(await trigger(message, contentSender)).toMatchObject({ ok: false })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('输入方向独立于网页，不访问持久缓存或附带阅读语境', async () => {
     const prompts: string[] = []
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
       const body = JSON.parse(String(init?.body ?? '{}')) as { messages?: Array<{ content: string }> }
       prompts.push(body.messages?.[0]?.content ?? '')
-      return completionReply(['Translated line'])
+      return completionReply(['Translated draft'])
     })
-
-    await translationConfigItem.setValue({
-      ...VALID_CONFIG,
-      autoOrigins: [],
-      targetLanguage: 'ja',
-      sourceLanguage: 'en',
-      proactiveAssistEnabled: true,
-      selectionPopupEnabled: true,
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-    })
-
-    const inReply = await trigger(
-      { type: 'wt:translate', mode: 'input', texts: ['你好，世界'], requestId: 'in-dir-1' },
-      contentSender,
-    )
-    expect(inReply).toEqual({ ok: true, texts: ['Translated line'] })
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true, autoOrigins: [], targetLanguage: 'ja', sourceLanguage: 'en' })
+    expect(await trigger({ type: 'wt:translate', mode: 'input', texts: ['中文草稿'], requestId: 'input-direction-1' }, contentSender)).toEqual({ ok: true, texts: ['Translated draft'] })
     expect(prompts.at(-1)).toContain('into natural, accurate English')
     expect(prompts.at(-1)).not.toContain('Japanese')
-    expect(prompts.at(-1)).not.toContain('Translate from English')
     expect(prompts.at(-1)).not.toContain('app.devin.ai')
-
-    const subReply = await trigger(
-      { type: 'wt:translate', mode: 'subtitle', texts: ['こんにちは'], requestId: 'sub-dir-1' },
-      contentSender,
-    )
-    expect(subReply).toEqual({ ok: true, texts: ['Translated line'] })
-    expect(prompts.at(-1)).toContain('into natural, accurate Simplified Chinese')
-    expect(prompts.at(-1)).not.toContain('Translate from English')
-    expect(prompts.at(-1)).not.toContain('app.devin.ai')
-
-    await translationConfigItem.setValue({
-      ...VALID_CONFIG,
-      autoOrigins: [],
-      targetLanguage: 'zh-TW',
-      sourceLanguage: 'en',
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-    })
-    const twReply = await trigger(
-      { type: 'wt:translate', mode: 'subtitle', texts: ['Hello world'], requestId: 'sub-dir-tw' },
-      contentSender,
-    )
-    expect(twReply).toEqual({ ok: true, texts: ['Translated line'] })
-    expect(prompts.at(-1)).toContain('into natural, accurate Traditional Chinese')
-
-    await translationConfigItem.setValue({
-      ...VALID_CONFIG,
-      autoOrigins: [],
-      targetLanguage: 'ja',
-      inputSourceLanguage: 'fr',
-      inputTargetLanguage: 'es',
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-    })
-    const esReply = await trigger(
-      { type: 'wt:translate', mode: 'input', texts: ['请检查这段代码'], requestId: 'in-dir-es', manualInput: true },
-      contentSender,
-    )
-    expect(esReply).toEqual({ ok: true, texts: ['Translated line'] })
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true, targetLanguage: 'ja', inputSourceLanguage: 'fr', inputTargetLanguage: 'es' })
+    expect(await trigger({ type: 'wt:translate', mode: 'input', texts: ['Bonjour tout le monde'], requestId: 'input-direction-2' }, contentSender)).toEqual({ ok: true, texts: ['Translated draft'] })
     expect(prompts.at(-1)).toContain('into natural, accurate Spanish')
     expect(prompts.at(-1)).toContain('The source language is French.')
-    expect(prompts.at(-1)).not.toContain('Japanese')
-    const stored = await translationConfigItem.getValue()
-    expect(stored.targetLanguage).toBe('ja')
-    const subStill = await trigger(
-      { type: 'wt:translate', mode: 'subtitle', texts: ['Hello'], requestId: 'sub-dir-es-indep' },
-      contentSender,
-    )
-    expect(subStill).toEqual({ ok: true, texts: ['Translated line'] })
-    expect(prompts.at(-1)).toContain('into natural, accurate Simplified Chinese')
-
+    expect((await translationConfigItem.getValue()).targetLanguage).toBe('ja')
     expect(readPersistentTranslations).not.toHaveBeenCalled()
     expect(writePersistentTranslations).not.toHaveBeenCalled()
   })
 
-  it('同模式新请求仅中止同标签页同模式旧请求，subtitle、input 与手动划词互不抢占', async () => {
-    await translationConfigItem.setValue({
-      ...VALID_CONFIG,
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-    })
-    const signals: Record<string, AbortSignal> = {}
-    const resolvers: Record<string, (res: Response) => void> = {}
+  it('新输入取消同标签页旧请求，关闭输入功能取消在途请求', async () => {
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true })
+    const signals: AbortSignal[] = []
     vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
-      const body = JSON.parse(String(init?.body ?? '{}')) as { messages?: Array<{ content: string }> }
-      const userContent = body.messages?.[1]?.content ?? ''
-      const tag = userContent.includes('SUB_1')
-        ? 'sub1'
-        : userContent.includes('SUB_2')
-          ? 'sub2'
-          : userContent.includes('IN_1')
-            ? 'in1'
-            : 'sel1'
-      const sig = init?.signal as AbortSignal
-      signals[tag] = sig
-      return new Promise<Response>((resolve, reject) => {
-        sig?.addEventListener('abort', () => {
-          const err = new Error('aborted')
-          err.name = 'AbortError'
-          reject(err)
-        })
-        resolvers[tag] = resolve
-      })
+      const signal = init?.signal as AbortSignal
+      signals.push(signal)
+      return new Promise<Response>((_resolve, reject) => signal.addEventListener('abort', () => {
+        const error = new Error('aborted'); error.name = 'AbortError'; reject(error)
+      }))
     })
-
-    const pSub1 = trigger(
-      { type: 'wt:translate', mode: 'subtitle', texts: ['SUB_1'], requestId: 'r-sub-1' },
-      contentSender,
-    )
-    const pIn1 = trigger(
-      { type: 'wt:translate', mode: 'input', texts: ['IN_1 中文'], requestId: 'r-in-1' },
-      contentSender,
-    )
-    await vi.waitFor(() => {
-      expect(signals.sub1).toBeDefined()
-      expect(signals.in1).toBeDefined()
-    })
-
-    const pSub2 = trigger(
-      { type: 'wt:translate', mode: 'subtitle', texts: ['SUB_2'], requestId: 'r-sub-2' },
-      contentSender,
-    )
-    await vi.waitFor(() => expect(signals.sub1?.aborted).toBe(true))
-    expect(signals.in1?.aborted).toBe(false)
-    expect(await pSub1).toMatchObject({ ok: false, code: 'cancelled' })
-
-    await vi.waitFor(() => expect(signals.sub2).toBeDefined())
-    resolvers.in1!(completionReply(['English draft']))
-    resolvers.sub2!(completionReply(['字幕二']))
-    expect(await pIn1).toEqual({ ok: true, texts: ['English draft'] })
-    expect(await pSub2).toEqual({ ok: true, texts: ['字幕二'] })
-  })
-
-  it('在途字幕或输入请求期间关闭对应功能开关立即取消', async () => {
-    await translationConfigItem.setValue({
-      ...VALID_CONFIG,
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-    })
-    let subSignal: AbortSignal | undefined
-    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
-      const sig = init?.signal as AbortSignal
-      subSignal = sig
-      return new Promise<Response>((_resolve, reject) => {
-        sig?.addEventListener('abort', () => {
-          const err = new Error('aborted')
-          err.name = 'AbortError'
-          reject(err)
-        })
-      })
-    })
-
-    const pending = trigger(
-      { type: 'wt:translate', mode: 'subtitle', texts: ['Inflight subtitle'], requestId: 'r-inflight-sub' },
-      contentSender,
-    )
-    await vi.waitFor(() => expect(subSignal).toBeDefined())
-    await trigger({ type: 'wt:save-config', patch: { videoSubtitlesEnabled: false } }, extSender)
-    expect(subSignal?.aborted).toBe(true)
-    expect(await pending).toMatchObject({ ok: false, code: 'cancelled' })
+    const first = trigger({ type: 'wt:translate', mode: 'input', texts: ['第一段中文'], requestId: 'input-old' }, contentSender)
+    await vi.waitFor(() => expect(signals).toHaveLength(1))
+    const second = trigger({ type: 'wt:translate', mode: 'input', texts: ['第二段中文'], requestId: 'input-new' }, contentSender)
+    await vi.waitFor(() => expect(signals).toHaveLength(2))
+    expect(signals[0]?.aborted).toBe(true)
+    expect(signals[1]?.aborted).toBe(false)
+    expect(await first).toMatchObject({ ok: false, code: 'cancelled' })
+    await trigger({ type: 'wt:save-config', patch: { inputTranslationEnabled: false } }, extSender)
+    expect(signals[1]?.aborted).toBe(true)
+    expect(await second).toMatchObject({ ok: false, code: 'cancelled' })
   })
 })
 

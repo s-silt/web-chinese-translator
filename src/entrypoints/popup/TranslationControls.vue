@@ -100,16 +100,6 @@
           </div>
           <div class="popup-switch">
             <UiSwitch
-              :checked="videoSubtitlesEnabled"
-              :disabled="moreDisabled"
-              :label="t('wtVideoSubtitlesShort')"
-              :aria-describedby="moreReason !== '' ? 'wt-more-reason' : undefined"
-              data-test="wt-popup-video-subtitles"
-              @change="setVideoSubtitles"
-            />
-          </div>
-          <div class="popup-switch">
-            <UiSwitch
               :checked="inputTranslationEnabled"
               :disabled="moreDisabled"
               :label="t('wtInputTranslation')"
@@ -163,7 +153,6 @@ const {
   canResume,
   floatingEnabled,
   autoInteractionEnabled,
-  videoSubtitlesEnabled,
   inputTranslationEnabled,
   configurationReady,
   masterEnabled,
@@ -177,7 +166,6 @@ const {
   setFloating,
   setAutoInteraction,
   setAuto,
-  setVideoSubtitles,
   setInputTranslation,
   openOptionsAt,
 } = useProvidedTranslationControls()

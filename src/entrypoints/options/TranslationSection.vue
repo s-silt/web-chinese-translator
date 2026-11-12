@@ -226,17 +226,6 @@
         </div>
         <div class="ui-panel">
           <UiSwitch
-            :checked="videoSubtitlesEnabled"
-            :label="t('wtVideoSubtitles')"
-            :disabled="!ready || saving"
-            aria-describedby="wt-video-subtitles-hint"
-            data-test="wt-video-subtitles-toggle"
-            @change="changeVideoSubtitles"
-          />
-          <p id="wt-video-subtitles-hint" class="ui-hint">{{ t('wtVideoSubtitlesHint') }}</p>
-        </div>
-        <div class="ui-panel">
-          <UiSwitch
             :checked="inputTranslationEnabled"
             :label="t('wtInputTranslation')"
             :disabled="!ready || saving"
@@ -281,20 +270,7 @@
               data-test="wt-input-same-language-hint"
             >{{ t('wtInputSameLanguageHint') }}</p>
             <div class="wt-language-pair">
-              <label class="wt-field">
-                <span id="wt-input-replace-mode-label" class="ui-label">{{ t('wtInputReplaceMode') }}</span>
-                <UiSelect
-                  :model-value="inputReplaceMode"
-                  :disabled="!ready || saving"
-                  :options="inputReplaceModeOptions"
-                  aria-labelledby="wt-input-replace-mode-label"
-                  aria-describedby="wt-input-replace-mode-hint"
-                  data-test="wt-input-replace-mode"
-                  @update:model-value="changeInputReplaceMode($event as InputReplaceMode)"
-                />
-                <span id="wt-input-replace-mode-hint" class="ui-hint">{{ t('wtInputReplaceModeHint') }}</span>
-              </label>
-              <div v-if="inputReplaceMode === 'auto'" class="wt-field">
+              <div class="wt-field">
                 <span id="wt-input-auto-delay-label" class="ui-label">{{ t('wtInputAutoReplaceDelay') }}</span>
                 <div class="wt-delay-row" :class="{ 'has-custom': autoReplaceDelaySelectValue === 'custom' }">
                   <UiSelect
@@ -399,40 +375,7 @@
         <h3 class="ui-subtitle">{{ t('wtShortcuts') }}</h3>
         <ul class="ui-list wt-shortcut-list">
           <li v-for="item in shortcuts" :key="item.name" class="ui-row"><span>{{ t(item.labelKey) }}</span><kbd>{{ item.shortcut || t('wtShortcutUnset') }}</kbd></li>
-          <li class="ui-row wt-shortcut-custom" data-test="wt-replace-key-row">
-            <span>{{ t('wtShortcutReplaceDraft') }}</span>
-            <div class="wt-shortcut-actions">
-              <kbd data-test="wt-replace-key-value" :class="{ 'is-recording': recordingHotkey }">{{ recordingHotkey ? '…' : inputReplaceKey === '' ? t('wtShortcutDisabled') : formatHotkey(inputReplaceKey, isMacPlatform) }}</kbd>
-              <UiButton
-                size="sm"
-                :disabled="!ready || saving"
-                data-test="wt-replace-key-record"
-                @click="toggleRecordingHotkey"
-                @keydown="onRecordKeyDown"
-                @blur="cancelRecordingHotkey"
-              >
-                {{ recordingHotkey ? t('wtShortcutRecording') : t('wtShortcutChange') }}
-              </UiButton>
-              <UiButton
-                size="sm"
-                :disabled="!ready || saving || (inputReplaceKey === 'Tab' && !recordingHotkey)"
-                data-test="wt-replace-key-reset"
-                @click="resetReplaceHotkey"
-              >
-                {{ t('wtShortcutResetDefault') }}
-              </UiButton>
-              <UiButton
-                size="sm"
-                :disabled="!ready || saving || (inputReplaceKey === '' && !recordingHotkey)"
-                data-test="wt-replace-key-disable"
-                @click="disableReplaceHotkey"
-              >
-                {{ t('wtShortcutDisable') }}
-              </UiButton>
-            </div>
-          </li>
         </ul>
-        <p v-if="hotkeyError" class="ui-hint is-danger" role="status" data-test="wt-replace-key-error">{{ hotkeyError }}</p>
         <p class="ui-hint">{{ t('wtShortcutsHint') }}</p>
         <UiButton size="sm" data-test="wt-shortcuts-manage" @click="openShortcuts">{{ t('wtShortcutsManage') }}</UiButton>
       </div>
@@ -538,20 +481,12 @@ import {
   INPUT_AUTO_REPLACE_DELAY_DEFAULT,
   INPUT_AUTO_REPLACE_DELAY_PRESETS,
   isInputAutoReplaceDelay,
-  isInputReplaceMode,
   isPageCharLimit,
   normalizeBaseUrl,
   normalizeOrigin,
   PAGE_CHAR_LIMITS,
-  type InputReplaceMode,
 } from '../../translation/config'
 import { createId } from '../../translation/id'
-import {
-  DEFAULT_INPUT_REPLACE_KEY,
-  formatHotkey,
-  hotkeyFromEvent,
-  normalizeHotkey,
-} from '../../translation/input-hotkey'
 import { validateApiKey } from '../../translation/secrets'
 import {
   TARGET_LANGUAGE_NATIVE_LABEL,
@@ -634,19 +569,13 @@ const proactiveAssistEnabled = ref(false)
 const assistMode = ref<AssistMode>('off')
 const floatingButtonEnabled = ref(false)
 const autoInteractionEnabled = ref(true)
-const videoSubtitlesEnabled = ref(false)
 const inputTranslationEnabled = ref(false)
 const inputSourceLanguage = ref<SourceLanguage>('auto')
 const inputTargetLanguage = ref<TargetLanguage>('en')
-const inputReplaceKey = ref<string>(DEFAULT_INPUT_REPLACE_KEY)
-const inputReplaceMode = ref<InputReplaceMode>(DEFAULT_TRANSLATION_CONFIG.inputReplaceMode)
 const inputAutoReplaceDelayMs = ref<number>(INPUT_AUTO_REPLACE_DELAY_DEFAULT)
 const customDelaySelected = ref(false)
 const customDelaySecondsDraft = ref(String(INPUT_AUTO_REPLACE_DELAY_DEFAULT / 1000))
 const customDelayError = ref('')
-const recordingHotkey = ref(false)
-const hotkeyError = ref('')
-const isMacPlatform = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
 const pageCharLimit = ref<number>(DEFAULT_PAGE_CHAR_LIMIT)
 const shortcuts = ref<ShortcutItem[]>([])
 const newSite = ref('')
@@ -742,10 +671,6 @@ const languageOptions = computed(() =>
 const sourceLanguageOptions = computed(() => [
   { value: 'auto', label: t('wtSourceAuto') },
   ...TARGET_LANGUAGES.map((value) => ({ value, label: TARGET_LANGUAGE_NATIVE_LABEL[value] })),
-])
-const inputReplaceModeOptions = computed(() => [
-  { value: 'hotkey', label: t('wtInputReplaceModeHotkey') },
-  { value: 'auto', label: t('wtInputReplaceModeAuto') },
 ])
 const autoReplaceDelayOptions = computed(() => [
   ...INPUT_AUTO_REPLACE_DELAY_PRESETS.map((ms) => ({
@@ -853,12 +778,9 @@ function applyConfig(
   proactiveAssistEnabled.value = config.proactiveAssistEnabled
   floatingButtonEnabled.value = config.floatingButtonEnabled
   autoInteractionEnabled.value = config.autoInteractionEnabled
-  videoSubtitlesEnabled.value = config.videoSubtitlesEnabled
   inputTranslationEnabled.value = config.inputTranslationEnabled
   inputSourceLanguage.value = config.inputSourceLanguage
   inputTargetLanguage.value = config.inputTargetLanguage
-  inputReplaceKey.value = config.inputReplaceKey
-  inputReplaceMode.value = config.inputReplaceMode
   inputAutoReplaceDelayMs.value = config.inputAutoReplaceDelayMs
   if (!(INPUT_AUTO_REPLACE_DELAY_PRESETS as readonly number[]).includes(config.inputAutoReplaceDelayMs)) {
     customDelaySelected.value = true
@@ -1275,27 +1197,6 @@ async function changeAutoInteraction(enabled: boolean): Promise<void> {
   }
 }
 
-async function changeVideoSubtitles(enabled: boolean): Promise<void> {
-  if (!ready.value || saving.value || enabled === videoSubtitlesEnabled.value) return
-  saving.value = true
-  setStatus('', false)
-  try {
-    if (enabled) {
-      const granted = await browser.permissions
-        .request({ origins: ['http://*/*', 'https://*/*'] })
-        .catch(() => false)
-      if (!granted) {
-        setStatus(t('wtPermissionDenied'), true)
-        return
-      }
-      allSitesGranted.value = true
-    }
-    await savePatch({ videoSubtitlesEnabled: enabled })
-  } finally {
-    saving.value = false
-  }
-}
-
 async function changePageCharLimit(value: number): Promise<void> {
   if (!ready.value || saving.value || value === pageCharLimit.value || !isPageCharLimit(value)) return
   saving.value = true
@@ -1324,18 +1225,6 @@ async function changeInputTargetLanguage(value: TargetLanguage): Promise<void> {
   setStatus('', false)
   try {
     await savePatch({ inputTargetLanguage: value })
-  } finally {
-    saving.value = false
-  }
-}
-
-async function changeInputReplaceMode(value: InputReplaceMode): Promise<void> {
-  if (!ready.value || saving.value || value === inputReplaceMode.value || !isInputReplaceMode(value)) return
-  saving.value = true
-  setStatus('', false)
-  customDelayError.value = ''
-  try {
-    await savePatch({ inputReplaceMode: value })
   } finally {
     saving.value = false
   }
@@ -1391,63 +1280,6 @@ async function commitCustomAutoReplaceDelay(): Promise<void> {
   } finally {
     saving.value = false
   }
-}
-
-async function changeInputReplaceKey(value: string): Promise<void> {
-  if (!ready.value || saving.value || value === inputReplaceKey.value) return
-  saving.value = true
-  setStatus('', false)
-  try {
-    await savePatch({ inputReplaceKey: value })
-  } finally {
-    saving.value = false
-  }
-}
-
-function toggleRecordingHotkey(): void {
-  if (!ready.value || saving.value) return
-  recordingHotkey.value = !recordingHotkey.value
-  hotkeyError.value = ''
-}
-
-function cancelRecordingHotkey(): void {
-  recordingHotkey.value = false
-}
-
-async function onRecordKeyDown(event: KeyboardEvent): Promise<void> {
-  if (!recordingHotkey.value) return
-  event.preventDefault()
-  event.stopPropagation()
-  if (event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
-    recordingHotkey.value = false
-    hotkeyError.value = ''
-    return
-  }
-  const candidate = hotkeyFromEvent(event)
-  if (candidate === undefined) return
-  const normalized = normalizeHotkey(candidate)
-  if (normalized === undefined || normalized === '') {
-    recordingHotkey.value = false
-    hotkeyError.value = t('wtShortcutInvalid')
-    toast.show('danger', 'wtShortcutInvalid')
-    return
-  }
-  recordingHotkey.value = false
-  hotkeyError.value = ''
-  toast.clear()
-  await changeInputReplaceKey(normalized)
-}
-
-async function resetReplaceHotkey(): Promise<void> {
-  recordingHotkey.value = false
-  hotkeyError.value = ''
-  await changeInputReplaceKey(DEFAULT_INPUT_REPLACE_KEY)
-}
-
-async function disableReplaceHotkey(): Promise<void> {
-  recordingHotkey.value = false
-  hotkeyError.value = ''
-  await changeInputReplaceKey('')
 }
 
 async function changeInputTranslation(enabled: boolean): Promise<void> {
@@ -1669,8 +1501,6 @@ async function loadShortcuts(): Promise<void> {
         items.push({ name: command.name, labelKey: 'wtCmdTogglePage', shortcut: command.shortcut ?? '' })
       } else if (command.name === 'translate-selection') {
         items.push({ name: command.name, labelKey: 'wtCmdTranslateSelection', shortcut: command.shortcut ?? '' })
-      } else if (command.name === 'translate-input') {
-        items.push({ name: command.name, labelKey: 'wtCmdTranslateInput', shortcut: command.shortcut ?? '' })
       }
     }
     shortcuts.value = items
@@ -1894,21 +1724,6 @@ onBeforeUnmount(() => {
 
 .wt-shortcut-list {
   width: 100%;
-}
-
-/* 替换草稿行：名称在左，kbd 与三个按钮整体靠右，放不下时整组换到下一行右侧 */
-.wt-shortcut-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-}
-
-.wt-shortcut-list kbd.is-recording {
-  color: var(--gcn-accent);
-  border-color: var(--gcn-accent);
 }
 
 /* 输入翻译关闭时子设置淡出 */

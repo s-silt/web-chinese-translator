@@ -13,8 +13,5 @@
   },
   "cmdTranslateSelection": {
     "message": "翻譯選取文字"
-  },
-  "cmdTranslateInput": {
-    "message": "翻譯並取代輸入"
   }
 }

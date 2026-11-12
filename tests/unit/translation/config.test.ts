@@ -284,19 +284,19 @@ describe('sanitizeTranslationConfig', () => {
     }
   })
 
-  it('输入替换方式默认 hotkey，自动替换等待时间默认 1000ms，非法值归一化回落默认', () => {
-    expect(DEFAULT_TRANSLATION_CONFIG.inputReplaceMode).toBe('hotkey')
+  it('输入替换方式固定 auto，自动替换等待时间默认 1000ms，非法值归一化回落默认', () => {
+    expect(DEFAULT_TRANSLATION_CONFIG.inputReplaceMode).toBe('auto')
     expect(DEFAULT_TRANSLATION_CONFIG.inputAutoReplaceDelayMs).toBe(INPUT_AUTO_REPLACE_DELAY_DEFAULT)
     expect(INPUT_AUTO_REPLACE_DELAY_MIN).toBe(500)
     expect(INPUT_AUTO_REPLACE_DELAY_MAX).toBe(10_000)
     expect(INPUT_AUTO_REPLACE_DELAY_DEFAULT).toBe(1000)
     expect(INPUT_AUTO_REPLACE_DELAY_PRESETS).toEqual([1000, 2000, 3000, 5000])
 
-    expect(isInputReplaceMode('hotkey')).toBe(true)
+    expect(isInputReplaceMode('hotkey')).toBe(false)
     expect(isInputReplaceMode('auto')).toBe(true)
     for (const badMode of ['', 'manual', null, undefined, 1]) {
       expect(isInputReplaceMode(badMode)).toBe(false)
-      expect(sanitizeTranslationConfig({ inputReplaceMode: badMode }).inputReplaceMode).toBe('hotkey')
+      expect(sanitizeTranslationConfig({ inputReplaceMode: badMode }).inputReplaceMode).toBe('auto')
     }
     expect(sanitizeTranslationConfig({ inputReplaceMode: 'auto' }).inputReplaceMode).toBe('auto')
 
@@ -440,48 +440,22 @@ describe('floatingButtonEnabled 保存', () => {
     expect((await getTranslationConfig()).floatingButtonEnabled).toBe(true)
   })
 
-  it('视频字幕与输入翻译旧配置默认关闭，开启与保存互不干扰', async () => {
-    expect(DEFAULT_TRANSLATION_CONFIG.videoSubtitlesEnabled).toBe(false)
+  it('字幕旧配置丢弃，旧手动输入模式不会升级成自动写入', async () => {
     expect(DEFAULT_TRANSLATION_CONFIG.inputTranslationEnabled).toBe(false)
-    expect(sanitizeTranslationConfig({ model: 'legacy' })).toMatchObject({
-      videoSubtitlesEnabled: false,
-      inputTranslationEnabled: false,
-    })
-    for (const invalid of ['true', 1, null, undefined, {}]) {
-      expect(
-        sanitizeTranslationConfig({
-          videoSubtitlesEnabled: invalid,
-          inputTranslationEnabled: invalid,
-        }),
-      ).toMatchObject({
-        videoSubtitlesEnabled: false,
-        inputTranslationEnabled: false,
-      })
+    expect(DEFAULT_TRANSLATION_CONFIG.inputReplaceMode).toBe('auto')
+    for (const inputReplaceMode of [undefined, 'hotkey', 'bad']) {
+      const migrated = sanitizeTranslationConfig({ inputTranslationEnabled: true, inputReplaceMode, videoSubtitlesEnabled: true })
+      expect(migrated.inputTranslationEnabled).toBe(false)
+      expect(migrated.inputReplaceMode).toBe('auto')
+      expect(migrated).not.toHaveProperty('videoSubtitlesEnabled')
     }
-    expect(
-      sanitizeTranslationConfig({
-        videoSubtitlesEnabled: true,
-        inputTranslationEnabled: true,
-      }),
-    ).toMatchObject({
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-    })
-    await updateTranslationConfig({ videoSubtitlesEnabled: true })
-    expect(await getTranslationConfig()).toMatchObject({
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: false,
-    })
+    expect(sanitizeTranslationConfig({ inputTranslationEnabled: true, inputReplaceMode: 'auto' }).inputTranslationEnabled).toBe(true)
     await updateTranslationConfig({ inputTranslationEnabled: true })
-    expect(await getTranslationConfig()).toMatchObject({
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-    })
+    expect((await getTranslationConfig()).inputTranslationEnabled).toBe(true)
     await updateTranslationConfig({ model: 'other' })
-    expect(await getTranslationConfig()).toMatchObject({
-      videoSubtitlesEnabled: true,
-      inputTranslationEnabled: true,
-    })
+    expect((await getTranslationConfig()).inputTranslationEnabled).toBe(true)
+    await updateTranslationConfig({ inputTranslationEnabled: false })
+    expect((await getTranslationConfig()).inputTranslationEnabled).toBe(false)
   })
 })
 

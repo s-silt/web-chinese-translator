@@ -242,16 +242,14 @@ describe('wt:open-options 固定分区', () => {
     }
   })
 
-  it('视频字幕与输入翻译配置补丁、PageModes 与 wt:translate 消息严格校验', () => {
+  it('自动输入配置补丁、已移除模式与 wt:translate 消息严格校验', () => {
     expect(
       isTranslationMessage({
         type: 'wt:save-config',
         patch: {
-          videoSubtitlesEnabled: true,
           inputTranslationEnabled: false,
           inputSourceLanguage: 'ja',
           inputTargetLanguage: 'zh-CN',
-          inputReplaceKey: 'Ctrl+Enter',
           inputReplaceMode: 'auto',
           inputAutoReplaceDelayMs: 1500,
         },
@@ -260,11 +258,14 @@ describe('wt:open-options 固定分区', () => {
     expect(
       isTranslationMessage({
         type: 'wt:save-config',
-        patch: { inputSourceLanguage: 'auto', inputReplaceKey: '', inputReplaceMode: 'hotkey', inputAutoReplaceDelayMs: 500 },
+        patch: { inputSourceLanguage: 'auto', inputReplaceMode: 'auto', inputAutoReplaceDelayMs: 500 },
       }),
     ).toBe(true)
     for (const badPatch of [
       { inputReplaceMode: 'manual' },
+      { inputReplaceMode: 'hotkey' },
+      { inputReplaceKey: '' },
+      { inputReplaceKey: 'Ctrl+Enter' },
       { inputReplaceMode: '' },
       { inputReplaceMode: 1 },
       { inputAutoReplaceDelayMs: 499 },
@@ -336,38 +337,37 @@ describe('wt:open-options 固定分区', () => {
 
     const baseModes = { enabled: true, fixed: false, auto: false, selection: false, smart: false }
     expect(
-      isTranslationReply({ ok: true, modes: { ...baseModes, subtitles: true, input: false } }, { type: 'wt:page-modes' }),
+      isTranslationReply({ ok: true, modes: { ...baseModes, input: false } }, { type: 'wt:page-modes' }),
     ).toBe(true)
     expect(
-      isTranslationReply({ ok: true, modes: { ...baseModes, subtitles: 'true' } }, { type: 'wt:page-modes' }),
+      isTranslationReply({ ok: true, modes: { ...baseModes, input: 'true' } }, { type: 'wt:page-modes' }),
     ).toBe(false)
     expect(
       isTranslationReply({ ok: true, modes: { ...baseModes, input: 1 } }, { type: 'wt:page-modes' }),
     ).toBe(false)
 
-    const validSubtitle: Extract<TranslationMessage, { type: 'wt:translate' }> = {
+    const removedSubtitle = {
       type: 'wt:translate',
       mode: 'subtitle',
       texts: ['Hello', 'こんにちは'],
       requestId: 'req-sub-1',
-    }
+    } as const
     const validInput: Extract<TranslationMessage, { type: 'wt:translate' }> = {
       type: 'wt:translate',
       mode: 'input',
       texts: ['你好，世界'],
       requestId: 'req-in-1',
     }
-    expect(isTranslationMessage(validSubtitle)).toBe(true)
+    expect(isTranslationMessage(removedSubtitle)).toBe(false)
     expect(isTranslationMessage(validInput)).toBe(true)
     expect(isTranslationMessage({ ...validInput, manualInput: true })).toBe(true)
     expect(isTranslationMessage({ ...validInput, manualInput: false })).toBe(true)
     expect(isTranslationMessage({ ...validInput, manualInput: 'true' })).toBe(false)
-    expect(isTranslationMessage({ ...validSubtitle, manualInput: true })).toBe(false)
+    expect(isTranslationMessage({ ...removedSubtitle, manualInput: true })).toBe(false)
     expect(isTranslationMessage({ type: 'wt:translate', mode: 'selection', texts: ['Hello'], manualInput: true })).toBe(false)
     expect(isTranslationMessage({ type: 'wt:translate', mode: 'auto', texts: ['Hello'], manualInput: false })).toBe(false)
-    expect(isContentTranslationMessage({ type: 'wt:translate-input' })).toBe(true)
+    expect(isContentTranslationMessage({ type: 'wt:translate-input' })).toBe(false)
     expect(isContentTranslationMessage({ type: 'wt:translate-input', text: '你好' })).toBe(false)
-    expect(isContentTranslationReply({ ok: true }, { type: 'wt:translate-input' })).toBe(true)
     for (const type of ['wt:refresh-input-frame', 'wt:stop-input-frame'] as const) {
       expect(isContentTranslationMessage({ type })).toBe(true)
       expect(isContentTranslationMessage({ type, extra: true })).toBe(false)
@@ -376,29 +376,27 @@ describe('wt:open-options 固定分区', () => {
       expect(isContentTranslationReply({ ok: false, error: '失败' }, { type })).toBe(true)
       expect(isContentTranslationReply({ ok: false }, { type })).toBe(false)
     }
-    expect(isTranslationMessage({ ...validSubtitle, pageSession: 'page-123' })).toBe(true)
+    expect(isTranslationMessage({ ...removedSubtitle, pageSession: 'page-123' })).toBe(false)
 
     for (const invalid of [
       { type: 'wt:translate', mode: 'subtitle', texts: ['Hello'] },
       { type: 'wt:translate', mode: 'input', texts: ['你好'] },
       { ...validInput, texts: ['你好', '世界'] },
       { ...validInput, texts: [] },
-      { ...validSubtitle, texts: ['a', 'b', 'c', 'd', 'e', 'f'] },
-      { ...validSubtitle, texts: ['x'.repeat(1501)] },
-      { ...validSubtitle, texts: ['x'.repeat(1500), 'y'.repeat(1500), 'z'.repeat(1001)] },
+      { ...removedSubtitle, texts: ['a', 'b', 'c', 'd', 'e', 'f'] },
+      { ...removedSubtitle, texts: ['x'.repeat(1501)] },
+      { ...removedSubtitle, texts: ['x'.repeat(1500), 'y'.repeat(1500), 'z'.repeat(1001)] },
       { ...validInput, page: { title: 't', heading: 'h', site: 'example.com' } },
       { ...validInput, pageId: 'page-1' },
       { ...validInput, manualSelectionId: 'ticket-1' },
       { ...validInput, targetLanguage: 'ja' },
-      { ...validSubtitle, sourceLanguage: 'en' },
-      { ...validSubtitle, extraField: true },
+      { ...removedSubtitle, sourceLanguage: 'en' },
+      { ...removedSubtitle, extraField: true },
       { type: 'wt:translate', mode: 'selection', texts: ['Hello'], targetLanguage: 'en' },
     ]) {
       expect(isTranslationMessage(invalid)).toBe(false)
     }
 
-    expect(isTranslationReply({ ok: true, texts: ['你好', ''] }, validSubtitle)).toBe(true)
-    expect(isTranslationReply({ ok: true, texts: ['', ''] }, validSubtitle)).toBe(false)
     expect(isTranslationReply({ ok: true, texts: ['Hello, world'] }, validInput)).toBe(true)
     expect(isTranslationReply({ ok: true, texts: ['   '] }, validInput)).toBe(false)
   })

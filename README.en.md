@@ -5,25 +5,26 @@
 <p align="center"><a href="README.md">简体中文</a> · English</p>
 
 <p align="center">
-  Translate webpages, drafts, and captions with your own model endpoint<br>
+  Translate webpages and drafts with your own model endpoint<br>
   <sub>Read translations in place, replace drafts in the same field, and use offline UI dictionaries for GitHub and popular sites.</sub>
 </p>
 
 <p align="center">
   <a href="https://github.com/s-silt/web-chinese-translator/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/s-silt/web-chinese-translator/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/s-silt/web-chinese-translator/releases/latest">Latest Release</a> &nbsp;·&nbsp; <a href="https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe">Chrome Web Store</a> &nbsp;·&nbsp; Chrome / Edge (MV3)&nbsp;·&nbsp; Firefox 140+ (GitHub localization only)&nbsp;·&nbsp; <a href="LICENSE">MIT</a>
+  <a href="https://github.com/s-silt/web-chinese-translator/releases/latest">Latest Release</a> &nbsp;·&nbsp; <a href="https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe">Chrome Web Store</a> &nbsp;·&nbsp; Chrome (MV3)&nbsp;·&nbsp; <a href="LICENSE">MIT</a>
 </p>
 
 ## Feature demos
 
-<p align="center"><img src="docs/demos/en-US/01-input.gif" width="840" alt="Translate English drafts and search queries into Chinese and replace them in place"></p>
+![Translate after a typing pause and restore the original](docs/demos/en-US/01-input.gif)
 
-Preview a translation and press Tab to replace the draft in the same field. [See webpage translation, reading and captions, multilingual input, and local dictionaries](docs/DEMOS.en.md).
+[View all demos and screenshots](docs/DEMOS.en.md)
+Input translation replaces drafts after a typing pause. Restore original uses an exact draft temporarily saved in local memory. Video subtitle translation has been removed.
 
 | Core Capability | Description |
 | --- | --- |
 | **Webpage translation** | Connect an OpenAI-compatible endpoint (DeepSeek, OpenAI, Claude, or a self-hosted relay) for full-page or per-site automatic translation as you scroll |
-| **Reading & input** | Selection translation and definitions, video subtitles, and multilingual draft translation for chat input fields and web search boxes |
+| **Reading & input** | Selection translation and definitions, multilingual draft translation for chat input fields and web search boxes |
 | **Offline UI dictionaries** | Menus and buttons on 26 popular site groups (Cursor, Claude, Vercel, Linear, etc.) and GitHub are replaced locally without calling a model |
 | **Controllable** | Master switch, Exclude this site, per-page limit, and Where to run list; status and failure reasons are shown directly in the popup |
 
@@ -37,12 +38,10 @@ Page text ──► Authorized site + Configured endpoint ──► Your model e
 
 ## Quick Start
 
-1. Install on Chrome from the [Chrome Web Store](https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe) for automatic updates.
-2. Or install manually: download `web-chinese-translator-<version>-chrome.zip` from [Releases](https://github.com/s-silt/web-chinese-translator/releases/latest) and extract it, open `chrome://extensions`, enable "Developer mode", click "Load unpacked", and select the extracted folder.
+1. Recommended: install on Chrome from the [Chrome Web Store](https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe) for automatic updates.
+2. [Releases](https://github.com/s-silt/web-chinese-translator/releases/latest) only provides `web-chinese-translator-<version>-chrome.crx` and the `SHA256SUMS.txt` checksum file. The CRX package is intended for environments that permit self-hosted extension installation (such as enterprise policy, Linux, or development/testing setups; standard Chrome on Windows and macOS typically restricts sideloading CRX files); regular users should install from the Chrome Web Store.
 3. Click "Configure model" or "Model settings" in the popup: choose a provider preset, enter your API Key and model name, and click "Save & connect". The connection badge shows latency or the reason for failure.
 4. Open a supported English webpage and click "Translate this page" in the popup. Enable "Auto-translate this site" for sites you visit often.
-
-For Edge, use `-edge.zip` and load it at `edge://extensions`; for Firefox, install `-firefox.xpi`. When updating a manually installed version, replace the files in the original directory and click "Reload"—changing directories will lose your configuration. Each release includes `SHA256SUMS.txt` for verification.
 
 | Task | Entry Point |
 | --- | --- |
@@ -50,8 +49,8 @@ For Edge, use `-edge.zip` and load it at `edge://extensions`; for Firefox, insta
 | Always auto-translate a site | "Auto-translate this site" in the popup |
 | Never call a model on a site | "Exclude this site" in the popup (local dictionaries still work) |
 | Translate selected text | Select text and right-click "Translate selected text", or press `Alt+S` |
-| Translate drafts in input fields or search boxes | Enable "Input translation" in Settings; optionally preview and press the replace key (default `Tab`, customizable in Settings) or auto-replace after typing stops, or press `Alt+Y` (macOS `Command+Shift+Y`) to replace directly |
-| Translate an online document editor | Enable Input translation and grant site access, focus the editor, then press `Alt+Y` to preview; recognized safe plain-text structures support replacement and restoration, while complex formatting is preview/copy only |
+| Translate drafts in input fields or search boxes | Enable Input translation and grant access; drafts are replaced after the configured typing pause. Restore original recovers the saved draft. No input shortcut or automatic message sending |
+| Translate an online document editor | Enable Input translation and grant access; supported safe plain text is replaced after typing stops, while complex formatting offers preview and copy only |
 | Paste arbitrary text or Markdown | Use Text translation in the popup or webpage floating menu, up to 6000 characters per request; it reuses the existing model configuration and does not restore drafts after the window closes |
 | Long article stops translating midway | Raise "Per-page limit" in Settings, or click "Resume translation" |
 | Add or override UI dictionary entries | "Sites & dictionaries" in Settings; for GitHub, use "GitHub rules" |

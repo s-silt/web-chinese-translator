@@ -33,10 +33,10 @@ bun run test
 
 | 命令                                                        | 说明                                                                               |
 | ----------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `bun run dev`、`dev:edge`、`dev:firefox`                    | 开发模式，修改后自动重载                                                           |
-| `bun run build`、`build:edge`、`build:firefox`、`build:all` | 构建到 `.output/<浏览器>-mv3/`                                                     |
-| `bun run zip`、`zip:edge`、`zip:firefox`、`zip:all`         | 打包 zip 到 `.output/`（Firefox 另出源码包）                                       |
-| `bun run pack:crx`                                          | 由 zip 打包 crx                                                                    |
+| `bun run dev`、`dev:edge`、`dev:firefox`                    | 开发模式，修改后自动重载（Edge、Firefox 仅本地开发，不公开发行）                   |
+| `bun run build`、`build:edge`、`build:firefox`、`build:all` | 构建到 `.output/<浏览器>-mv3/`（仅公开发行 Chrome，其余供本地开发与 CI 兼容构建）  |
+| `bun run zip`、`zip:edge`、`zip:firefox`、`zip:all`         | 打包 zip 到 `.output/`（发布工作流仅运行 `bun run zip` 生成 Chrome 打包中间物）    |
+| `bun run pack:crx`                                          | 由 Chrome zip 打包 crx                                                             |
 | `bun run test`、`test:watch`、`coverage`                    | 单元测试（Vitest）、监听模式、覆盖率                                               |
 | `bun run test:e2e`、`test:e2e:live`                         | 端到端测试（Playwright）、线上冒烟，均先构建                                       |
 | `bun run compile`、`lint`、`lint:firefox`、`format`         | 类型检查（vue-tsc）、ESLint、web-ext lint、Prettier                                |
@@ -108,28 +108,24 @@ wxt.config.ts            WXT 配置与 manifest
 
 ## 发布
 
-推送标记 `v<版本>`（与 `package.json` 的 `version` 一致）后，[发布工作流](../.github/workflows/release.yml)依次检查（lint、类型、词典、单元测试）、打包，并发布 GitHub 发行版（先建草稿，产物传完后发布）；版本号带 `-`（如 `v1.0.0-beta.1`）时为预发行版。在存储库的「操作」页手动运行时只检查、打包，产物在运行记录的工件里。
+推送标记 `v<版本>`（与 `package.json` 的 `version` 一致）后，[发布工作流](../.github/workflows/release.yml)依次检查（lint、类型、词典、单元测试）、运行 `bun run zip` 在 `.output/` 生成 Chrome ZIP 打包中间物、用 `bun run pack:crx` 签名生成 CRX，并发布 GitHub 发行版（先建草稿，产物传完后发布）；版本号带 `-`（如 `v1.0.0-beta.1`）时为预发行版。在存储库的「操作」页手动运行时只检查、打包，产物在运行记录的工件里。
 
-| 产物                                                | 说明                                                    |
-| --------------------------------------------------- | ------------------------------------------------------- |
-| `web-chinese-translator-<版本>-chrome.zip`、`-edge.zip`     | Chrome、Edge 扩展包（解压后加载，或用于上架商店）         |
-| `web-chinese-translator-<版本>-firefox.zip`、`-sources.zip` | Firefox 扩展包、源码包（AMO 审核用）                    |
-| `web-chinese-translator-<版本>-chrome.crx`、`-edge.crx`     | CRX3 扩展包                                             |
-| `web-chinese-translator-<版本>-firefox.xpi`                 | Firefox 扩展包                                          |
-| `SHA256SUMS.txt`                                    | 以上文件的 SHA-256，校验：`sha256sum -c SHA256SUMS.txt` |
+当前工作流上传的发行资产仅包含 Chrome CRX 与校验和文件，不再上传 Firefox、Edge、额外源码包或扩展 ZIP；GitHub 按标签自动提供的源码归档仍会保留。Chrome 应用商店上传包可直接从已发布的 `web-chinese-translator-<版本>-chrome.crx` 提取内部 ZIP 负载提交，确保商店版本与 CRX 负载一致。
+
+| 产物                                         | 说明                                                                               |
+| -------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `web-chinese-translator-<版本>-chrome.crx`   | Chrome CRX3 扩展包（适用于允许自行分发安装的环境；普通用户推荐从 Chrome 商店安装） |
+| `SHA256SUMS.txt`                             | 公开 CRX 的 SHA-256，校验：`sha256sum -c SHA256SUMS.txt`                           |
 
 <details>
 <summary><b>存储库机密与签名</b></summary>
 
-| 机密                               | 用途                                                                                                     | 未配置时                     |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| `CRX_PRIVATE_KEY`                  | crx 签名私钥（RSA PEM），决定扩展 ID                                                                     | 停止发布，需配置固定私钥     |
-| `AMO_JWT_ISSUER`、`AMO_JWT_SECRET` | [AMO API 密钥](https://addons.mozilla.org/developers/addon/api/key/)，以自行分发（unlisted）方式签名 xpi | xpi 未签名                   |
+| 机密              | 用途                                 | 未配置时                 |
+| ----------------- | ------------------------------------ | ------------------------ |
+| `CRX_PRIVATE_KEY` | crx 签名私钥（RSA PEM），决定扩展 ID | 停止发布，需配置固定私钥 |
 
 - 生成私钥：`openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out crx-key.pem`，文件内容填入 `CRX_PRIVATE_KEY`。私钥不提交到存储库（`.gitignore` 已忽略 `*.pem`）；更换私钥后扩展 ID 随之改变。
 - 本地打包 crx：`bun run pack:crx --key crx-key.pem .output/web-chinese-translator-<版本>-chrome.zip`，在 zip 旁生成同名 `.crx`；不带 `--key` 时读环境变量 `CRX_PRIVATE_KEY`。
 - 发布工作流通过 `--expected-id` 核对固定扩展 ID，密钥不匹配时不会生成新 CRX。分叉项目使用自己的签名密钥时，需同步修改工作流中的 `CRX_EXPECTED_ID`。
-- xpi 只在推送正式版标记时签名；手动运行、预发行版（Firefox 的版本号去掉 `-` 之后的部分，签名会占用正式版的版本号）产出未签名 xpi。
-- AMO 上同一版本号只能提交一次：签名包下载后立即存进发行版草稿，重跑时沿用；以 unlisted 签名过的版本，不能再以同一版本号上架（listed）。
 
 </details>

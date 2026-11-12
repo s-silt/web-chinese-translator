@@ -12,6 +12,7 @@ import {
 } from '@playwright/test'
 import type { CustomEntries, Settings } from '../../src/shared/settings'
 import { inspectClosedShadowPage, installClosedShadowInspection } from './closed-shadow'
+import { OWNED_CAPTION_ACTIVATION_SCRIPT } from './native-activation'
 
 /** 被测扩展目录：默认构建产物 .output/chrome-mv3（bun run build）；E2E_EXTENSION 可指向其他解压目录 */
 export const EXTENSION_PATH = resolve(
@@ -627,6 +628,14 @@ if ($hwnd -eq [IntPtr]::Zero) {
 }
 [void][Win32Shortcut]::ShowWindowAsync($hwnd, 9)
 [void][Win32Shortcut]::SetForegroundWindow($hwnd)
+if ([Win32Shortcut]::GetForegroundWindow() -ne $hwnd) {
+${OWNED_CAPTION_ACTIVATION_SCRIPT}
+  $activationResult = Invoke-OwnedCaptionActivation -TargetPid $targetPid -TargetHwnd $hwnd.ToInt64()
+  if ($activationResult.mouseEventsSent -gt 0 -and $activationResult.mouseEventsSent -ne 3) {
+    Write-Output 'NATIVE_ACTIVATION_INCOMPLETE'
+    exit 0
+  }
+}
 $fgOk = $false
 for ($i = 0; $i -lt 15; $i++) {
   $fg = [Win32Shortcut]::GetForegroundWindow()
