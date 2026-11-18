@@ -52,7 +52,7 @@
     "@playwright/test": "^1.65.0",
     "@tiptap/core": "3.32.2",
     "@tiptap/pm": "3.33.0",
-    "@tiptap/starter-kit": "3.32.2",
+    "@tiptap/starter-kit": "3.34.0",
     "@types/lodash": "4.17.27",
     "@types/node": "^26.6.6",
     "@types/react": "19.3.0",
