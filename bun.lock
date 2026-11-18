@@ -34,7 +34,7 @@
         "quill": "2.0.3",
         "react": "19.3.1",
         "react-dom": "19.3.1",
-        "roosterjs": "9.61.0",
+        "roosterjs": "9.62.0",
         "sharp": "^0.35.5",
         "slate": "0.147.4",
         "slate-dom": "0.147.3",
@@ -1099,21 +1099,21 @@
 
     "rolldown": ["rolldown@1.2.15", "https://registry.npmmirror.com/rolldown/-/rolldown-1.2.15.tgz", { "dependencies": { "@oxc-project/types": "0.155.0", "@rolldown/pluginutils": "1.0.1" }, "optionalDependencies": { "@rolldown/binding-android-arm-eabi": "1.2.15", "@rolldown/binding-android-arm64": "1.2.15", "@rolldown/binding-darwin-arm64": "1.2.15", "@rolldown/binding-darwin-x64": "1.2.15", "@rolldown/binding-freebsd-x64": "1.2.15", "@rolldown/binding-linux-arm-gnueabihf": "1.2.15", "@rolldown/binding-linux-arm64-gnu": "1.2.15", "@rolldown/binding-linux-arm64-musl": "1.2.15", "@rolldown/binding-linux-ppc64-gnu": "1.2.15", "@rolldown/binding-linux-s390x-gnu": "1.2.15", "@rolldown/binding-linux-x64-gnu": "1.2.15", "@rolldown/binding-linux-x64-musl": "1.2.15", "@rolldown/binding-openharmony-arm64": "1.2.15", "@rolldown/binding-win32-arm64-msvc": "1.2.15", "@rolldown/binding-win32-x64-msvc": "1.2.15" }, "bin": { "rolldown": "./bin/cli.mjs" } }, "sha512-6odND+fel5zVw3I4Yc2e69gvguDnX0CAAGiNDZSq4ik5WUcaLrkD2GLuog0XcODbor31hZ5ayEMgVDno+KPV5g=="],
 
-    "roosterjs": ["roosterjs@9.61.0", "", { "dependencies": { "roosterjs-color-utils": "^1.1.0", "roosterjs-content-model-api": "^9.61.0", "roosterjs-content-model-core": "^9.61.0", "roosterjs-content-model-dom": "^9.61.0", "roosterjs-content-model-markdown": "^9.61.0", "roosterjs-content-model-plugins": "^9.61.0", "roosterjs-content-model-types": "^9.61.0", "tslib": "^2.3.1" } }, "sha512-1APB/X5LqSRR8n0EL0OY9UAQxTrKJQMntiz6k3r8lb33vLFMWVRWszUkahgSZLZHiGFzog0ZHqPORPbQX/QnNQ=="],
+    "roosterjs": ["roosterjs@9.62.0", "", { "dependencies": { "roosterjs-color-utils": "^1.1.0", "roosterjs-content-model-api": "^9.62.0", "roosterjs-content-model-core": "^9.62.0", "roosterjs-content-model-dom": "^9.62.0", "roosterjs-content-model-markdown": "^9.62.0", "roosterjs-content-model-plugins": "^9.62.0", "roosterjs-content-model-types": "^9.62.0", "tslib": "^2.3.1" } }, "sha512-1ZMjIrtakIELNrV1eO/rPZXMeYFYEdTKDflL+COlJrNzvOXlZFBy8VupQZWAhrO/7YKennUx5dZRkwy5VU0noA=="],
 
     "roosterjs-color-utils": ["roosterjs-color-utils@1.1.0", "", { "dependencies": { "color": "^3.0.0" } }, "sha512-AdfGX/LSM+wiX6FovBjJLSHDqurIzXfEPCx95aIpEQ/VAvyOAHG9bja4K9aeNX/RpreuQ3kcSaJS0QzxQeFcCw=="],
 
-    "roosterjs-content-model-api": ["roosterjs-content-model-api@9.61.0", "", { "dependencies": { "roosterjs-content-model-dom": "^9.61.0", "roosterjs-content-model-types": "^9.61.0", "tslib": "^2.3.1" } }, "sha512-dIta6cXzHlCQGa8NTW8m4Cc/NlW3UJAJwb+hnSH7GEOZWJAMsnHGqE1gIkhan9gvNOxW3SV/Etd/ZVaAVvT6Jg=="],
+    "roosterjs-content-model-api": ["roosterjs-content-model-api@9.62.0", "", { "dependencies": { "roosterjs-content-model-dom": "^9.62.0", "roosterjs-content-model-types": "^9.62.0", "tslib": "^2.3.1" } }, "sha512-qnH19wQUlVcAYyrDY0yrFxk3uvXnoVsTStM2AXwckq5ebgZilMUzv0D5/SJKv53qoFYR7nAvPnRzb3U7POurzw=="],
 
-    "roosterjs-content-model-core": ["roosterjs-content-model-core@9.61.0", "", { "dependencies": { "roosterjs-content-model-dom": "^9.61.0", "roosterjs-content-model-types": "^9.61.0", "tslib": "^2.3.1" } }, "sha512-gm+8441sWwXo9AQE9C0slbhvdIg440NRpd2K9hkUZ2VP5qZ2r4Z3gpEigkY5wDrxcFRicNy+9iRZeTZDEBBmDg=="],
+    "roosterjs-content-model-core": ["roosterjs-content-model-core@9.62.0", "", { "dependencies": { "roosterjs-content-model-dom": "^9.62.0", "roosterjs-content-model-types": "^9.62.0", "tslib": "^2.3.1" } }, "sha512-+loJlIq2AfncQWdaFI8j1IpnuvVboykcW4wrYPyWH0EPVlJND4o98uSWj3y1SPqTyIUJABSDA+Cm9EwHYpAkyw=="],
 
-    "roosterjs-content-model-dom": ["roosterjs-content-model-dom@9.61.0", "", { "dependencies": { "roosterjs-content-model-types": "^9.61.0", "tslib": "^2.3.1" } }, "sha512-HRcNroLeR6o1N4MxOdv4DCynL4RXRPZQmJOgBNUNFk530KpqVf2fkIhl8Bng763cQQ5AtvjGZJyBK35Al/6rLw=="],
+    "roosterjs-content-model-dom": ["roosterjs-content-model-dom@9.62.0", "", { "dependencies": { "roosterjs-content-model-types": "^9.62.0", "tslib": "^2.3.1" } }, "sha512-+BL4SZI6f+OJvOWwkE/Qn5LPBPRuzvHFujswjc4g32oOIQfX43Y/TpLXx5ekmVHjYZa5BcitWJw9+p4rnzB8Yg=="],
 
-    "roosterjs-content-model-markdown": ["roosterjs-content-model-markdown@9.61.0", "", { "dependencies": { "roosterjs-content-model-dom": "^9.61.0", "roosterjs-content-model-types": "^9.61.0", "tslib": "^2.3.1" } }, "sha512-X7yg50LFymsz3A7kpsDRomoM6LE2iI81zrCR+1iQa4OQsu2fmPtwj+N1VrkV2CafAcGlpld4cOHVowG4Dxnapw=="],
+    "roosterjs-content-model-markdown": ["roosterjs-content-model-markdown@9.62.0", "", { "dependencies": { "roosterjs-content-model-dom": "^9.62.0", "roosterjs-content-model-types": "^9.62.0", "tslib": "^2.3.1" } }, "sha512-yp5i0ErY0+pcjPBVLVQ/M9KSvjjET9IaVcSJ6Eqlu1CP706pr0NamHtuDN9zW4Xp1s6NfU44dgvFoy/l8pgi6w=="],
 
-    "roosterjs-content-model-plugins": ["roosterjs-content-model-plugins@9.61.0", "", { "dependencies": { "roosterjs-content-model-api": "^9.61.0", "roosterjs-content-model-core": "^9.61.0", "roosterjs-content-model-dom": "^9.61.0", "roosterjs-content-model-types": "^9.61.0", "tslib": "^2.3.1" } }, "sha512-9rSs9LYhirY1PxnxOKAFprEVQqAxSeQsVMgRIGkhFBcebJuLTSSSGXAjQuED3eciXyJLiND9gPuowwsvrqcl/g=="],
+    "roosterjs-content-model-plugins": ["roosterjs-content-model-plugins@9.62.0", "", { "dependencies": { "roosterjs-content-model-api": "^9.62.0", "roosterjs-content-model-core": "^9.62.0", "roosterjs-content-model-dom": "^9.62.0", "roosterjs-content-model-types": "^9.62.0", "tslib": "^2.3.1" } }, "sha512-7DUrXdaC/DzuZvekciks6/3fUACBFkUx0oXal2lsLABF3XX1AsfiEProwZm5aCj29vv/EeJcsNbQII/VoG/CtQ=="],
 
-    "roosterjs-content-model-types": ["roosterjs-content-model-types@9.61.0", "", {}, "sha512-s5cfqReOVXUTxmi2aUrzMklzTvmsEn+RVj3iQ7z0xpt0Dp+Bx0oRfbcJwzdWlfp/ZbzeVUfF7CwCOhW65u6LMA=="],
+    "roosterjs-content-model-types": ["roosterjs-content-model-types@9.62.0", "", {}, "sha512-ImDnht8joL6q/tqYnsGMFSK+l9tgYZfZDMf2du0X4Z+Z4DmQP6AXWXbw2CKRihy1jdzEzagLTkqeQvLaPHeZ6g=="],
 
     "rope-sequence": ["rope-sequence@1.3.4", "", {}, "sha512-UT5EDe2cu2E/6O4igUr5PSFs23nvvukicWHx6GnOPlHAiiYbzNuCRQCuiUdHJQcqKalLKlrYJnjY0ySGsXNQXQ=="],
 
