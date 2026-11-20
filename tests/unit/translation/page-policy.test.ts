@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { pageIdentity } from '../../../src/translation/page-lifecycle'
 import {
   isExcludedSite,
   isSensitivePage,
   normalizeExcludedHost,
+  pageModelPolicy,
   sanitizeExcludedHosts,
 } from '../../../src/translation/page-policy'
 
@@ -61,6 +63,74 @@ describe('isSensitivePage', () => {
 
   it('IPv4 映射形式不把文档示例地址误判为私网地址', () => {
     expect(isSensitivePage('http://[::ffff:192.0.2.1]/page')).toBe(false)
+  })
+})
+
+describe('pageModelPolicy', () => {
+  it.each([
+    'https://app.devin.ai/settings/review',
+    'https://app.devin.ai/org/profile/settings/review',
+    'https://app.devin.ai/org/tokens/settings/review',
+    'https://example.com/settings',
+    'https://example.com/workspace/fixture/settings/preferences',
+    'https://example.com/settings?tab=appearance',
+    'https://example.com/settings/review#100%25',
+    'https://example.com/work#!/settings/display',
+    'https://example.com/work#%252Fsettings%252Fdisplay',
+    'https://example.com/work#%2Fsettings%2Fdisplay%3Fnote%3D100%25',
+  ])('普通设置页 %s 需要手动启动整页翻译', (url) => {
+    expect(pageModelPolicy(url)).toBe('manual-settings')
+    expect(isSensitivePage(url)).toBe(true)
+  })
+
+  it.each([
+    'https://example.com/workspace/fixture/settings/security',
+    'https://example.com/profile/settings',
+    'https://example.com/tokens/settings',
+    'https://example.com/org/acme/billing-and-plans/settings',
+    'https://app.devin.ai/org/profile/tokens/settings/review',
+    'https://example.com/work#!/profile/settings',
+    'https://example.com/work#%252Ftokens%252Fsettings',
+    'https://example.com/work#%2Ftokens%2Fsettings%3Fnote%3D100%25',
+    'https://example.com/settings/%2561pi%252Dkeys',
+    'https://example.com/settings/workspace/personal_access_tokens',
+    'https://example.com/settings/profile',
+    'https://example.com/settings?tab=appearance&tab=payment_methods',
+    'https://example.com/settings#billing',
+    'https://example.com/settings#/api-tokens',
+    'https://example.com/settings#!/profile',
+    'https://example.com/settings#/?tab=security',
+    'https://example.com/settings/display#%252Faccount',
+    'https://example.com/work#!/settings?section=two_factor_authentication',
+    'https://example.com/work?tab=billing#/settings',
+    'https://example.com/workspace/fixture/settings/webhooks',
+    'https://mail.google.com/settings/display',
+    'http://192.168.1.2/settings/display',
+  ])('敏感设置页 %s 仅允许显式划词翻译', (url) => {
+    expect(pageModelPolicy(url)).toBe('selection-only')
+  })
+
+  it('普通非设置页及设置说明锚点仍支持原有模式', () => {
+    expect(pageModelPolicy('https://example.com/projects?tab=appearance#settings')).toBe('normal')
+    expect(pageModelPolicy('https://example.com/projects#100%25')).toBe('normal')
+  })
+
+  it('无法首次解码的片段仍作敏感处理', () => {
+    expect(pageModelPolicy('https://example.com/settings#bad%')).toBe('selection-only')
+  })
+})
+
+describe('pageIdentity', () => {
+  it('合法编码的普通锚点不改变页面身份', () => {
+    const url = 'https://example.com/settings?tab=appearance'
+    expect(pageIdentity(`${url}#100%25`)).toBe(url)
+  })
+
+  it.each([
+    'https://example.com/work#%252Ftokens%252Fsettings',
+    'https://example.com/work#%2Fsettings%2Fdisplay%3Fnote%3D100%25',
+  ])('保留编码的哈希路由 %s', (url) => {
+    expect(pageIdentity(url)).toBe(url)
   })
 })
 

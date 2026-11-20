@@ -136,6 +136,99 @@ export function fixedUiContext(element: Element): boolean {
   }
   return false
 }
+
+const DEVIN_REVIEW_PATH = /^\/(?:org\/[^/]+\/)?settings\/review\/?$/
+
+// Review settings render some static UI text in plain layout elements.
+const DEVIN_REVIEW_FIXED_COPY = new Set([
+  'Choose how Devin analyzes pull requests, what it approves, and how analysis is billed.',
+  'Custom reviewers',
+  'Autoapprover',
+  'Automatic analysis',
+  'Automatically analyze matching PRs across all repositories.',
+  'Add repositories or users',
+  'GitHub organization',
+  'Only once after PR is ready',
+  'Normal effort',
+  'Originated by Devin · all repositories',
+  'Post findings to GitHub',
+  'Devin Review posts its findings as comments on your pull requests',
+  'Bugs',
+  'Likely errors or incorrect behavior in the code',
+  'Flags',
+  'Potential issues worth a closer look before merging',
+  'Notes',
+  'Informational observations that may not require action',
+  'Git provider interaction',
+  'Let Devin Review edit the PR description',
+  'Off keeps your description untouched. On GitHub, Devin shows its link and status in one PR comment instead.',
+  'Post CI check',
+  'Posts a Devin Review commit status on the pull request for each analysis',
+  "When the check turns green. To block merges on it, mark it as required in your repository's branch rules.",
+  'Pick your default price-performance tradeoff.',
+  'Manual and automatic analyses use this effort level by default.',
+  'Files and instructions Devin reads when analyzing a pull request',
+  'Repository file',
+  'Applies to all repositories',
+  'Common rule files',
+])
+
+const DEVIN_REVIEW_RULE_LIST_COPY = new Set(['are also read', 'Default'])
+const DEVIN_REVIEW_CONTROL_COPY = new Set([
+  'Filter Rules',
+  'Analyze',
+  'Devin automatically analyzes matching pull requests.',
+  'Passing condition',
+  'Reviewer finishes',
+  'Analysis effort',
+  'Default effort level',
+  'Ultra effort',
+  'Context',
+  'Add context',
+])
+const DEVIN_REVIEW_ROW_COPY = new Set([
+  'GitHub organization',
+  'Only once after PR is ready',
+  'Normal effort',
+  'Originated by Devin · all repositories',
+])
+
+export function isDevinReviewRoute(page: Pick<URL, 'origin' | 'pathname'>): boolean {
+  return page.origin === 'https://app.devin.ai' && DEVIN_REVIEW_PATH.test(page.pathname)
+}
+
+export function isDevinReviewEntry(text: string): boolean {
+  return DEVIN_REVIEW_FIXED_COPY.has(text) || DEVIN_REVIEW_RULE_LIST_COPY.has(text) ||
+    DEVIN_REVIEW_CONTROL_COPY.has(text)
+}
+
+export function isDevinReviewRowName(element: Element, source: string): boolean {
+  if (DEVIN_REVIEW_ROW_COPY.has(source.trim())) return false
+  const page = element.ownerDocument.location
+  return page !== null && isDevinReviewRoute(page) && closestComposed(element, 'tr,[role="row"]') !== null
+}
+
+function isDevinReviewContext(element: Element): boolean {
+  const page = element.ownerDocument.location
+  return page !== null && isDevinReviewRoute(page) &&
+    closestComposed(element, 'article,blockquote,[role="article"]') === null
+}
+
+export function fixedTextContext(element: Element, source: string): boolean {
+  if (isDevinReviewRowName(element, source)) return false
+  if (fixedUiContext(element)) return true
+  const text = source.trim()
+  return (
+    (DEVIN_REVIEW_FIXED_COPY.has(text) && element.matches('div,p,span')) ||
+    (DEVIN_REVIEW_RULE_LIST_COPY.has(text) && element.matches('li span'))
+  ) && isDevinReviewContext(element)
+}
+
+export function canTranslateDevinReviewAnalysisLabel(element: Element): boolean {
+  return element.matches('section,form') && element.getAttribute('aria-label') === 'Automatic analysis' &&
+    isDevinReviewContext(element)
+}
+
 export function canTranslateFixedFormAttributes(element: Element): boolean {
   if (!element.matches('input:not([type="password" i]):not([type="hidden" i]),textarea')) return false
   if (element instanceof HTMLElement && element.isContentEditable) return false

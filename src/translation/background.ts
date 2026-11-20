@@ -105,7 +105,7 @@ import {
 } from './input-frame'
 import { documentEditorInMainWorld, isDocumentEditorResult } from './document-editor'
 import { openTextTranslationWindow } from './text-window'
-import { EXCLUDED_LIMIT_ERROR, isExcludedSite, isSensitivePage, MAX_EXCLUDED_HOSTS, normalizeExcludedHost, sanitizeExcludedHosts } from './page-policy'
+import { EXCLUDED_LIMIT_ERROR, isExcludedSite, isSensitivePage, MAX_EXCLUDED_HOSTS, normalizeExcludedHost, pageModelPolicy, sanitizeExcludedHosts } from './page-policy'
 import { isSupportedChatUrl, replaceChatDraftInMainWorld } from './chat-input'
 import { isDiscordChatUrl, replaceDiscordDraftInMainWorld, type DiscordReplacementStatus } from './discord-input'
 import {
@@ -330,12 +330,14 @@ async function readTopDocument(tabId: number): Promise<SelectionDocument | undef
 
 async function pageGrantCurrent(grant: ManualPageGrant): Promise<boolean> {
   const top = await readTopDocument(grant.tabId)
-  if (top === undefined || top.documentId !== grant.documentId || !sameManualPage(top.url, grant.url)) return false
+  if (top === undefined || top.documentId !== grant.documentId || !sameManualPage(top.url, grant.url) ||
+    pageModelPolicy(top.url) === 'selection-only') return false
   return (await getManualPageGrant(grant.tabId, grant.documentId, grant.url))?.id === grant.id
 }
 
 async function manualPageAllowed(sender: MessageSender): Promise<boolean> {
   if (!fromOurContent(sender) || typeof sender.documentId !== 'string') return false
+  if (pageModelPolicy(sender.url!) === 'selection-only') return false
   const grant = await getManualPageGrant(sender.tab!.id!, sender.documentId, sender.url!)
   return grant !== undefined && pageGrantCurrent(grant)
 }
@@ -357,7 +359,7 @@ async function assertPageStart(snapshot: ModelSnapshot, signal: AbortSignal, url
   const { config } = snapshot
   if (!isSiteScopeAllowed(url, config)) throw new TranslationError(SITE_SCOPE_BLOCKED_ERROR)
   if (isExcludedSite(url, config.excludedHosts)) throw new TranslationError('该站点已排除模型处理')
-  if (isSensitivePage(url)) throw new TranslationError('该页面仅支持通过右键菜单主动翻译所选文字')
+  if (pageModelPolicy(url) === 'selection-only') throw new TranslationError('该页面仅支持通过右键菜单主动翻译所选文字')
   if (config.baseUrl === '' || config.model === '') throw new TranslationError('请先配置接口地址与模型')
   if (!(await endpointAllowed(config.baseUrl))) throw new TranslationError('未授权访问该接口地址')
   checkCurrent(snapshot, signal)
@@ -369,7 +371,7 @@ async function startPageTranslation(tab: PageTarget): Promise<TranslationReply<'
     return { ok: false, error: '当前页面不支持' }
   }
   const tabId = tab.id
-  const url = tab.url
+  const requestedUrl = tab.url
   const signal = new AbortController().signal
   const policyGeneration = readingGeneration
   const checkReadingPolicy = (): void => {
@@ -380,9 +382,10 @@ async function startPageTranslation(tab: PageTarget): Promise<TranslationReply<'
   try {
     const top = await readTopDocument(tabId)
     if (top === undefined) throw new TranslationError('当前页面不支持翻译，或浏览器未授予访问权限')
-    if (!sameManualPage(top.url, url) || (tab.documentId !== undefined && tab.documentId !== top.documentId)) {
+    if (!sameManualPage(top.url, requestedUrl) || (tab.documentId !== undefined && tab.documentId !== top.documentId)) {
       throw new TranslationError(PAGE_CHANGED_ERROR)
     }
+    const url = top.url
     const config = await getTranslationConfig()
     if (config.baseUrl === '' || config.model === '') throw new TranslationError('请先配置接口地址与模型')
     snapshot = await modelSnapshot()
@@ -515,6 +518,7 @@ async function assertDispatchAllowed(
   const manualTopAllowed = grant !== undefined && grant.source.frameId === 0
   if (
     policy.sensitive === true &&
+    !manualPage &&
     (policy.auto === true || policy.feature !== undefined || policy.assist !== undefined || !manualTopAllowed)
   ) {
     throw new TranslationError('该页面仅支持通过右键菜单主动翻译所选文字')
@@ -1963,13 +1967,14 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
       const hasDictionary = matchedBuiltin.length > 0 || matchedCustom.length > 0
       // 未授权/未启用或无任何词典命中时不加载（不再 await merge）：本地替换只在需要时进行。
       const merged = allowed && hasDictionary
-        ? await mergeFixedEntries(matchedBuiltin.map((d) => d.id), matchedCustom, config.targetLanguage)
+        ? await mergeFixedEntries(matchedBuiltin.map((d) => d.id), matchedCustom, config.targetLanguage, undefined, new URL(sender.url!))
         : {}
       const fixed = allowed && hasDictionary && Object.keys(merged).length > 0
-      const interactiveAllowed =
-        allowed && !isExcludedSite(sender.url ?? '', config.excludedHosts) && !isSensitivePage(sender.url ?? '')
-      const modelAllowed = interactiveAllowed && config.baseUrl !== '' && config.model !== ''
-      const auto = modelAllowed && (config.autoOrigins.includes(origin) || manualPage)
+      const pageAllowed = allowed && !isExcludedSite(sender.url ?? '', config.excludedHosts)
+      const interactiveAllowed = pageAllowed && !isSensitivePage(sender.url ?? '')
+      const modelReady = config.baseUrl !== '' && config.model !== ''
+      const modelAllowed = interactiveAllowed && modelReady
+      const auto = modelReady && ((interactiveAllowed && config.autoOrigins.includes(origin)) || (pageAllowed && manualPage))
       const selection =
         interactiveAllowed && config.selectionPopupEnabled && (modelAllowed || config.selectionToolbarEnabled)
       return {
@@ -2300,14 +2305,16 @@ async function pageMenuAction(
   }
   const tabId = tab.id
   const url = top.url
+  const policy = pageModelPolicy(url)
   const recheck = async (): Promise<string | undefined> => {
     const [settings, config] = await Promise.all([getSettings(), getTranslationConfig()])
     if (!settings.enabled) return '总开关已关闭'
     if (!isSiteScopeAllowed(url, config)) return SITE_SCOPE_BLOCKED_ERROR
     if (isExcludedSite(url, config.excludedHosts)) return '该站点已排除模型处理'
-    if (isSensitivePage(url)) return '该页面仅支持通过右键菜单主动翻译所选文字'
+    if (policy === 'selection-only') return '该页面仅支持通过右键菜单主动翻译所选文字'
     const current = await readTopDocument(tabId)
-    return current?.documentId === top.documentId && sameManualPage(current.url, url) ? undefined : PAGE_CHANGED_ERROR
+    return current?.documentId === top.documentId && sameManualPage(current.url, url) &&
+      pageModelPolicy(current.url) !== 'selection-only' ? undefined : PAGE_CHANGED_ERROR
   }
   const initialFailure = await recheck()
   if (initialFailure !== undefined) return { ok: false, error: initialFailure }
@@ -2339,7 +2346,9 @@ async function pageMenuAction(
   ])
   const currentFailure = await recheck()
   if (currentFailure !== undefined) return { ok: false, error: currentFailure }
-  const translated = ((status.fixed || status.auto) && !status.paused) || (legacy.active && !legacy.paused)
+  const translated = policy === 'manual-settings'
+    ? status.auto && !status.paused
+    : ((status.fixed || status.auto) && !status.paused) || (legacy.active && !legacy.paused)
   const action = translated ? 'restore' : status.paused || legacy.paused ? 'resume' : undefined
   if (action === 'restore') return forwardPageAction(tabId, top.documentId, url, action, recheck)
   const config = await getTranslationConfig()
@@ -2347,7 +2356,7 @@ async function pageMenuAction(
   if (
     action === undefined ||
     (config.baseUrl !== '' && config.model !== '' &&
-      (!config.autoOrigins.includes(origin) || !(await originAllowed(origin))))
+      (policy === 'manual-settings' || !config.autoOrigins.includes(origin) || !(await originAllowed(origin))))
   ) {
     return startPageTranslation({ ...tab, documentId: top.documentId })
   }

@@ -243,6 +243,20 @@ describe('built-in dictionary assets', () => {
     expect(merged['Settings']).toBe('我的覆盖')
   })
 
+  it('Devin 审查词条只随审查页加载，其他页面仍可使用旧词条和自定义词条', async () => {
+    const review = new URL('https://app.devin.ai/org/fixture-org/settings/review')
+    const other = new URL('https://app.devin.ai/org/fixture-org/settings/appearance')
+    const reviewEntries = await mergeFixedEntries(['devin'], [], 'zh-CN', readLocalFixture, review)
+    const otherEntries = await mergeFixedEntries(['devin'], [], 'zh-CN', readLocalFixture, other)
+    expect(reviewEntries['Analyze']).toBe('分析')
+    expect(otherEntries['Analyze']).toBeUndefined()
+    expect(otherEntries['Settings']).toBe('设置')
+    const custom = await mergeFixedEntries(
+      ['devin'], [{ entries: { Analyze: '自定义分析' } }], 'zh-CN', readLocalFixture, other,
+    )
+    expect(custom['Analyze']).toBe('自定义分析')
+  })
+
   it('Claude 元数据存在且限定官方域名，ChatGPT 已移除', () => {
     const chatgpt = BUILTIN_DICTIONARY_META.find((d) => d.id === 'chatgpt')
     const claude = BUILTIN_DICTIONARY_META.find((d) => d.id === 'claude')

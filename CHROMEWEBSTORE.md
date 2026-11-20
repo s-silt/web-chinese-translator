@@ -1,0 +1,33 @@
+# Chrome 应用商店发布记录
+
+更新于 2026-11-20。
+
+商店条目为「网页汉化助手」（Web Chinese Translator）。扩展翻译 GitHub 和其他网站上的界面及网页文字，并支持在用户配置模型后按需翻译阅读和输入内容。清单的默认语言为英文，同时提供简体中文、繁体中文、日文和韩文。
+
+现行说明、分类、截图和联系信息以商店条目为准。扩展图标来自 `public/icon/128.png`，问题反馈通过 GitHub Issues，隐私说明提供简体中文和英文版本。
+
+[商店条目](https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe) · [问题反馈](https://github.com/s-silt/web-chinese-translator/issues) · [隐私说明](docs/PRIVACY.md) · [Privacy Policy](docs/PRIVACY.en.md)
+
+## 权限用途
+
+| 权限 | 用途 |
+| --- | --- |
+| `storage` | 保存翻译开关、外观、网站设置和词库偏好。 |
+| `scripting` | 插入本地词库和翻译脚本，并按网站授权注册相应功能。 |
+| `activeTab` | 用户选择「翻译本页」或右键划词时临时访问当前标签页。 |
+| `contextMenus` | 在右键菜单提供本页翻译和所选文字翻译。 |
+| `alarms` | 智能陪读开启时，定时清理超过保留期限的阅读线索。 |
+| GitHub、Gist、GitHub Status 和内置词库的固定站点 | 在支持的网站上本地替换已收录的界面文字。内置站点见 `src/translation/dictionaries/metadata.json`。 |
+| 可选 HTTP 和 HTTPS 站点 | 用户启用模型功能时，按授权访问相应页面和用户配置的模型接口。 |
+
+## 隐私与版本
+
+固定词库在本地运行。模型功能把相应的页面文字、选区或输入文字发送到用户配置的接口。设置偏好可能随 Chrome 同步，模型凭据保存在本机。具体的数据用途、发送条件和保留时间见隐私说明。
+
+| 版本 | 日期 | 变更 |
+| --- | --- | --- |
+| 0.4.6 | 2026-11-20 | 补齐 Devin 组织审查页的固定翻译。普通设置页只在手动启动时调用模型，敏感路径仅允许主动划词。修复内容从贴住视口边缘到实际进屏时的漏译。 |
+
+普通设置页的手动整页翻译只发送可翻译的页面文字，译文不进入持久缓存。账号、密钥、支付等可识别的敏感页面只能通过右键菜单发送选区。
+
+商店上传使用从 GitHub 正式发行的签名 CRX 中提取并校验的 ZIP。提交前核对 ZIP 内的 Manifest V3 和版本号，并在商店控制台确认审核状态。
