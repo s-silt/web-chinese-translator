@@ -17,6 +17,7 @@ const SENSITIVE_PATH = /(?:^|\/)(?:api[-_]?keys?|secrets|passwords?|oauth|checko
 const ACCOUNT_PATH = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:accounts?|auth|sign-?in|sign-?up|log-?in|register)(?:\/|$)/i
 const SETTINGS_PATH = /\/settings(?=\/|$)/i
 const ORGANIZATION_PREFIX = /^\/(?:orgs?|organizations|enterprises)\/[^/]+(?=\/)/i
+const DEVIN_ORGANIZATION_SETTINGS_PREFIX = /^\/org\/[^/]+(?=\/settings(?:\/|$))/i
 const SENSITIVE_SETTING = /(?:^|\/)(?:accounts?(?:-settings|-management|-security)?|personal|profile|identity|auth(?:entication)?|security(?:-log)?|2fa|mfa|two-factor(?:-authentication)?|passkeys?|recovery(?:-codes?)?|sessions?|(?:personal-access-|access-|refresh-|api-)?tokens?(?:-requests)?|(?:api-|ssh-|gpg-|deploy-)?keys?|ssh|gpg|emails?|sso|permissions?|(?:api-)?credentials|secrets|variables|hooks|webhooks|environments|apps|applications|developers|installations|connections|audit(?:-logs?)?|sponsors-log|codespaces|billing(?:-and-plans)?|usage-and-billing|invoices?|licensing|enterprise-licensing|checkout|payments?|payment-methods?|credit-cards?|passwords?)(?:\/|$)/i
 const SETTINGS_ROUTE_PARAMS = ['tab', 'section', 'page', 'view', 'panel', 'subtab', 'category'] as const
 
@@ -91,9 +92,13 @@ function hasSensitiveSettingsQuery(search: URLSearchParams): boolean {
   return SETTINGS_ROUTE_PARAMS.some((key) => search.getAll(key).some(sensitiveSettingsSection))
 }
 
-function pathPolicy(pathname: string, search: URLSearchParams): PageModelPolicy {
+function pathPolicy(pathname: string, search: URLSearchParams, origin?: string): PageModelPolicy {
   const normalized = policyPath(pathname)
-  if (isSensitivePath(pathname) || SENSITIVE_PATH.test(normalized) || ACCOUNT_PATH.test(normalized)) return 'selection-only'
+  // Devin 组织设置的路径参数可能与敏感栏目同名。
+  const sensitivePath = origin === 'https://app.devin.ai'
+    ? normalized.replace(DEVIN_ORGANIZATION_SETTINGS_PREFIX, '')
+    : normalized
+  if (isSensitivePath(pathname) || SENSITIVE_PATH.test(sensitivePath) || ACCOUNT_PATH.test(normalized)) return 'selection-only'
   if (!SETTINGS_PATH.test(normalized)) return 'normal'
   const sections = normalized.replace(ORGANIZATION_PREFIX, '').replaceAll('_', '-')
   return SENSITIVE_SETTING.test(sections) || hasSensitiveSettingsQuery(search)
@@ -108,7 +113,7 @@ export function pageModelPolicy(value: string): PageModelPolicy {
     if (isPrivateHost(host) || SENSITIVE_HOST_LABEL.test(host) || SENSITIVE_HOSTS.some((item) => hostMatches(host, item))) {
       return 'selection-only'
     }
-    const pathnamePolicy = pathPolicy(url.pathname, url.searchParams)
+    const pathnamePolicy = pathPolicy(url.pathname, url.searchParams, url.origin)
     if (pathnamePolicy === 'selection-only' || url.hash === '') return pathnamePolicy
     const route = decodePageFragment(url.hash)
     if (route === undefined) return 'selection-only'

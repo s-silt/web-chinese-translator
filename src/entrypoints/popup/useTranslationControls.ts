@@ -608,7 +608,7 @@ export function useTranslationControls(): UseTranslationControls {
     setAuto,
     setInputTranslation: (enabled: boolean) => setRealtimeFeature('inputTranslationEnabled', enabled),
     restore: () => pageAction('restore'),
-    resume: () => manualSettings.value ? translatePage() : pageAction('resume'),
+    resume: () => pageAction('resume'),
     retryFailed: () => pageAction('retry-failed'),
     excludeSite,
     openSettings,

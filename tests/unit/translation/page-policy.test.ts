@@ -69,6 +69,9 @@ describe('isSensitivePage', () => {
 describe('pageModelPolicy', () => {
   it.each([
     'https://app.devin.ai/settings/review',
+    'https://app.devin.ai/org/billing/settings/review',
+    'https://app.devin.ai/org/mail/settings/review',
+    'https://app.devin.ai/org/%62illing/settings/review',
     'https://app.devin.ai/org/profile/settings/review',
     'https://app.devin.ai/org/tokens/settings/review',
     'https://example.com/settings',
@@ -88,6 +91,11 @@ describe('pageModelPolicy', () => {
     'https://example.com/profile/settings',
     'https://example.com/tokens/settings',
     'https://example.com/org/acme/billing-and-plans/settings',
+    'https://app.devin.ai/org/billing/settings/billing',
+    'https://app.devin.ai/org/billing/settings/review#/settings/billing',
+    'https://app.devin.ai/org/mail/settings/review?tab=billing',
+    'https://app.devin.ai/org/billing/dashboard',
+    'https://example.com/org/billing/settings/review',
     'https://app.devin.ai/org/profile/tokens/settings/review',
     'https://example.com/work#!/profile/settings',
     'https://example.com/work#%252Ftokens%252Fsettings',

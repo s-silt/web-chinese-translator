@@ -980,13 +980,16 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
   test('普通设置页只在点击扩展的翻译本页后调用模型', async () => {
     const attachBefore = process.env.PW_CHROMIUM_ATTACH_TO_OTHER
     process.env.PW_CHROMIUM_ATTACH_TO_OTHER = '1'
-    const url = new URL('https://settings.fixture.test/settings/appearance')
+    const url = new URL('https://app.devin.ai/org/fixture-org/settings/review')
     let context: BrowserContext | undefined
     try {
       const launched = await launch(null)
       context = launched.context
       await context.route(url.href, (route) =>
-        route.fulfill({ contentType: 'text/html; charset=utf-8', body: PAGE_HTML }),
+        route.fulfill({
+          contentType: 'text/html; charset=utf-8',
+          body: PAGE_HTML.replace('<main>', '<main><h2 id="settings-heading">Settings</h2>'),
+        }),
       )
       const options = await saveAndConnect(context, launched.extensionId)
       await enableSelection(options)
@@ -995,10 +998,15 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         return chrome.runtime.sendMessage({ type: 'wt:set-site-auto', origin, enabled: true })
       }, url.origin)).toMatchObject({ ok: true })
 
+      await waitForSiteScriptRegistration(options, {
+        url: url.href,
+        autoOrigin: url.origin,
+        selectionPopupEnabled: true,
+      })
       const page = await context.newPage()
       const before = api.calls.length
       await page.goto(url.href)
-      const tabId = await waitForSiteContentReady(options, page, { auto: false })
+      const tabId = await waitForSiteContentReady(options, page, { fixed: true, auto: false })
       await page.bringToFront()
       const worker = context.serviceWorkers()[0]!
       const [popup] = await Promise.all([
@@ -1011,6 +1019,17 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       ])
       await expect(popup).toHaveURL(`chrome-extension://${launched.extensionId}/popup.html`)
       const translate = popup.locator('[data-test="wt-translate-page"]')
+      const settingsHeading = page.locator('#settings-heading')
+      await expect(translate).toHaveText(zhCN.wtTranslatePage)
+      await expect(settingsHeading).toHaveText('设置')
+      await expect(page.locator('#p1')).toHaveText(PHYSICS)
+      expect(api.calls).toHaveLength(before)
+
+      await popup.getByRole('button', { name: zhCN.wtRestore, exact: true }).click()
+      await expect(settingsHeading).toHaveText('Settings')
+      await expect(translate).toHaveText(zhCN.wtResume)
+      await translate.click()
+      await expect(settingsHeading).toHaveText('设置')
       await expect(translate).toHaveText(zhCN.wtTranslatePage)
       await expect(page.locator('#p1')).toHaveText(PHYSICS)
       expect(api.calls).toHaveLength(before)
@@ -1019,6 +1038,13 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await expect(page.locator('#p1')).toHaveText('中文译文')
       expect(api.calls.slice(before).some((call) => call.kind === 'texts' &&
         Array.isArray(call.payload.texts) && call.payload.texts.includes(PHYSICS))).toBe(true)
+
+      await expect(translate).toHaveText(zhCN.wtRestore)
+      await translate.click()
+      await expect(page.locator('#p1')).toHaveText(PHYSICS)
+      await expect(translate).toHaveText(zhCN.wtResume)
+      await translate.click()
+      await expect(page.locator('#p1')).toHaveText('中文译文')
     } finally {
       await context?.close()
       if (attachBefore === undefined) delete process.env.PW_CHROMIUM_ATTACH_TO_OTHER

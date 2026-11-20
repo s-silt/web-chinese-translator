@@ -2350,13 +2350,15 @@ async function pageMenuAction(
     ? status.auto && !status.paused
     : ((status.fixed || status.auto) && !status.paused) || (legacy.active && !legacy.paused)
   const action = translated ? 'restore' : status.paused || legacy.paused ? 'resume' : undefined
-  if (action === 'restore') return forwardPageAction(tabId, top.documentId, url, action, recheck)
+  if (action === 'restore' || (action === 'resume' && policy === 'manual-settings')) {
+    return forwardPageAction(tabId, top.documentId, url, action, recheck)
+  }
   const config = await getTranslationConfig()
   const origin = normalizeOrigin(url)
   if (
     action === undefined ||
     (config.baseUrl !== '' && config.model !== '' &&
-      (policy === 'manual-settings' || !config.autoOrigins.includes(origin) || !(await originAllowed(origin))))
+      (!config.autoOrigins.includes(origin) || !(await originAllowed(origin))))
   ) {
     return startPageTranslation({ ...tab, documentId: top.documentId })
   }
