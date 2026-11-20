@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser'
+import { isDevinReviewEntry, isDevinReviewRoute } from '../sites'
 import type { TargetLanguage } from '../target-language'
 import { BUILTIN_DICTIONARY_META, MAX_FIXED_ENTRIES } from './index'
 
@@ -64,10 +65,15 @@ export async function mergeFixedEntries(
   custom: readonly CustomEntries[],
   language: TargetLanguage,
   load: DictionaryLoader = builtinTranslations,
+  page?: URL,
 ): Promise<Entries> {
   const selected = [...new Set(ids)].filter((id) => id !== 'common' && IDS.has(id))
   if (selected.length === 0 && custom.length === 0) return EMPTY
-  const tables = await Promise.all(['common', ...selected].map((id) => load(id, language)))
+  const tables = await Promise.all(['common', ...selected].map(async (id) => {
+    const entries = await load(id, language)
+    if (id !== 'devin' || (page !== undefined && isDevinReviewRoute(page))) return entries
+    return Object.fromEntries(Object.entries(entries).filter(([text]) => !isDevinReviewEntry(text)))
+  }))
   const chosen = new Map<string, string>()
   const layers = [...tables, ...custom.map((dictionary) => dictionary.entries)]
   for (const table of layers.reverse()) {

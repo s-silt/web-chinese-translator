@@ -16,7 +16,7 @@ import type { UiBadgeTone } from '../../components/ui/types'
 import type { MessageKey } from '../../i18n'
 import { getSettings, watchSettings } from '../../shared/settings'
 import { hostPermissionPattern, normalizeOrigin, watchTranslationConfig, type TranslationConfig } from '../../translation/config'
-import { isExcludedSite, isSensitivePage, normalizeExcludedHost } from '../../translation/page-policy'
+import { isExcludedSite, normalizeExcludedHost, pageModelPolicy } from '../../translation/page-policy'
 import { isSiteScopeAllowed } from '../../translation/site-scope'
 import { sendTranslationMessage } from '../../translation/client'
 import { openTextTranslationWindow } from '../../translation/text-window'
@@ -105,6 +105,7 @@ export interface UseTranslationControls {
   readonly outOfScope: ComputedRef<boolean>
   readonly pageError: Readonly<Ref<string>>
   readonly canRestore: ComputedRef<boolean>
+  readonly canRestoreFixed: ComputedRef<boolean>
   readonly canResume: ComputedRef<boolean>
   readonly failedCount: ComputedRef<number>
   readonly canRetryFailed: ComputedRef<boolean>
@@ -205,10 +206,12 @@ export function useTranslationControls(): UseTranslationControls {
   )
   const modelName = computed(() => config.value?.model.trim() ?? '')
   const dictEnabled = computed(() => status.value?.fixed === true)
-  const sensitive = computed(() => {
+  const activePagePolicy = computed(() => {
     const url = tab.value?.url
-    return url !== undefined && isSensitivePage(url)
+    return url === undefined ? 'normal' : pageModelPolicy(url)
   })
+  const sensitive = computed(() => activePagePolicy.value === 'selection-only')
+  const manualSettings = computed(() => activePagePolicy.value === 'manual-settings')
   const siteExcluded = computed(() => {
     const current = tab.value
     const hosts = config.value?.excludedHosts
@@ -223,7 +226,11 @@ export function useTranslationControls(): UseTranslationControls {
   )
   const canRestore = computed(
     () => masterEnabled.value && !outOfScope.value && status.value?.supported === true &&
-      (status.value.fixed || status.value.auto || status.value.paused || status.value.capped),
+      ((!manualSettings.value && status.value.fixed) || status.value.auto || status.value.paused || status.value.capped),
+  )
+  const canRestoreFixed = computed(
+    () => manualSettings.value && !canRestore.value && masterEnabled.value && !outOfScope.value &&
+      status.value?.supported === true && status.value.fixed,
   )
   const canResume = computed(
     () =>
@@ -258,8 +265,8 @@ export function useTranslationControls(): UseTranslationControls {
     if (page?.capped) return 'capped'
     if (page?.paused) return 'paused'
     const configured = config.value !== undefined && config.value.baseUrl !== '' && config.value.model !== ''
-    if (page?.auto && !autoEnabled.value) return configured ? 'page' : 'not-configured'
-    if (autoEnabled.value) {
+    if (page?.auto && (!autoEnabled.value || manualSettings.value)) return configured ? 'page' : 'not-configured'
+    if (autoEnabled.value && !manualSettings.value) {
       if (!configured) return 'not-configured'
       return page !== undefined && page.supported && page.auto ? 'on' : 'inactive'
     }
@@ -588,6 +595,7 @@ export function useTranslationControls(): UseTranslationControls {
     outOfScope,
     pageError,
     canRestore,
+    canRestoreFixed,
     canResume,
     failedCount,
     canRetryFailed,

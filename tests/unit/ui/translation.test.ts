@@ -1711,6 +1711,37 @@ describe('弹出页站点控制', () => {
     wrapper.unmount()
   })
 
+  it('普通设置页已应用本地词典时仍可点击翻译本页', async () => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    const origin = 'https://app.devin.ai'
+    const url = `${origin}/settings/review`
+    tabAndStatus(url, {
+      ok: true,
+      status: { supported: true, fixed: true, auto: false, paused: false, capped: false, failed: 0, error: '' },
+    })
+    const translate = vi.fn(() => ({ ok: true }))
+    replies({
+      'wt:get-config': () => ({ ok: true, config: { ...CONFIG, autoOrigins: [origin] } }),
+      'wt:translate-page': translate,
+    })
+    const wrapper = mountStatusCard()
+    try {
+      await flushPromises()
+      await flushPromises()
+      const primary = wrapper.get('[data-test="wt-translate-page"]')
+      expect(primary.text()).toBe(en.wtTranslatePage)
+      expect(primary.attributes('disabled')).toBeUndefined()
+      expect(wrapper.get('[data-test="wt-page-state"]').text()).not.toBe(en.wtSensitiveSkipped)
+      expect(translate).not.toHaveBeenCalled()
+      await primary.trigger('click')
+      await flushPromises()
+      expect(translate).toHaveBeenCalledExactlyOnceWith({ type: 'wt:translate-page', tabId: 9, url })
+    } finally {
+      wrapper.unmount()
+      clearToasts()
+    }
+  })
+
   it.each([
     ['翻译本页', { auto: false, paused: false }, 'wtTranslatePage', 'wt:translate-page'],
     ['已翻译时恢复原文', { auto: true, paused: false }, 'wtRestore', 'restore'],

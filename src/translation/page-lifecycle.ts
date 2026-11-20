@@ -1,11 +1,24 @@
+export function decodePageFragment(hash: string): string | undefined {
+  let fragment: string
+  try {
+    fragment = decodeURIComponent(hash.slice(1))
+  } catch {
+    return undefined
+  }
+  // 第二层可能混有真实百分号或无效 UTF-8，仍识别其中可解码的路由分隔符。
+  return fragment.replace(/(?:%[\da-f]{2})+/gi, (encoded) => {
+    try {
+      return decodeURIComponent(encoded)
+    } catch {
+      return encoded.replace(/%[0-7][\da-f]/gi, decodeURIComponent)
+    }
+  })
+}
+
 export function pageIdentity(href: string): string {
   const url = new URL(href)
-  let fragment = url.hash.slice(1)
-  try {
-    fragment = decodeURIComponent(fragment)
-  } catch {
-    return href
-  }
+  const fragment = decodePageFragment(url.hash)
+  if (fragment === undefined) return href
   const route = fragment.startsWith('/') || fragment.startsWith('!') ? url.hash : ''
   return `${url.origin}${url.pathname}${url.search}${route}`
 }

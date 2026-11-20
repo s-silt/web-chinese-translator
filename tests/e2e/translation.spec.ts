@@ -866,6 +866,192 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
     }
   })
 
+  test('Devin 组织审查设置页离线翻译界面说明，不发送页面内容', async () => {
+    const { context, extensionId } = await launch()
+    const url = 'https://app.devin.ai/org/fixture-org/settings/review'
+    const outsideReviewUrl = new URL('appearance', url).href
+    const passingExplanation = "When the check turns green. To block merges on it, mark it as required in your repository's branch rules."
+    const html = `<!doctype html><html lang="en"><meta charset="utf-8"><body>
+      <main>
+        <div>
+          <h1>Review</h1>
+          <p id="review-description">Choose how Devin analyzes pull requests, what it approves, and how analysis is billed.</p>
+        </div>
+        <section id="analysis-section" aria-label="Automatic analysis" title="Automatic analysis">
+          <div id="analysis-heading">Automatic analysis</div>
+          <form id="analysis-form" aria-label="Automatic analysis">
+            <button type="button">Add repositories or users</button>
+            <button id="filter-rules" type="button" aria-label="Filter Rules"><svg aria-hidden="true"></svg></button>
+            <h4><span id="analyze">Analyze</span><span id="analyze-description">Devin automatically analyzes matching pull requests.</span></h4>
+            <table><tbody><tr><td><button type="button">
+              <span id="organization">Default</span><span id="organization-kind">GitHub organization</span>
+            </button></td></tr></tbody></table>
+            <h4>Passing condition</h4>
+            <div id="passing-description">${passingExplanation}</div>
+            <button type="button" role="combobox"><span>Reviewer finishes</span></button>
+          </form>
+          <h3>Analysis effort</h3>
+          <p id="effort-description">Pick your default price-performance tradeoff.</p>
+          <h4>Default effort level</h4>
+          <div id="default-effort-description">Manual and automatic analyses use this effort level by default.</div>
+          <button type="button"><span>Ultra effort</span></button>
+          <h3>Context</h3>
+          <p id="context-description">Files and instructions Devin reads when analyzing a pull request</p>
+          <button type="button">Add context</button>
+          <div>
+            <span id="repository-file">Repository file</span>
+            <span id="all-repositories">Applies to all repositories</span>
+            <ul>
+              <li><span id="common-rules-note"><span id="common-rules">Common rule files</span>are also read</span><span id="default-badge">Default</span></li>
+            </ul>
+          </div>
+          <div id="plain-default">Default</div>
+          <pre><code>Automatic analysis</code></pre>
+        </section>
+        <article>
+          <section id="article-section" aria-label="Automatic analysis">
+            <div id="article-description">${passingExplanation}</div>
+          </section>
+        </article>
+        <section id="sensitive-section" data-sensitive aria-label="Automatic analysis"></section>
+      </main>
+    </body></html>`
+    try {
+      await context.route(url, (route) => route.fulfill({ contentType: 'text/html; charset=utf-8', body: html }))
+      await context.route(outsideReviewUrl, (route) => route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: '<!doctype html><main><h1 id="outside-review-term">Analyze</h1><h2>Settings</h2></main>',
+      }))
+      const options = await saveAndConnect(context, extensionId)
+      expect(await options.evaluate(async (origin) => {
+        const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+        return chrome.runtime.sendMessage({ type: 'wt:set-site-auto', origin, enabled: true })
+      }, new URL(url).origin)).toMatchObject({ ok: true })
+
+      await waitForSiteScriptRegistration(options, { url, autoOrigin: new URL(url).origin })
+      const page = await context.newPage()
+      const before = api.calls.length
+      await page.goto(url)
+      await waitForSiteContentReady(options, page, { fixed: true, auto: false })
+      await expect(page.getByRole('heading', { name: '代码审查' })).toBeVisible()
+      await expect(page.locator('#review-description')).toHaveText('设置 Devin 如何分析拉取请求、批准哪些请求，以及如何计费。')
+      await expect(page.locator('#analysis-heading')).toHaveText('自动分析')
+      await expect(page.getByRole('button', { name: '添加仓库或用户' })).toBeVisible()
+      await expect(page.locator('#analyze')).toHaveText('分析')
+      await expect(page.locator('#analyze-description')).toHaveText('Devin 会自动分析符合条件的拉取请求。')
+      await expect(page.getByRole('heading', { name: '通过条件' })).toBeVisible()
+      await expect(page.locator('#passing-description')).toHaveText('检查何时标记为通过。若要在检查未通过时阻止合并，请在仓库的分支规则中将此检查设为必需。')
+      await expect(page.getByRole('combobox').locator('span')).toHaveText('审查完成时')
+      await expect(page.getByRole('heading', { name: '分析强度', exact: true })).toBeVisible()
+      await expect(page.locator('#effort-description')).toHaveText('选择默认的成本与表现取舍。')
+      await expect(page.getByRole('heading', { name: '默认分析强度' })).toBeVisible()
+      await expect(page.locator('#default-effort-description')).toHaveText('手动分析和自动分析默认使用此强度。')
+      await expect(page.getByRole('button', { name: 'Ultra 分析强度' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: '上下文' })).toBeVisible()
+      await expect(page.locator('#context-description')).toHaveText('Devin 分析拉取请求时读取的文件和说明')
+      await expect(page.getByRole('button', { name: '添加上下文' })).toBeVisible()
+      await expect(page.locator('#repository-file')).toHaveText('仓库文件')
+      await expect(page.locator('#all-repositories')).toHaveText('适用于所有仓库')
+      await expect(page.locator('#common-rules')).toHaveText('常见规则文件')
+      await expect(page.locator('#common-rules-note')).toHaveText('常见规则文件也会被读取')
+      await expect(page.locator('#default-badge')).toHaveText('默认')
+      await expect(page.locator('#plain-default')).toHaveText('Default')
+      await expect(page.locator('#filter-rules')).toHaveAttribute('aria-label', '筛选规则')
+      await expect(page.locator('#analysis-section')).toHaveAttribute('aria-label', '自动分析')
+      await expect(page.locator('#analysis-form')).toHaveAttribute('aria-label', '自动分析')
+      await expect(page.locator('#analysis-section')).toHaveAttribute('title', 'Automatic analysis')
+      await expect(page.locator('#article-section')).toHaveAttribute('aria-label', 'Automatic analysis')
+      await expect(page.locator('#article-description')).toHaveText(passingExplanation)
+      await expect(page.locator('#sensitive-section')).toHaveAttribute('aria-label', 'Automatic analysis')
+      await expect(page.locator('#organization-kind')).toHaveText('GitHub 组织')
+      await expect.soft(page.locator('#organization')).toHaveText('Default')
+      await expect(page.locator('pre code')).toHaveText('Automatic analysis')
+
+      await page.goto(outsideReviewUrl)
+      await waitForSiteContentReady(options, page, { fixed: true, auto: false })
+      await expect(page.getByRole('heading', { name: '设置' })).toBeVisible()
+      await expect(page.locator('#outside-review-term')).toHaveText('Analyze')
+      expect(api.calls).toHaveLength(before)
+    } finally {
+      await context.close()
+    }
+  })
+
+  test('普通设置页只在点击扩展的翻译本页后调用模型', async () => {
+    const attachBefore = process.env.PW_CHROMIUM_ATTACH_TO_OTHER
+    process.env.PW_CHROMIUM_ATTACH_TO_OTHER = '1'
+    const url = new URL('https://app.devin.ai/org/fixture-org/settings/review')
+    let context: BrowserContext | undefined
+    try {
+      const launched = await launch(null)
+      context = launched.context
+      await context.route(url.href, (route) =>
+        route.fulfill({
+          contentType: 'text/html; charset=utf-8',
+          body: PAGE_HTML.replace('<main>', '<main><h2 id="settings-heading">Settings</h2>'),
+        }),
+      )
+      const options = await saveAndConnect(context, launched.extensionId)
+      await enableSelection(options)
+      expect(await options.evaluate(async (origin) => {
+        const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+        return chrome.runtime.sendMessage({ type: 'wt:set-site-auto', origin, enabled: true })
+      }, url.origin)).toMatchObject({ ok: true })
+
+      await waitForSiteScriptRegistration(options, {
+        url: url.href,
+        autoOrigin: url.origin,
+        selectionPopupEnabled: true,
+      })
+      const page = await context.newPage()
+      const before = api.calls.length
+      await page.goto(url.href)
+      const tabId = await waitForSiteContentReady(options, page, { fixed: true, auto: false })
+      await page.bringToFront()
+      const worker = context.serviceWorkers()[0]!
+      const [popup] = await Promise.all([
+        context.waitForEvent('page', { timeout: 10_000 }),
+        worker.evaluate(async (id) => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          const tab = await chrome.tabs.get(id)
+          await chrome.action.openPopup({ windowId: tab.windowId })
+        }, tabId),
+      ])
+      await expect(popup).toHaveURL(`chrome-extension://${launched.extensionId}/popup.html`)
+      const translate = popup.locator('[data-test="wt-translate-page"]')
+      const settingsHeading = page.locator('#settings-heading')
+      await expect(translate).toHaveText(zhCN.wtTranslatePage)
+      await expect(settingsHeading).toHaveText('设置')
+      await expect(page.locator('#p1')).toHaveText(PHYSICS)
+      expect(api.calls).toHaveLength(before)
+
+      await popup.getByRole('button', { name: zhCN.wtRestore, exact: true }).click()
+      await expect(settingsHeading).toHaveText('Settings')
+      await expect(translate).toHaveText(zhCN.wtResume)
+      await translate.click()
+      await expect(settingsHeading).toHaveText('设置')
+      await expect(translate).toHaveText(zhCN.wtTranslatePage)
+      await expect(page.locator('#p1')).toHaveText(PHYSICS)
+      expect(api.calls).toHaveLength(before)
+
+      await translate.click()
+      await expect(page.locator('#p1')).toHaveText('中文译文')
+      expect(api.calls.slice(before).some((call) => call.kind === 'texts' &&
+        Array.isArray(call.payload.texts) && call.payload.texts.includes(PHYSICS))).toBe(true)
+
+      await expect(translate).toHaveText(zhCN.wtRestore)
+      await translate.click()
+      await expect(page.locator('#p1')).toHaveText(PHYSICS)
+      await expect(translate).toHaveText(zhCN.wtResume)
+      await translate.click()
+      await expect(page.locator('#p1')).toHaveText('中文译文')
+    } finally {
+      await context?.close()
+      if (attachBefore === undefined) delete process.env.PW_CHROMIUM_ATTACH_TO_OTHER
+      else process.env.PW_CHROMIUM_ATTACH_TO_OTHER = attachBefore
+    }
+  })
+
   test('排除网站设置阻止发送，移除后恢复划词', async () => {
     const { context, extensionId } = await launch()
     try {
@@ -1149,6 +1335,54 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await context.close()
     }
   })
+
+  for (const { url, markup } of [
+    {
+      url: 'https://x.com/wt-fixture/status/1',
+      markup: '<article><div data-testid="tweetText"><span id="reply">A reply under the main post.</span></div></article>',
+    },
+    {
+      url: 'https://dev.to/wt-fixture/discussion',
+      markup: '<section class="comment__body"><p id="reply">A comment on the community article.</p></section>',
+    },
+  ]) {
+    test(`${new URL(url).hostname} 回复停在视口边缘后继续滚动仍会翻译`, async () => {
+      const { context, extensionId } = await launch()
+      try {
+        const html = `<!doctype html><style>body,p{margin:0} #reply{display:block;line-height:24px}</style>
+          <main><p id="start">The opening paragraph.</p><div style="height:1000px"></div>
+          ${markup}<div style="height:100vh"></div></main>`
+        await context.route(url, (route) => route.fulfill({ contentType: 'text/html', body: html }))
+        const options = await saveAndConnect(context, extensionId)
+        await enableSelection(options)
+        const page = await context.newPage()
+        await page.goto(url)
+        const id = await waitForSiteContentReady(options, page, { auto: false })
+        const reply = page.locator('#reply')
+        const source = await reply.textContent()
+        expect(await options.evaluate(async ({ id, url }) => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({ type: 'wt:translate-page', tabId: id, url })
+        }, { id, url })).toMatchObject({ ok: true })
+        await expect(page.locator('#start')).toHaveText('中文译文')
+
+        await reply.evaluate((el) => scrollBy(0, el.getBoundingClientRect().top - innerHeight))
+        await expect.poll(() => reply.evaluate((el) => el.getBoundingClientRect().top - innerHeight)).toBe(0)
+        // 让边界相切时的 IntersectionObserver 回调和延迟复查先跑完。
+        await page.waitForTimeout(350)
+        const callsForReply = (): MockCall[] => api.calls.filter(
+          (call) => Array.isArray(call.payload.texts) && call.payload.texts.includes(source),
+        )
+        expect(callsForReply()).toHaveLength(0)
+        await page.evaluate(() => scrollBy(0, 80))
+        await expect(reply).toBeInViewport({ ratio: 1 })
+        await expect(reply).toHaveText('中文译文', { timeout: 5_000 })
+        expect(callsForReply()).toHaveLength(1)
+      } finally {
+        await context.close()
+      }
+    })
+  }
 
   test('展开内容：闭合容器与透明菜单在显示前不发送', async () => {
     const { context, extensionId } = await launch()

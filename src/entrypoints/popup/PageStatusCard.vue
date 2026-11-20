@@ -20,6 +20,15 @@
         {{ primaryLabel }}
       </UiButton>
       <UiButton
+        v-if="canRestoreFixed"
+        variant="invisible"
+        size="sm"
+        :disabled="busy"
+        @click="restore"
+      >
+        {{ t('wtRestore') }}
+      </UiButton>
+      <UiButton
         variant="invisible"
         size="sm"
         :disabled="excludeDisabled"
@@ -104,6 +113,7 @@ const {
   state,
   canTranslate,
   canRestore,
+  canRestoreFixed,
   canResume,
   failedCount,
   canRetryFailed,

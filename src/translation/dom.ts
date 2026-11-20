@@ -5,9 +5,11 @@ import { backoffDelayMs, isTransientFailure, MAX_ATTEMPTS, MAX_RETRY_AFTER_MS, t
 import { invalidateLayout, tryReplaceText, tryReplaceTexts, wasRejected, type TextReplacement } from './layout'
 import { isReadableElement as isVisible } from './reading-context'
 import {
+  canTranslateDevinReviewAnalysisLabel,
   canTranslateFixedFormAttributes,
   FIXED_ATTRIBUTES,
-  fixedUiContext,
+  fixedTextContext,
+  isDevinReviewRowName,
   isExcludedElement,
   isFixedExcludedElement,
   isFixedUiElement,
@@ -255,7 +257,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     if (disposed || suspended || !options.fixedEnabled()) return
     const changes = queued.filter(({ node, source, parent }) =>
       node.isConnected && node.parentElement === parent && textValue(node) === source &&
-      !isFixedExcludedElement(parent) && fixedUiContext(parent),
+      !isFixedExcludedElement(parent) && fixedTextContext(parent, source),
     )
     const applied = tryReplaceTexts(changes)
     changes.forEach((change, index) => {
@@ -274,9 +276,9 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     const translate = options.translateFixed
     if (translate === undefined || !options.fixedEnabled()) return 0
     const parent = node.parentElement
-    if (parent === null || isFixedExcludedElement(parent) || !fixedUiContext(parent)) return 0
-    if (ownership.ownerOf(node) === 'github') return 0
     const source = textValue(node)
+    if (parent === null || isFixedExcludedElement(parent) || !fixedTextContext(parent, source)) return 0
+    if (ownership.ownerOf(node) === 'github') return 0
     const record = records.get(node)
     if (record !== undefined && record.applied === source) return 0
     const translated = translate(source)
@@ -308,12 +310,15 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     const translate = options.translateFixed
     if (translate === undefined || !options.fixedEnabled()) return 0
     const formAttributes = canTranslateFixedFormAttributes(element)
-    if (!formAttributes && (isFixedExcludedElement(element) || !isFixedUiElement(element))) return 0
+    if (!formAttributes && isFixedExcludedElement(element)) return 0
+    const standardAttributes = formAttributes || isFixedUiElement(element)
+    if (!standardAttributes && !canTranslateDevinReviewAnalysisLabel(element)) return 0
     let writes = 0
     for (const name of FIXED_ATTRIBUTES) {
+      if (!standardAttributes && name !== 'aria-label') continue
       if (name === 'placeholder' && !formAttributes) continue
       const value = element.getAttribute(name)
-      if (value === null) continue
+      if (value === null || isDevinReviewRowName(element, value)) continue
       const record = attrRecords.get(element)?.get(name)
       if (record !== undefined && record.applied === value) continue
       const translated = translate(value)
@@ -1292,6 +1297,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     }
   })
 
+  // A boundary touch already counts as intersecting; also notify when actual area enters the viewport.
   const observerIo =
     typeof IntersectionObserver === 'function'
       ? new IntersectionObserver((entries) => {
@@ -1307,7 +1313,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
             }
           }
           scheduleVisibilityRecheck()
-        })
+        }, { threshold: [0, Number.EPSILON] })
       : undefined
 
   function autoActive(): boolean {

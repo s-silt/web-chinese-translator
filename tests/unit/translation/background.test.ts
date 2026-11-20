@@ -54,8 +54,8 @@ vi.mock('../../../src/translation/dictionaries/entries', async (importOriginal) 
     ...actual,
     builtinTranslations: localLoader,
     mergeFixedEntries: vi.fn(
-      (...[ids, custom, language, load = localLoader]: Parameters<Merge>) =>
-        actual.mergeFixedEntries(ids, custom, language, load),
+      (...[ids, custom, language, load = localLoader, page]: Parameters<Merge>) =>
+        actual.mergeFixedEntries(ids, custom, language, load, page),
     ),
   }
 })
@@ -3736,6 +3736,106 @@ async function prepareManualPage(url = 'https://page.example/article') {
 }
 
 describe('仅本页翻译与会话授权', () => {
+  it.each(['extension', 'menu'] as const)('%s 明确操作后才翻译普通设置页，并限制在当前页面', async (entry) => {
+    const { state, sender, send, fetcher } = await prepareManualPage('https://app.devin.ai/org/fixture-org/settings/review')
+    state.status.fixed = true
+    vi.mocked(fakeBrowser.permissions.contains).mockImplementation(async () => true)
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG, selectionPopupEnabled: true, proactiveAssistEnabled: true,
+      floatingButtonEnabled: true, inputTranslationEnabled: true,
+    })
+    vi.mocked(readPersistentTranslations).mockClear()
+    vi.mocked(writePersistentTranslations).mockClear()
+    const text = `Synthetic ${entry} settings description.`
+    const page = { site: 'app.devin.ai', title: 'SETTINGS_TITLE_MARKER', heading: 'SETTINGS_HEADING_MARKER' }
+    const batch = { type: 'wt:translate', mode: 'auto', texts: [text], page, pageId: 'settings-page' }
+    const blockedModes = { fixed: true, selection: false, smart: false, floating: false, input: false }
+
+    expect(await trigger({ type: 'wt:page-modes' }, sender)).toMatchObject({
+      ok: true, modes: { ...blockedModes, auto: false },
+    })
+    expect(await trigger(batch, sender)).toMatchObject({ ok: false })
+    expect(fetcher).not.toHaveBeenCalled()
+
+    if (entry === 'extension') {
+      expect(await trigger({ type: 'wt:translate-page', tabId: sender.tab.id, url: sender.url }, extSender))
+        .toMatchObject({ ok: true })
+    } else {
+      menuClick!(
+        { menuItemId: 'wt-page', pageUrl: sender.url, frameId: 0, editable: false },
+        { id: sender.tab.id, url: sender.url } as never,
+      )
+      await vi.waitFor(() => expect(send).toHaveBeenCalledWith(
+        sender.tab.id, expect.objectContaining({ type: 'wt:page-action', action: 'resume' }),
+        { frameId: 0, documentId: sender.documentId },
+      ))
+    }
+
+    expect(await trigger({ type: 'wt:page-modes' }, sender)).toMatchObject({
+      ok: true, modes: { ...blockedModes, auto: true },
+    })
+    expect(await trigger(batch, sender)).toMatchObject({ ok: true, texts: ['译文'] })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    const body = JSON.parse(fetcher.mock.calls[0]![1]!.body as string) as { messages: { content: string }[] }
+    expect(JSON.parse(body.messages[1]!.content)).toEqual({
+      texts: [text], currentPage: { title: '', heading: '', site: '' }, recentPages: [],
+    })
+    expect(readPersistentTranslations).not.toHaveBeenCalled()
+    expect(writePersistentTranslations).not.toHaveBeenCalled()
+    expect((await translationConfigItem.getValue()).autoOrigins).toEqual(VALID_CONFIG.autoOrigins)
+
+    // The actual top document can navigate before Chrome delivers tabs.onUpdated.
+    state.url = `${sender.url}#%252Fbilling`
+    expect(await trigger({ ...batch, texts: ['Synthetic protected page batch.'] }, sender))
+      .toMatchObject({ ok: false })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    { name: '仅有固定词库', authorized: false },
+    { name: '已有模型授权', authorized: true },
+  ])('$name的普通设置页右键继续时不新建模型授权', async ({ authorized }) => {
+    const { state, sender, send, fetcher } = await prepareManualPage('https://app.devin.ai/org/fixture-org/settings/review')
+    const { documentId, url, tab: { id: tabId } } = sender
+    state.status.fixed = true
+    if (authorized) {
+      expect(await trigger({ type: 'wt:translate-page', tabId, url }, extSender)).toMatchObject({ ok: true })
+    }
+    const grant = await getManualPageGrant(tabId, documentId, url)
+    expect(grant !== undefined).toBe(authorized)
+
+    expect(await trigger({ type: 'wt:page-action', action: 'restore', tabId, url }, extSender))
+      .toMatchObject({ ok: true })
+    expect(state.status.paused).toBe(true)
+    expect(await getManualPageGrant(tabId, documentId, url)).toEqual(grant)
+    send.mockClear()
+
+    menuClick!(
+      { menuItemId: 'wt-page', pageUrl: url, frameId: 0, editable: false },
+      { id: tabId, url } as never,
+    )
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith(
+      tabId, expect.objectContaining({ type: 'wt:page-action', action: 'resume' }),
+      { frameId: 0, documentId },
+    ))
+
+    expect(await getManualPageGrant(tabId, documentId, url)).toEqual(grant)
+    expect(state.status).toMatchObject({ paused: false, auto: authorized })
+    const reply = await trigger({
+      type: 'wt:translate', mode: 'auto', texts: ['An additional settings description is ready to translate.'],
+    }, sender)
+    expect(reply).toMatchObject(authorized ? { ok: true, texts: ['译文'] } : { ok: false })
+    expect(fetcher).toHaveBeenCalledTimes(Number(authorized))
+  })
+
+  it('启动时实际顶层页面已切换到敏感哈希路由则不授予本页翻译', async () => {
+    const { state, sender, fetcher } = await prepareManualPage('https://app.devin.ai/settings/review')
+    state.url = `${sender.url}#%252Fbilling`
+    expect(await trigger({ type: 'wt:translate-page' }, sender)).toMatchObject({ ok: false })
+    expect(await getManualPageGrant(sender.tab.id, sender.documentId, state.url)).toBeUndefined()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
   it.each(['content', 'extension'] as const)('%s 入口仅授权当前文档，不改自动站点或永久权限', async (entry) => {
     const { sender, fetcher } = await prepareManualPage()
     expect(await fakeBrowser.permissions.contains({ origins: ['https://page.example/*'] })).toBe(false)
