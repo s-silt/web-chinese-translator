@@ -91,9 +91,10 @@ interface ReplayEntry {
   size: number
   target: TargetLanguage
   source: SourceLanguage
-  /** 本窗口内的回放次数：网站不断改回原文时停止回放，避免与网站互写。 */
+  /** 本时间窗口内，回放过该原文的重绘批次数。 */
   since: number
   count: number
+  lastRedraw: number
 }
 
 interface AttrRecord {
@@ -168,7 +169,7 @@ const MAX_RESTART_RETRIES = 5
 /** 同页重绘回放：只存已完整写入的模型译文，按原文精确匹配；条数与字符数都有上限。 */
 const MAX_REPLAY_ENTRIES = 512
 const MAX_REPLAY_CHARS = 262144
-/** 同一原文在窗口内回放超过次数即视为与网站互相改写；按原文计数，重新挂载的新节点也绕不过。 */
+/** 同一原文按重绘批次限流：一次重绘中的相同原文共用一次计数。 */
 const REPLAY_WINDOW_MS = 1000
 const MAX_REPLAYS_PER_WINDOW = 64
 /** 弹窗原因提示：只记少量未解决、仍在页面上的原文节点。 */
@@ -247,6 +248,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   let unitReplaySeen: WeakMap<Text, { source: string; result: ReplayResult }> | undefined
   let replayChars = 0
   let replaySlotsNeeded = 0
+  let redrawBatch = 0
   /** 因布局保护或重绘限流保留原文的节点 → 当时原文；计数时清掉已解决或失效的项。 */
   const layoutSkips = new Map<Text, string>()
   const redrawSkips = new Map<Text, string>()
@@ -266,13 +268,15 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   }
 
   function skipCount(map: Map<Text, string>, layout: boolean): number {
+    let visible = 0
     for (const [node, source] of map) {
       const parent = node.parentElement
       const stale = !node.isConnected || textValue(node) !== source || records.has(node) || parent === null ||
-        (layout && !wasRejected(node, source)) || isExcludedElement(parent) || !isVisible(parent)
+        (layout && !wasRejected(node, source)) || isExcludedElement(parent)
       if (stale) map.delete(node)
+      else if (isVisible(parent)) visible += 1
     }
-    return map.size
+    return visible
   }
 
   function forgetReplay(key: string): void {
@@ -308,6 +312,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       source: options.sourceLanguage?.() ?? 'auto',
       since: 0,
       count: 0,
+      lastRedraw: -1,
     })
     replayChars += size
     for (const text of members ?? []) unitReplayTexts.set(text, (unitReplayTexts.get(text) ?? 0) + 1)
@@ -345,14 +350,18 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     return false
   }
 
-  /** 同一原文在窗口内回放过多即视为与网站互写。 */
-  function replayThrottled(entry: ReplayEntry): boolean {
+  function allowReplay(entry: ReplayEntry): boolean {
     const now = Date.now()
     if (now - entry.since >= REPLAY_WINDOW_MS) {
       entry.since = now
       entry.count = 0
+      entry.lastRedraw = -1
     }
-    return entry.count >= MAX_REPLAYS_PER_WINDOW
+    if (entry.lastRedraw === redrawBatch) return true
+    if (entry.count >= MAX_REPLAYS_PER_WINDOW) return false
+    entry.lastRedraw = redrawBatch
+    entry.count += 1
+    return true
   }
 
   function touchReplay(key: string, entry: ReplayEntry): void {
@@ -374,15 +383,14 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     if (!isVisible(parent)) return 'miss'
     // 属于多节点行内单元的片段不能单独回放
     if (!unitFallback.has(node) && inlineUnitFor(node, inlineOptions) !== undefined) return 'miss'
-    if (replayThrottled(entry)) {
-      noteSkip(redrawSkips, node, source)
-      return 'throttled'
-    }
     if (trackedCount() >= recordBudget) {
       replaySlotsNeeded = 1
       return 'blocked'
     }
-    entry.count += 1
+    if (!allowReplay(entry)) {
+      noteSkip(redrawSkips, node, source)
+      return 'throttled'
+    }
     if (writeNode(node, source, entry.applied[0]!) === 0) return 'rejected'
     dropEntry(node)
     touchReplay(key, entry)
@@ -418,16 +426,15 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
         failedItems.get(member) !== source && !isExcludedElement(parent)
     })
     if (!usable) return 'miss'
-    if (replayThrottled(entry)) {
-      unit.nodes.forEach((member, i) => noteSkip(redrawSkips, member, unit.sources[i]!))
-      return 'throttled'
-    }
     if (unit.nodes.length > recordBudget - trackedCount()) {
       const slots = unit.nodes.length
       replaySlotsNeeded = replaySlotsNeeded === 0 ? slots : Math.min(replaySlotsNeeded, slots)
       return 'blocked'
     }
-    entry.count += 1
+    if (!allowReplay(entry)) {
+      unit.nodes.forEach((member, i) => noteSkip(redrawSkips, member, unit.sources[i]!))
+      return 'throttled'
+    }
     const changes = unit.nodes.map((member, i) => ({ node: member, source: unit.sources[i]!, translated: entry.applied[i]! }))
     if (!tryReplaceTextUnit(changes)) {
       noteLayoutSkips(changes)
@@ -1546,6 +1553,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       }
     }
     if (removed) scheduleCleanup()
+    if (roots.size > 0) redrawBatch += 1
     for (const root of roots) {
       if (root instanceof Element && root.closest('[data-wt-root]') !== null) continue
       if (root instanceof Element && isExcludedElement(root) && !canTranslateFixedFormAttributes(root)) continue
@@ -1597,7 +1605,10 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   }
 
   function revealTarget(target: EventTarget | null, force = false): void {
-    if (!(target instanceof Element) || !autoActive()) return
+    if (!(target instanceof Element)) return
+    // 原生弹层打开时可能没有可观察的属性变化；模型暂停或封顶仍允许本地回贴。
+    const canReplay = force && !disposed && !suspended && replay.size > 0 && options.autoEnabled()
+    if (!autoActive() && !canReplay) return
     if (target.closest('[data-wt-root]') !== null || isExcludedElement(target)) return
     if (force || observationOverflow) {
       const container = force

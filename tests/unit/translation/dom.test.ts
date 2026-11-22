@@ -782,6 +782,20 @@ describe('自动翻译候选', () => {
       expect(batches).toHaveLength(1)
     })
 
+    it('一次重绘中出现多个相同原文时不会误判为反复重绘', async () => {
+      const p = await translated()
+      const replacements = Array.from({ length: 80 }, () => {
+        const next = document.createElement('p')
+        next.textContent = source
+        return next
+      })
+      p.replaceWith(...replacements)
+      await settle()
+      expect(replacements.map((node) => node.textContent)).toEqual(Array(80).fill('译文'))
+      expect(engine!.progress().redrawSkipped).toBeUndefined()
+      expect(batches).toHaveLength(1)
+    })
+
     it('网站反复改回原文时回放有次数上限', async () => {
       const p = await translated()
       const text = p.firstChild as Text
@@ -2547,6 +2561,13 @@ describe('行内单元翻译', () => {
       expect(engine.failedCount()).toBe(0)
       expect(engine.progress()).toMatchObject({ spent: source.length, queued: 0 })
       expect(engine.progress().layoutSkipped).toBe(reason === 'layout' ? 5 : undefined)
+      if (reason === 'layout') {
+        const paragraph = link.parentElement!
+        paragraph.hidden = true
+        expect(engine.progress().layoutSkipped).toBeUndefined()
+        paragraph.hidden = false
+        expect(engine.progress().layoutSkipped).toBe(5)
+      }
       engine.restore()
       expect(engine.progress().layoutSkipped).toBeUndefined()
     },

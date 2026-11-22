@@ -1494,6 +1494,10 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         await expect(paragraph).toHaveText('中文译文', { timeout: 5_000 })
         await expect(page.locator('.pause-status')).toContainText(zhCN.wtCapNotice)
         await paragraph.evaluate((element, source) => {
+          const popover = document.createElement('div')
+          popover.id = 'popover-redraw'
+          popover.setAttribute('popover', '')
+          popover.textContent = source
           const protectedParagraph = document.createElement('p')
           protectedParagraph.id = 'protected-redraw'
           protectedParagraph.translate = false
@@ -1501,10 +1505,14 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
           const regularParagraph = document.createElement('p')
           regularParagraph.id = element.id
           regularParagraph.textContent = source
-          element.replaceWith(protectedParagraph, regularParagraph)
+          element.replaceWith(popover, protectedParagraph, regularParagraph)
         }, PHYSICS)
         await expect(paragraph).toHaveText('中文译文')
         await expect(page.locator('#protected-redraw')).toHaveText(PHYSICS)
+        const popover = page.locator('#popover-redraw')
+        await expect(popover).toHaveText(PHYSICS)
+        await popover.evaluate((element) => (element as HTMLElement).showPopover())
+        await expect(popover).toHaveText('中文译文', { timeout: 5_000 })
         expect(textCalls().map(({ payload }) => payload.texts)).toEqual([[PHYSICS]])
       } finally {
         await context.close()
