@@ -251,7 +251,10 @@ export function useTranslationControls(): UseTranslationControls {
     if (!masterEnabled.value || outOfScope.value || sensitive.value || page === undefined) return undefined
     const value = page.progress
     if (value === undefined || !(page.auto || page.paused || page.capped)) return undefined
-    return value.spent > 0 || value.translated > 0 || value.queued > 0 ? value : undefined
+    return value.spent > 0 || value.translated > 0 || value.queued > 0 ||
+      (value.layoutSkipped ?? 0) > 0 || (value.redrawSkipped ?? 0) > 0
+      ? value
+      : undefined
   })
 
   const state = computed<WtState>(() => {

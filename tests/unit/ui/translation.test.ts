@@ -2089,6 +2089,24 @@ describe('弹出页站点控制', () => {
     wrapper.unmount()
   })
 
+  it('进度卡分别提示排版保护和频繁重绘，不显示为模型失败', async () => {
+    await settingsItem.setValue(DEFAULT_SETTINGS)
+    tabAndStatus('https://example.com/', progressStatus({
+      spent: 0, budget: 20000, translated: 0, queued: 0, layoutSkipped: 2, redrawSkipped: 1,
+    }))
+    replies({ 'wt:get-config': () => ({ ok: true, config: CONFIG }) })
+    const wrapper = mountStatusCard()
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.get('[data-test="wt-skip-layout"]').text()).toBe(en.wtLayoutSkipped.replace('{count}', '2'))
+    expect(wrapper.get('[data-test="wt-skip-redraw"]').text()).toBe(en.wtRedrawSkipped.replace('{count}', '1'))
+    const status = wrapper.get('[data-test="wt-skip-status"]')
+    expect(status.attributes('role')).toBe('status')
+    expect(status.text()).toBe(`${en.wtLayoutSkippedNote} ${en.wtRedrawSkippedNote}`)
+    expect(wrapper.find('[data-test="wt-failed"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it.each([
     ['无翻译活动', {}, { spent: 0, budget: 20000, translated: 0, queued: 0 }, {}],
     ['敏感页', { url: 'https://accounts.google.com/' }, { spent: 12000, budget: 20000, translated: 3, queued: 2 }, {}],

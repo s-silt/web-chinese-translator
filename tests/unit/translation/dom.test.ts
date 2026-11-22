@@ -626,6 +626,196 @@ describe('自动翻译候选', () => {
     expect(engine.isCapped()).toBe(true)
   })
 
+  it.each(['characterData', 'childList', 'remount'] as const)(
+    '额度用尽后，同页重绘 (%s) 仍显示已译文字且不重复请求',
+    async (mutation) => {
+      const source = 'English text here'
+      const fresh = 'Another sentence.'
+      document.body.innerHTML = `<p>${source}</p><p>${fresh}</p>`
+      engine = makeEngine({ auto: true, autoBudget: source.length })
+      engine.start()
+      await settle()
+      expect(batches.map(({ texts }) => texts)).toEqual([[source]])
+      batches[0]!.apply(['译文'])
+      await settle()
+      const original = document.querySelector('p')!
+      expect(original.textContent).toBe('译文')
+      expect(engine.isBudgetCapped()).toBe(true)
+
+      let paragraph = original
+      if (mutation === 'characterData') (original.firstChild as Text).data = source
+      else if (mutation === 'childList') original.replaceChildren(source)
+      else {
+        paragraph = document.createElement('p')
+        paragraph.textContent = source
+        original.replaceWith(paragraph)
+      }
+      await settle()
+      expect(paragraph.textContent).toBe('译文')
+      expect(paragraph.nextElementSibling?.textContent).toBe(fresh)
+      expect(batches).toHaveLength(1)
+      expect(engine.progress()).toMatchObject({ spent: source.length, translated: 1 })
+      expect(engine.isBudgetCapped()).toBe(true)
+
+      engine.restore()
+      expect(paragraph.textContent).toBe(source)
+      await settle()
+      expect(paragraph.textContent).toBe(source)
+    },
+  )
+
+  describe('同页重绘回放', () => {
+    const source = 'English text here'
+    async function translated(options: { auto?: () => boolean; target?: () => 'zh-CN' | 'ja' } = {}): Promise<HTMLParagraphElement> {
+      document.body.innerHTML = `<p>${source}</p><p>Another sentence.</p>`
+      engine = createDomEngine({
+        targetLanguage: options.target ?? (() => 'zh-CN'),
+        fixedEnabled: () => false,
+        autoEnabled: options.auto ?? (() => true),
+        autoBudget: source.length,
+        debounceMs: 10,
+        onAutoBatch(texts, apply) {
+          batches.push({ texts: [...texts], apply })
+        },
+      })
+      engine.start()
+      await settle()
+      batches[0]!.apply(['译文'])
+      await settle()
+      const p = document.querySelector('p')!
+      expect(p.textContent).toBe('译文')
+      return p
+    }
+    function remount(old: Element, text = source, attrs = ''): HTMLElement {
+      const wrapper = document.createElement('div')
+      wrapper.innerHTML = `<p${attrs}>${text}</p>`
+      const next = wrapper.firstElementChild as HTMLElement
+      old.replaceWith(next)
+      return next
+    }
+
+    it('暂停新请求时同原文重绘仍回放且不请求', async () => {
+      const p = await translated()
+      engine!.pauseAuto()
+      const next = remount(p)
+      await settle()
+      expect(next.textContent).toBe('译文')
+      expect(batches).toHaveLength(1)
+    })
+
+    it('记录满且字符封顶时，分片清理腾出记录后回放重挂载的译文', async () => {
+      document.body.innerHTML = '<button>Settings</button>'.repeat(100) + `<p>${source}</p>`
+      engine = makeEngine({ fixed: true, auto: true, autoBudget: source.length, recordBudget: 101 })
+      engine.start()
+      await settle()
+      expect(batches.map(({ texts }) => texts)).toEqual([[source]])
+      batches[0]!.apply(['译文'])
+      const p = document.querySelector('p')!
+      expect(p.textContent).toBe('译文')
+      engine.start()
+      await settle()
+      expect(engine.isBudgetCapped()).toBe(true)
+
+      const next = remount(p)
+      await settle()
+      expect(next.textContent).toBe('译文')
+      expect(engine.isBudgetCapped()).toBe(true)
+      expect(batches).toHaveLength(1)
+    })
+
+    it('原文不同则不套用旧译文', async () => {
+      const p = await translated()
+      const next = remount(p, 'English text there')
+      await settle()
+      expect(next.textContent).toBe('English text there')
+      ;(next.firstChild as Text).data = source
+      await settle()
+      expect(next.textContent).toBe('译文')
+    })
+
+    it('恢复原文、导航、目标语言变化或关闭自动翻译后不回放', async () => {
+      vi.stubGlobal('location', new URL('https://example.com/a'))
+      let auto = true
+      let target: 'zh-CN' | 'ja' = 'zh-CN'
+      let p: Element = await translated({ auto: () => auto, target: () => target })
+      engine!.restore()
+      engine!.start()
+      p = remount(p)
+      await settle()
+      expect(p.textContent).toBe(source)
+
+      engine!.dispose()
+      batches = []
+      p = await translated({ auto: () => auto, target: () => target })
+      vi.stubGlobal('location', new URL('https://example.com/b'))
+      p = remount(p)
+      await settle()
+      expect(p.textContent).not.toBe('译文')
+
+      engine!.dispose()
+      batches = []
+      vi.stubGlobal('location', new URL('https://example.com/a'))
+      p = await translated({ auto: () => auto, target: () => target })
+      target = 'ja'
+      p = remount(p)
+      await settle()
+      expect(p.textContent).toBe(source)
+
+      engine!.dispose()
+      batches = []
+      target = 'zh-CN'
+      p = await translated({ auto: () => auto, target: () => target })
+      auto = false
+      p = remount(p)
+      await settle()
+      expect(p.textContent).toBe(source)
+    })
+
+    it('排除子树与隐藏元素中不回放', async () => {
+      const p = await translated()
+      const excluded = remount(p, source, ' translate="no"')
+      await settle()
+      expect(excluded.textContent).toBe(source)
+      const hidden = remount(excluded, source, ' hidden')
+      await settle()
+      expect(hidden.textContent).toBe(source)
+      expect(batches).toHaveLength(1)
+    })
+
+    it('一次重绘中出现多个相同原文时不会误判为反复重绘', async () => {
+      const p = await translated()
+      const replacements = Array.from({ length: 80 }, () => {
+        const next = document.createElement('p')
+        next.textContent = source
+        return next
+      })
+      p.replaceWith(...replacements)
+      await settle()
+      expect(replacements.map((node) => node.textContent)).toEqual(Array(80).fill('译文'))
+      expect(engine!.progress().redrawSkipped).toBeUndefined()
+      expect(batches).toHaveLength(1)
+    })
+
+    it('网站反复改回原文时回放有次数上限', async () => {
+      const p = await translated()
+      const text = p.firstChild as Text
+      let rewrites = 0
+      for (; rewrites < 200 && text.data !== source; rewrites += 1) {
+        text.data = source
+        await settle(5)
+      }
+      expect(text.data).toBe(source)
+      expect(rewrites).toBeGreaterThan(10)
+      expect(rewrites).toBeLessThanOrEqual(65)
+      await settle(100)
+      expect(batches).toHaveLength(1)
+      expect(engine!.progress().redrawSkipped).toBe(1)
+      text.data = ''
+      await settle()
+      expect(engine!.progress().redrawSkipped).toBeUndefined()
+    })
+  })
+
   it('预算为 0 时不限字符', async () => {
     document.body.innerHTML = '<p>English text here</p><p>Another sentence.</p>'
     engine = createDomEngine({
@@ -2345,6 +2535,44 @@ it('review5 失败记录和已译记录共享上限，移除节点释放容量',
 })
 
 describe('行内单元翻译', () => {
+  it.each(['changed-tag', 'layout'] as const)(
+    '整句回贴遇到 %s 时不留下半段译文',
+    async (reason) => {
+      const template = 'Click <a href="#">here</a> to <b>continue</b>.'
+      document.body.innerHTML = `<p>${template}</p>`
+      engine = makeEngine({ auto: true })
+      engine.start()
+      await settle()
+      const source = 'Click <1>here</1> to <2>continue</2>.'
+      expect(batches[0]?.texts).toEqual([source])
+      batches[0]!.apply(['点击<1>这里</1>以<2>继续</2>。'])
+      expect(document.querySelector('p')!.textContent).toBe('点击 这里 以 继续。')
+      if (reason === 'changed-tag') engine.pauseAuto()
+      const replacement = reason === 'changed-tag' ? template.replace('<b>continue</b>', '<em>continue</em>') : template
+      document.body.innerHTML = `<p>${replacement}</p>`
+      const link = document.querySelector('a')!
+      if (reason === 'layout') {
+        Object.defineProperty(link, 'scrollWidth', { get: () => (link.textContent === '这里' ? 9999 : 10) })
+        Object.defineProperty(link, 'clientWidth', { get: () => 10 })
+      }
+      await settle()
+      expect(document.querySelector('p')!.textContent).toBe('Click here to continue.')
+      expect(batches).toHaveLength(1)
+      expect(engine.failedCount()).toBe(0)
+      expect(engine.progress()).toMatchObject({ spent: source.length, queued: 0 })
+      expect(engine.progress().layoutSkipped).toBe(reason === 'layout' ? 5 : undefined)
+      if (reason === 'layout') {
+        const paragraph = link.parentElement!
+        paragraph.hidden = true
+        expect(engine.progress().layoutSkipped).toBeUndefined()
+        paragraph.hidden = false
+        expect(engine.progress().layoutSkipped).toBe(5)
+      }
+      engine.restore()
+      expect(engine.progress().layoutSkipped).toBeUndefined()
+    },
+  )
+
   it('带行内格式的段落合并为一个占位请求并回填各文本节点', async () => {
     document.body.innerHTML = '<p>Click <a href="#">here</a> to <b>continue</b>.</p>'
     engine = makeEngine({ auto: true })

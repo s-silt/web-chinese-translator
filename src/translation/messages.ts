@@ -204,6 +204,10 @@ export interface PageTranslationProgress {
   readonly translated: number
   /** 排队、拆分重发或请求中的文本段数（尚未进入视口的不算） */
   readonly queued: number
+  /** 因布局保护保留原文、仍在页面上的文本段数；为 0 时省略 */
+  readonly layoutSkipped?: number
+  /** 网站反复重绘、回放被限流而保留原文的文本段数；为 0 时省略 */
+  readonly redrawSkipped?: number
 }
 
 export interface PageTranslationStatus {
@@ -576,6 +580,9 @@ function isPageTranslationProgress(value: unknown): value is PageTranslationProg
     isRecord(value) &&
     ['spent', 'budget', 'translated', 'queued'].every(
       (key) => Number.isSafeInteger(value[key]) && (value[key] as number) >= 0,
+    ) &&
+    ['layoutSkipped', 'redrawSkipped'].every(
+      (key) => value[key] === undefined || (Number.isSafeInteger(value[key]) && (value[key] as number) >= 0),
     )
   )
 }

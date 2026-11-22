@@ -1460,6 +1460,120 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       }, { id, text })
     }
 
+    async function setMinimumPageBudget(options: Page): Promise<void> {
+      expect(await options.evaluate(async () => {
+        const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+        return chrome.runtime.sendMessage({ type: 'wt:save-config', patch: { pageCharLimit: 20_000 } })
+      })).toMatchObject({ ok: true })
+    }
+
+    test('达到单页上限后，网页重新渲染仍保留译文且不重发', async () => {
+      const { context, extensionId } = await launch()
+      try {
+        // 第二段只比整页额度略短；第一段成功后，剩余额度不足以翻译它。
+        const long = 'The rest of the page exceeds the remaining character budget. '.repeat(400).slice(0, 19_990)
+        const options = await prepareAutoSite(context, extensionId, paragraphs(PHYSICS, long))
+        await setMinimumPageBudget(options)
+        const page = await context.newPage()
+        await page.goto('https://app.devin.ai/translation-redraw')
+        const paragraph = page.locator('#p1')
+        await expect(paragraph).toHaveText('中文译文')
+        await expect(page.locator('.pause-status')).toContainText(zhCN.wtCapNotice)
+        expect(textCalls().map(({ payload }) => payload.texts)).toEqual([[PHYSICS]])
+
+        await paragraph.evaluate((element, source) => {
+          ;(element.firstChild as Text).data = source
+        }, PHYSICS)
+        await expect(paragraph).toHaveText('中文译文', { timeout: 5_000 })
+        await paragraph.evaluate((element, source) => {
+          const replacement = document.createElement('p')
+          replacement.id = element.id
+          replacement.textContent = source
+          element.replaceWith(replacement)
+        }, PHYSICS)
+        await expect(paragraph).toHaveText('中文译文', { timeout: 5_000 })
+        await expect(page.locator('.pause-status')).toContainText(zhCN.wtCapNotice)
+        await paragraph.evaluate((element, source) => {
+          const popover = document.createElement('div')
+          popover.id = 'popover-redraw'
+          popover.setAttribute('popover', '')
+          popover.textContent = source
+          const protectedParagraph = document.createElement('p')
+          protectedParagraph.id = 'protected-redraw'
+          protectedParagraph.translate = false
+          protectedParagraph.textContent = source
+          const regularParagraph = document.createElement('p')
+          regularParagraph.id = element.id
+          regularParagraph.textContent = source
+          element.replaceWith(popover, protectedParagraph, regularParagraph)
+        }, PHYSICS)
+        await expect(paragraph).toHaveText('中文译文')
+        await expect(page.locator('#protected-redraw')).toHaveText(PHYSICS)
+        const popover = page.locator('#popover-redraw')
+        await expect(popover).toHaveText(PHYSICS)
+        await popover.evaluate((element) => (element as HTMLElement).showPopover())
+        await expect(popover).toHaveText('中文译文', { timeout: 5_000 })
+        expect(textCalls().map(({ payload }) => payload.texts)).toEqual([[PHYSICS]])
+      } finally {
+        await context.close()
+      }
+    })
+
+    test('行内整句回贴保留新挂载的链接和粗体', async () => {
+      const { context, extensionId } = await launch()
+      try {
+        const template = 'Click <1>here</1> to <2>continue</2>.'
+        const long = 'This fixture leaves too little space for the next model request. '.repeat(400).slice(0, 19_990)
+        api.setTextTranslator((text) => text === template ? '点击<1>这里</1>以<2>继续</2>。' : '中文译文')
+        const options = await prepareAutoSite(
+          context, extensionId, paragraphs('Click <a href="#details">here</a> to <strong>continue</strong>.', long),
+        )
+        await setMinimumPageBudget(options)
+        const page = await context.newPage()
+        await page.goto('https://app.devin.ai/translation-inline-redraw')
+        const paragraph = page.locator('#p1')
+        await expect(paragraph).toHaveText('点击 这里 以 继续。')
+        await expect(page.locator('.pause-status')).toContainText(zhCN.wtCapNotice)
+        expect(textCalls().map(({ payload }) => payload.texts)).toEqual([[template]])
+
+        await paragraph.evaluate((old) => {
+          const replacement = document.createElement('p')
+          replacement.id = old.id
+          const link = document.createElement('a')
+          link.setAttribute('href', '#details')
+          link.textContent = 'here'
+          link.addEventListener('click', (event) => {
+            event.preventDefault()
+            link.dataset.clicked = 'yes'
+          })
+          const emphasis = document.createElement('strong')
+          emphasis.textContent = 'continue'
+          replacement.append('Click ', link, ' to ', emphasis, '.')
+          old.replaceWith(replacement)
+        })
+        await expect(paragraph).toHaveText('点击 这里 以 继续。', { timeout: 5_000 })
+        await expect(paragraph.locator('strong')).toHaveText('继续')
+        const link = paragraph.getByRole('link', { name: '这里' })
+        await expect(link).toHaveAttribute('href', '#details')
+        await link.click()
+        await expect(link).toHaveAttribute('data-clicked', 'yes')
+        await paragraph.evaluate((old) => {
+          const protectedSentence = document.createElement('p')
+          protectedSentence.id = 'protected-inline-redraw'
+          protectedSentence.innerHTML = 'Click <a translate="no" href="#details">here</a> to <strong>continue</strong>.'
+          const regularSentence = document.createElement('p')
+          regularSentence.id = old.id
+          regularSentence.innerHTML = 'Click <a href="#details">here</a> to <strong>continue</strong>.'
+          old.replaceWith(protectedSentence, regularSentence)
+        })
+        await expect(paragraph).toHaveText('点击 这里 以 继续。')
+        await expect(page.locator('#protected-inline-redraw')).toHaveText('Click here to continue.')
+        expect(textCalls().map(({ payload }) => payload.texts)).toEqual([[template]])
+      } finally {
+        await context.close()
+      }
+    })
+
     test('请求挂起：按真实时限中止并重试，用尽后暂停，点继续恢复', async () => {
       // 不加测试钩子：三次真实超时（每次约 18~19 秒）加退避
       test.setTimeout(180_000)
