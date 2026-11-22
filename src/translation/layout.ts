@@ -192,6 +192,15 @@ export function tryReplaceText(node: Text, source: string, translated: string): 
   return ok
 }
 
+/** 整句回贴只接受整批写入；布局不合适时，整句保留原文直到重新检查布局。 */
+export function tryReplaceTextUnit(changes: readonly TextReplacement[]): boolean {
+  if (!changes.every(canReplace)) return false
+  const epoch = layoutEpoch
+  if (commitReplacements(changes)) return true
+  for (const { node, source } of changes) rejected.set(node, { source, epoch })
+  return false
+}
+
 /** 调用方按时间片传入小批次；失败先全量还原，再逐项判断。重复 Text 只接受首个有效项。 */
 export function tryReplaceTexts(changes: readonly TextReplacement[]): boolean[] {
   const results = changes.map(() => false)

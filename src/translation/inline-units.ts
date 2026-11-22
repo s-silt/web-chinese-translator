@@ -19,6 +19,8 @@ export interface InlineUnit {
   readonly standaloneTags: ReadonlySet<number>
   /** 序列化时遇到的全部 child 节点快照（文档顺序；op/冻结/排除元素自身在内，内部不展开） */
   readonly structure: readonly Node[]
+  /** 占位编号 n 对应 tags[n-1]：元素标签名，冻结文本为 '#text'；同一模板下区分不同标签结构 */
+  readonly tags: readonly string[]
   /** 序列化文本：节点原文 + 成对 <n>…</n>（可嵌套）+ 独立 <n/> */
   readonly template: string
 }
@@ -84,6 +86,7 @@ export function inlineUnitFor(node: Text, options: InlineUnitOptions): InlineUni
   const paired = new Set<number>()
   const standalone = new Set<number>()
   const structure: Node[] = []
+  const tags: string[] = []
   const stack: number[] = []
   let next = 1
   let template = ''
@@ -103,6 +106,7 @@ export function inlineUnitFor(node: Text, options: InlineUnitOptions): InlineUni
         // 冻结节点（已有 records，例如固定词典写过）：独立占位，不发送、不参与写回
         if (text.trim() !== '' && isFrozen?.(child as Text) === true) {
           standalone.add(next)
+          tags.push('#text')
           if (!append(`<${next}/>`)) return false
           next += 1
           continue
@@ -119,6 +123,7 @@ export function inlineUnitFor(node: Text, options: InlineUnitOptions): InlineUni
       const el2 = child as Element
       if (isStandalone(el2, isExcluded)) {
         standalone.add(next)
+        tags.push(tagName(el2))
         if (!append(`<${next}/>`)) return false
         next += 1
         continue
@@ -127,6 +132,7 @@ export function inlineUnitFor(node: Text, options: InlineUnitOptions): InlineUni
       const id = next
       next += 1
       paired.add(id)
+      tags.push(tagName(el2))
       stack.push(id)
       if (!append(`<${id}>`)) return false
       if (!serialize(el2, depth + 1)) return false
@@ -137,7 +143,7 @@ export function inlineUnitFor(node: Text, options: InlineUnitOptions): InlineUni
   }
   if (!serialize(block, 1)) return undefined
   if (nodes.length < 2) return undefined
-  return { block, nodes, sources, containers, pairedTags: paired, standaloneTags: standalone, structure, template }
+  return { block, nodes, sources, containers, pairedTags: paired, standaloneTags: standalone, structure, tags, template }
 }
 
 /** 快照有效性：block 仍挂载、重序列化结果与单元完全一致（结构/节点/原文均未变） */
@@ -148,6 +154,11 @@ export function isInlineUnitCurrent(unit: InlineUnit, options: InlineUnitOptions
   return current !== undefined && current.block === unit.block && current.template === unit.template &&
     current.structure.length === unit.structure.length && current.structure.every((n, i) => n === unit.structure[i]) &&
     current.nodes.length === unit.nodes.length && current.nodes.every((n, i) => n === unit.nodes[i] && current.sources[i] === unit.sources[i])
+}
+
+/** 同页回放的精确键：逐节点原文 + 有序标签名 + 模板（含空白）；仅数字占位的模板不足以区分结构。 */
+export function inlineUnitKey(unit: InlineUnit): string {
+  return JSON.stringify([unit.block.localName, unit.sources, unit.tags, unit.template])
 }
 
 /**

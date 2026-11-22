@@ -2,7 +2,7 @@ import { createDomScanner, type DomScanner } from './dom-walker'
 import { textOwnership } from '../shared/text-ownership'
 import { pageIdentity } from './page-lifecycle'
 import { backoffDelayMs, isTransientFailure, MAX_ATTEMPTS, MAX_RETRY_AFTER_MS, type FailureInfo } from './failure'
-import { invalidateLayout, tryReplaceText, tryReplaceTexts, wasRejected, type TextReplacement } from './layout'
+import { invalidateLayout, tryReplaceText, tryReplaceTexts, tryReplaceTextUnit, wasRejected, type TextReplacement } from './layout'
 import { isReadableElement as isVisible } from './reading-context'
 import {
   canTranslateDevinReviewAnalysisLabel,
@@ -18,7 +18,7 @@ import {
   MAX_MODEL_TEXT,
   splitLongText,
 } from './sites'
-import { inlineUnitFor, isInlineUnitCurrent, parseInlineResult, type InlineUnit } from './inline-units'
+import { inlineUnitFor, inlineUnitKey, isInlineUnitCurrent, parseInlineResult, type InlineUnit } from './inline-units'
 import type { PageTranslationProgress } from './messages'
 import type { SourceLanguage, TargetLanguage } from './target-language'
 
@@ -81,6 +81,19 @@ interface NodeRecord {
   applied: string
   generation: number
   location: string
+}
+
+interface ReplayEntry {
+  /** 单节点为一项；行内单元按成员顺序存每个节点的完整译文。 */
+  applied: readonly string[]
+  /** 行内单元成员原文：只用于廉价预筛，避免对任意文本反复序列化。 */
+  members?: readonly string[]
+  size: number
+  target: TargetLanguage
+  source: SourceLanguage
+  /** 本窗口内的回放次数：网站不断改回原文时停止回放，避免与网站互写。 */
+  since: number
+  count: number
 }
 
 interface AttrRecord {
@@ -152,6 +165,16 @@ const VISIBILITY_RETRY_MS = 120
 const CANCELLED_REQUEUE_MS = 1000
 const MIN_BUSY_RETRY_MS = 1000
 const MAX_RESTART_RETRIES = 5
+/** 同页重绘回放：只存已完整写入的模型译文，按原文精确匹配；条数与字符数都有上限。 */
+const MAX_REPLAY_ENTRIES = 512
+const MAX_REPLAY_CHARS = 262144
+/** 同一原文在窗口内回放超过次数即视为与网站互相改写；按原文计数，重新挂载的新节点也绕不过。 */
+const REPLAY_WINDOW_MS = 1000
+const MAX_REPLAYS_PER_WINDOW = 64
+/** 弹窗原因提示：只记少量未解决、仍在页面上的原文节点。 */
+const MAX_SKIP_NOTES = 256
+
+type ReplayResult = 'replayed' | 'throttled' | 'blocked' | 'rejected' | 'miss'
 const ownership = textOwnership()
 
 export function createDomEngine(options: DomEngineOptions): DomEngine {
@@ -216,12 +239,218 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   let resizeTimer: ReturnType<typeof setTimeout> | undefined
   let cleanupTimer: ReturnType<typeof setTimeout> | undefined
   let cleanupAgain = false
+  /** 键：'t'+单节点原文 或 'u'+行内单元精确键 → 已成功显示的完整译文；导航、恢复、失效或设置改变时清空。只存字符串，不引用 DOM。 */
+  const replay = new Map<string, ReplayEntry>()
+  /** 行内单元成员原文 → 引用计数；未命中时不序列化。 */
+  const unitReplayTexts = new Map<string, number>()
+  /** 同一时间片内已判过的单元成员：同一段落的其余成员不再重复序列化。 */
+  let unitReplaySeen: WeakMap<Text, { source: string; result: ReplayResult }> | undefined
+  let replayChars = 0
+  let replaySlotsNeeded = 0
+  /** 因布局保护或重绘限流保留原文的节点 → 当时原文；计数时清掉已解决或失效的项。 */
+  const layoutSkips = new Map<Text, string>()
+  const redrawSkips = new Map<Text, string>()
 
   function textValue(node: Text): string {
     return node.nodeValue ?? ''
   }
 
+  function noteSkip(map: Map<Text, string>, node: Text, source: string): void {
+    if (map.has(node) || map.size < MAX_SKIP_NOTES) map.set(node, source)
+  }
+
+  function noteLayoutSkips(changes: readonly TextReplacement[]): void {
+    for (const change of changes) {
+      if (wasRejected(change.node, change.source)) noteSkip(layoutSkips, change.node, change.source)
+    }
+  }
+
+  function skipCount(map: Map<Text, string>, layout: boolean): number {
+    for (const [node, source] of map) {
+      const parent = node.parentElement
+      const stale = !node.isConnected || textValue(node) !== source || records.has(node) || parent === null ||
+        (layout && !wasRejected(node, source)) || isExcludedElement(parent) || !isVisible(parent)
+      if (stale) map.delete(node)
+    }
+    return map.size
+  }
+
+  function forgetReplay(key: string): void {
+    const entry = replay.get(key)
+    if (entry === undefined) return
+    replay.delete(key)
+    replayChars -= entry.size
+    for (const text of entry.members ?? []) {
+      const left = (unitReplayTexts.get(text) ?? 0) - 1
+      if (left > 0) unitReplayTexts.set(text, left)
+      else unitReplayTexts.delete(text)
+    }
+  }
+
+  function clearReplay(): void {
+    replay.clear()
+    unitReplayTexts.clear()
+    unitReplaySeen = undefined
+    replayChars = 0
+    replaySlotsNeeded = 0
+    layoutSkips.clear()
+    redrawSkips.clear()
+  }
+
+  function storeReplay(key: string, applied: readonly string[], size: number, members?: readonly string[]): void {
+    if (size > MAX_REPLAY_CHARS) return
+    forgetReplay(key)
+    replay.set(key, {
+      applied,
+      size,
+      ...(members === undefined ? {} : { members }),
+      target: options.targetLanguage(),
+      source: options.sourceLanguage?.() ?? 'auto',
+      since: 0,
+      count: 0,
+    })
+    replayChars += size
+    for (const text of members ?? []) unitReplayTexts.set(text, (unitReplayTexts.get(text) ?? 0) + 1)
+    // 单节点与行内单元共用同一份条数与字符上限
+    for (const oldest of replay.keys()) {
+      if (replay.size <= MAX_REPLAY_ENTRIES && replayChars <= MAX_REPLAY_CHARS) break
+      forgetReplay(oldest)
+    }
+  }
+
+  /** 只在单节点完整写入成功后调用：分段中途、失败或被拒的结果都不进来。 */
+  function rememberReplay(node: Text): void {
+    const record = records.get(node)
+    if (record === undefined || textValue(node) !== record.applied || record.original === record.applied) return
+    storeReplay(`t${record.original}`, [record.applied], record.original.length + record.applied.length + 1)
+  }
+
+  /** 只在整个行内单元写入成功后调用；任一成员已被改写就不记。 */
+  function rememberUnitReplay(unit: InlineUnit, changes: readonly TextReplacement[]): void {
+    const intact = changes.every((change) => {
+      const record = records.get(change.node)
+      return record !== undefined && record.applied === change.translated && textValue(change.node) === change.translated
+    })
+    if (!intact) return
+    const key = `u${inlineUnitKey(unit)}`
+    const applied = changes.map((change) => change.translated)
+    const size = key.length + applied.reduce((sum, text) => sum + text.length, 0) +
+      unit.sources.reduce((sum, text) => sum + text.length, 0)
+    storeReplay(key, applied, size, unit.sources)
+  }
+
+  function replayLanguageMatches(key: string, entry: ReplayEntry): boolean {
+    if (entry.target === options.targetLanguage() && entry.source === (options.sourceLanguage?.() ?? 'auto')) return true
+    forgetReplay(key)
+    return false
+  }
+
+  /** 同一原文在窗口内回放过多即视为与网站互写。 */
+  function replayThrottled(entry: ReplayEntry): boolean {
+    const now = Date.now()
+    if (now - entry.since >= REPLAY_WINDOW_MS) {
+      entry.since = now
+      entry.count = 0
+    }
+    return entry.count >= MAX_REPLAYS_PER_WINDOW
+  }
+
+  function touchReplay(key: string, entry: ReplayEntry): void {
+    // 刷新最近使用顺序
+    replay.delete(key)
+    replay.set(key, entry)
+  }
+
+  /** 网站按原样重写已译文字（同一节点、新节点或新段落）：本地重放译文，不发请求、不计额度。 */
+  function replayModel(node: Text): ReplayResult {
+    if (replay.size === 0 || !options.autoEnabled()) return 'miss'
+    const source = textValue(node)
+    const key = `t${source}`
+    const entry = replay.get(key)
+    if (entry === undefined || pageIdentity(location.href) !== lastLocation) return 'miss'
+    if (!replayLanguageMatches(key, entry)) return 'miss'
+    if (!autoCandidate(node) || appendedTails.has(node) || unitMembers.has(node)) return 'miss'
+    const parent = node.parentElement!
+    if (!isVisible(parent)) return 'miss'
+    // 属于多节点行内单元的片段不能单独回放
+    if (!unitFallback.has(node) && inlineUnitFor(node, inlineOptions) !== undefined) return 'miss'
+    if (replayThrottled(entry)) {
+      noteSkip(redrawSkips, node, source)
+      return 'throttled'
+    }
+    if (trackedCount() >= recordBudget) {
+      replaySlotsNeeded = 1
+      return 'blocked'
+    }
+    entry.count += 1
+    if (writeNode(node, source, entry.applied[0]!) === 0) return 'rejected'
+    dropEntry(node)
+    touchReplay(key, entry)
+    return 'replayed'
+  }
+
+  /** 行内单元按原样重绘：逐节点原文与有序标签结构都一致才整体回放，任一成员放不下就全部回滚。 */
+  function replayUnit(node: Text): ReplayResult {
+    if (unitReplayTexts.size === 0 || !options.autoEnabled()) return 'miss'
+    const source = textValue(node)
+    if (!unitReplayTexts.has(source) || unitFallback.has(node) || pageIdentity(location.href) !== lastLocation) return 'miss'
+    const seen = unitReplaySeen?.get(node)
+    if (seen !== undefined && seen.source === source) return seen.result
+    const unit = inlineUnitFor(node, inlineOptions)
+    const result = unit === undefined ? 'miss' : replayUnitNow(unit)
+    // 记录位不足时不记：腾出记录后的重扫要能再次回放
+    if (result === 'miss' || result === 'throttled') {
+      unitReplaySeen ??= new WeakMap()
+      for (const member of unit?.nodes ?? [node]) unitReplaySeen.set(member, { source: textValue(member), result })
+    }
+    return result
+  }
+
+  function replayUnitNow(unit: InlineUnit): ReplayResult {
+    const key = `u${inlineUnitKey(unit)}`
+    const entry = replay.get(key)
+    if (entry === undefined || entry.applied.length !== unit.nodes.length || !replayLanguageMatches(key, entry)) return 'miss'
+    const usable = unit.nodes.every((member, i) => {
+      const parent = member.parentElement
+      const source = unit.sources[i]!
+      return member.isConnected && parent !== null && !records.has(member) && ownership.ownerOf(member) !== 'github' &&
+        !appendedTails.has(member) && !unitFallback.has(member) && !wasRejected(member, source) &&
+        failedItems.get(member) !== source && !isExcludedElement(parent)
+    })
+    if (!usable) return 'miss'
+    if (replayThrottled(entry)) {
+      unit.nodes.forEach((member, i) => noteSkip(redrawSkips, member, unit.sources[i]!))
+      return 'throttled'
+    }
+    if (unit.nodes.length > recordBudget - trackedCount()) {
+      const slots = unit.nodes.length
+      replaySlotsNeeded = replaySlotsNeeded === 0 ? slots : Math.min(replaySlotsNeeded, slots)
+      return 'blocked'
+    }
+    entry.count += 1
+    const changes = unit.nodes.map((member, i) => ({ node: member, source: unit.sources[i]!, translated: entry.applied[i]! }))
+    if (!tryReplaceTextUnit(changes)) {
+      noteLayoutSkips(changes)
+      for (const member of unit.nodes) dropEntry(member)
+      return 'rejected'
+    }
+    for (const change of changes) {
+      rememberWrite(change)
+      modelTexts.add(change.node)
+      const anchored = unitMembers.get(change.node)
+      if (anchored !== undefined) {
+        clearUnit(anchored)
+        if (pending.get(anchored.node) === anchored) dropEntry(anchored.node)
+      }
+      dropEntry(change.node)
+    }
+    touchReplay(key, entry)
+    return 'replayed'
+  }
+
   function rememberWrite(change: TextReplacement): void {
+    layoutSkips.delete(change.node)
+    redrawSkips.delete(change.node)
     records.set(change.node, { original: change.source, applied: change.translated, generation, location: lastLocation })
     ownership.claim(change.node, 'web', change.translated)
     modifiedTexts.add(change.node)
@@ -240,7 +469,10 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       markCapped('records')
       return 0
     }
-    if (!tryReplaceText(node, source, translated)) return 0
+    if (!tryReplaceText(node, source, translated)) {
+      if (wasRejected(node, source)) noteSkip(layoutSkips, node, source)
+      return 0
+    }
     rememberWrite({ node, source, translated })
     modelTexts.add(node)
     return 1
@@ -575,13 +807,22 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   }
 
   function releaseRecordCap(): void {
-    if (!capped || capReason !== 'records' || trackedCount() >= recordBudget) return
-    capped = false
-    capReason = undefined
-    cappedNotified = false
-    options.onCapReleased?.()
-    if (disposed || suspended) return
-    if ((options.fixedEnabled() || (options.autoEnabled() && !autoPaused)) && document.body !== null) {
+    const recordCapped = capped && capReason === 'records'
+    if (!recordCapped && replaySlotsNeeded === 0) return
+    const slots = recordBudget - trackedCount()
+    const releaseCap = recordCapped && slots > 0
+    const replayReady = replaySlotsNeeded > 0 && slots >= replaySlotsNeeded
+    if (!releaseCap && !replayReady) return
+    if (replayReady) replaySlotsNeeded = 0
+    if (releaseCap) {
+      capped = false
+      capReason = undefined
+      cappedNotified = false
+      options.onCapReleased?.()
+    }
+    if (disposed || suspended || document.body === null) return
+    // 分片清理腾出记录后，字符仍封顶或模型仍暂停时也要接续本地回放。
+    if ((releaseCap && options.fixedEnabled()) || (options.autoEnabled() && (replayReady || !autoPaused))) {
       scanner.queue(document.body)
     }
   }
@@ -1059,6 +1300,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
                 rememberWrite({ node: change.node, source: change.source, translated: change.translated })
                 modelTexts.add(change.node)
               })
+              rememberUnitReplay(unit, changes)
             } else {
               // 任一成员写回失败：整单元回滚；不写 failedItems，成员退到逐节点路径
               changes.forEach((change, i) => {
@@ -1067,6 +1309,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
                   restoreNode(change.node)
                 }
               })
+              noteLayoutSkips(changes)
               fallback()
               continue
             }
@@ -1086,12 +1329,13 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
               const record = records.get(entry.node)
               if (record !== undefined) record.original = `${append.original}${added}`
               appendedTails.delete(entry.node)
+              rememberReplay(entry.node)
             }
             continue
           }
           const lead = entry.source.slice(0, entry.source.length - entry.source.trimStart().length)
           const trail = entry.source.slice(entry.source.trimEnd().length)
-          writeNode(entry.node, entry.source, `${lead}${translated}${trail}`)
+          if (writeNode(entry.node, entry.source, `${lead}${translated}${trail}`) > 0) rememberReplay(entry.node)
         }
         if (cursor < work.length) {
           applyTimer = setTimeout(applyChunk, 0)
@@ -1115,7 +1359,10 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   }
 
   const scanner: DomScanner = createDomScanner({
-    flushWrites: flushFixedWrites,
+    flushWrites() {
+      unitReplaySeen = undefined
+      flushFixedWrites()
+    },
     visitText(node) {
       if (disposed || suspended) return 0
       if (!node.isConnected) return 0
@@ -1127,10 +1374,16 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       }
       if (applyFixedText(node) > 0) return 1
       const record = records.get(node)
-      if (record !== undefined && textValue(node) !== record.applied) {
-        forgetNode(node)
-        queueAuto(node)
-        return 0
+      if (record !== undefined && textValue(node) !== record.applied) forgetNode(node)
+      if (record === undefined || textValue(node) !== record.applied) {
+        const single = replayModel(node)
+        const result = single === 'miss' ? replayUnit(node) : single
+        if (result === 'replayed') return 1
+        // 限流或暂无足够记录位时保留原文，不把已译内容重新发送给模型。
+        if (result === 'throttled' || result === 'blocked') {
+          dropEntry(node)
+          return 0
+        }
       }
       queueAuto(node)
       return 0
@@ -1155,6 +1408,9 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
 
   function* cleanupRecords(): Generator<void> {
     if (pruneFailed()) options.onFailedChanged?.()
+    for (const map of [layoutSkips, redrawSkips]) {
+      for (const node of map.keys()) if (!node.isConnected) map.delete(node)
+    }
     for (const node of modifiedTexts) {
       const record = records.get(node)
       if (!node.isConnected) {
@@ -1400,6 +1656,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
 
   function stopPending(): void {
     generation += 1
+    clearReplay()
     fixedWrites.clear()
     recordCapDeferred = false
     const released = releaseBatchReservation()
@@ -1566,11 +1823,15 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
         for (const entries of batch.grouped.values()) queued += entries.length
       }
       if (activeBatch !== undefined) queued += activeBatchNodes
+      const layoutSkipped = skipCount(layoutSkips, true)
+      const redrawSkipped = skipCount(redrawSkips, false)
       return {
         spent: Math.max(0, Math.trunc(spent)),
         budget: Number.isFinite(limit) ? Math.trunc(limit) : 0,
         translated: modelTexts.size,
         queued,
+        ...(layoutSkipped > 0 ? { layoutSkipped } : {}),
+        ...(redrawSkipped > 0 ? { redrawSkipped } : {}),
       }
     },
     retryFailed() {

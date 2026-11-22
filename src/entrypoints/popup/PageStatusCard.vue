@@ -52,7 +52,12 @@
         <span :style="{ width: `${percent}%` }"></span>
       </div>
       <span class="ui-hint" data-test="wt-progress-text">{{ progressText }}</span>
+      <p v-for="hint in skipHints" :key="hint.key" class="ui-hint" :data-test="`wt-skip-${hint.key}`">
+        {{ t(hint.text, { count: hint.count }) }}
+      </p>
     </div>
+    <!-- 只播报原因的出现与消失，轮询带来的数字变化不重复播报 -->
+    <p class="sr-only" role="status" aria-live="polite" data-test="wt-skip-status">{{ skipAnnouncement }}</p>
     <div v-if="failedCount > 0 && !outOfScope" class="popup-card-failed">
       <span class="ui-hint is-danger" data-test="wt-failed">{{ t('wtFailedCount', { count: failedCount }) }}</span>
       <UiButton v-if="canRetryFailed" size="sm" data-test="wt-retry-failed" :disabled="busy" @click="retryFailed">
@@ -180,6 +185,22 @@ const percent = computed(() => {
   if (value === undefined || value.budget <= 0) return 0
   return Math.min(100, Math.round((value.spent / value.budget) * 100))
 })
+
+const SKIP_REASONS = [
+  { key: 'layout', field: 'layoutSkipped', text: 'wtLayoutSkipped', note: 'wtLayoutSkippedNote' },
+  { key: 'redraw', field: 'redrawSkipped', text: 'wtRedrawSkipped', note: 'wtRedrawSkippedNote' },
+] as const
+
+const skipHints = computed(() => {
+  const value = progress.value
+  if (value === undefined) return []
+  return SKIP_REASONS.flatMap(({ key, field, text, note }) => {
+    const count = value[field] ?? 0
+    return count > 0 ? [{ key, text, note, count }] : []
+  })
+})
+
+const skipAnnouncement = computed(() => skipHints.value.map(({ note }) => t(note)).join(' '))
 
 const progressText = computed(() => {
   const value = progress.value
