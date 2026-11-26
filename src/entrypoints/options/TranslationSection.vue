@@ -20,13 +20,16 @@
     />
     <ConnectionStatus
       v-show="props.view === 'all' || props.view === 'model'"
-      :kind="connection.kind"
+      :kind="displayConnectionKind"
       :latency-ms="connection.latencyMs"
       :error="connection.error"
       :testing="testing"
-      :disabled="!ready || saving || testing || fetchingModels || connectionDirty || persistedBase === '' || persistedModel === ''"
+      :disabled="!ready || saving || testing || fetchingModels || connectionDirty || persistedBase === '' || persistedModel === '' || !endpointAuthorized"
       :disabled-reason="testDisabledReason !== '' ? t(testDisabledReason) : undefined"
+      :can-grant-endpoint="persistedBase !== '' && !connectionDirty"
+      :granting-endpoint="grantingEndpoint"
       @test="testConnection"
+      @grant-endpoint="grantEndpointAccess"
     />
 
     <label v-show="props.view === 'all' || props.view === 'model'" class="wt-field">
@@ -544,6 +547,9 @@ let persistedOptionsKey = requestOptionsKey(DEFAULT_TRANSLATION_CONFIG)
 const ready = ref(false)
 const saving = ref(false)
 const testing = ref(false)
+const endpointAuthorized = ref(true)
+const grantingEndpoint = ref(false)
+let endpointAccessEpoch = 0
 const baseUrlInput = ref<{ focus(): void } | null>(null)
 const connection = ref<{ kind: ConnectionKind; latencyMs?: number; error?: string }>({ kind: 'unconfigured' })
 const baseUrl = ref('')
@@ -629,16 +635,27 @@ const connectionDirty = computed(() => {
   )
 })
 
+const displayConnectionKind = computed<ConnectionKind>(() => {
+  const kind = connection.value.kind
+  if (kind === 'unconfigured' || kind === 'missing-model') {
+    if (baseUrl.value.trim() !== '' && model.value.trim() === '') return 'missing-model'
+    if (baseUrl.value.trim() === '') return 'unconfigured'
+  }
+  return kind
+})
+
 const testDisabledReason = computed<MessageKey | ''>(() => {
   void persistedRevision.value
   if (
     ready.value && !saving.value && !testing.value && !fetchingModels.value &&
-    !connectionDirty.value && persistedBase !== '' && persistedModel !== ''
+    !connectionDirty.value && persistedBase !== '' && persistedModel !== '' && endpointAuthorized.value
   ) return ''
   if (!ready.value) return 'stateLoading'
   if (saving.value || testing.value) return 'wtProcessing'
   if (fetchingModels.value) return 'wtModelsLoading'
   if (connectionDirty.value) return 'wtTestSaveFirst'
+  if (persistedBase !== '' && persistedModel === '') return 'wtConnMissingModel'
+  if (persistedBase !== '' && !endpointAuthorized.value) return 'wtConnUnauthorized'
   return 'wtNotConfigured'
 })
 
@@ -759,7 +776,13 @@ function applyConfig(
     customHeadersDraft.value = ''
     invalidField.value = null
     if (connection.value.kind !== 'testing' && connection.value.kind !== 'ok') {
-      connection.value = { kind: persistedBase !== '' && persistedModel !== '' ? 'untested' : 'unconfigured' }
+      connection.value = {
+        kind: persistedBase === ''
+          ? 'unconfigured'
+          : persistedModel === ''
+            ? 'missing-model'
+            : endpointAuthorized.value ? 'untested' : 'unauthorized',
+      }
     }
   }
   if (headersState !== undefined) {
@@ -835,6 +858,7 @@ async function load(): Promise<void> {
     return
   }
   ready.value = true
+  endpointAuthorized.value = reply.endpointAuthorized !== false
   const state = keyStateFrom(reply)
   applyConfig(reply.config, state, true, reply.customHeadersState)
   if (state === 'unavailable') setStatus(t('wtKeyUnavailable'), true)
@@ -1032,10 +1056,13 @@ async function fetchModels(): Promise<void> {
 
 function applyConnectionReply(reply: TranslationReply<'wt:test'>, ms: number): void {
   if (reply.ok) {
+    endpointAuthorized.value = true
     connection.value = { kind: 'ok', latencyMs: ms }
     return
   }
-  connection.value = { kind: connectionKindFromReply(reply), error: reply.error }
+  const kind = connectionKindFromReply(reply)
+  if (kind === 'unauthorized') endpointAuthorized.value = false
+  connection.value = { kind, error: reply.error }
 }
 
 function applyPreset(url: string): void {
@@ -1132,6 +1159,7 @@ async function saveAndConnect(): Promise<void> {
         setStatus(t('wtPermissionDenied'), true)
         return
       }
+      endpointAuthorized.value = true
     }
     const saved = await savePatch(
       {
@@ -1158,7 +1186,7 @@ async function saveAndConnect(): Promise<void> {
     if (saved.warning !== undefined) return
     if (trimmed === '' || model.value.trim() === '') {
       setStatus(t('saved'), false)
-      connection.value = { kind: 'unconfigured' }
+      connection.value = { kind: trimmed === '' ? 'unconfigured' : 'missing-model' }
       return
     }
     testing.value = true
@@ -1519,11 +1547,56 @@ async function openShortcuts(): Promise<void> {
   }
 }
 
+async function refreshEndpointAccess(): Promise<void> {
+  if (!ready.value || saving.value || testing.value || grantingEndpoint.value || persistedBase === '') return
+  const epoch = ++endpointAccessEpoch
+  try {
+    const reply = await send({ type: 'wt:get-config' })
+    if (epoch !== endpointAccessEpoch || !reply.ok) return
+    const granted = reply.endpointAuthorized !== false
+    endpointAuthorized.value = granted
+    if (!granted && connection.value.kind !== 'testing') {
+      connection.value = { kind: 'unauthorized' }
+    } else if (granted && connection.value.kind === 'unauthorized') {
+      connection.value = { kind: persistedModel === '' ? 'missing-model' : 'untested' }
+    }
+  } catch {
+    void 0
+  }
+}
+
+async function grantEndpointAccess(): Promise<void> {
+  if (!ready.value || saving.value || testing.value || grantingEndpoint.value || persistedBase === '') return
+  const endpoint = completionUrl(persistedBase, persistedApiType)
+  if (endpoint === '') return
+  grantingEndpoint.value = true
+  const epoch = ++endpointAccessEpoch
+  setStatus('', false)
+  toast.clear()
+  try {
+    const granted = await browser.permissions
+      .request({ origins: [hostPermissionPattern(endpoint)] })
+      .catch(() => false)
+    if (epoch !== endpointAccessEpoch) return
+    endpointAuthorized.value = granted
+    if (!granted) {
+      setStatus(t('wtPermissionDenied'), true)
+      return
+    }
+    if (connection.value.kind === 'unauthorized') {
+      connection.value = { kind: persistedModel === '' ? 'missing-model' : 'untested' }
+    }
+  } finally {
+    grantingEndpoint.value = false
+  }
+}
+
 /** 从浏览器的快捷键页改完回来时重新读取绑定 */
 function refreshShortcuts(): void {
   if (document.visibilityState !== 'visible') return
   void loadShortcuts()
   void refreshFloatingAccess()
+  void refreshEndpointAccess()
 }
 
 onMounted(() => {
@@ -1537,6 +1610,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   cancelModelLookup()
   floatingAccessEpoch += 1
+  endpointAccessEpoch += 1
   document.removeEventListener('visibilitychange', refreshShortcuts)
   window.removeEventListener('focus', refreshShortcuts)
 })

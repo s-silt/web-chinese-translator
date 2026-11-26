@@ -3141,3 +3141,71 @@ describe('翻译进度', () => {
     expect(engine.progress()).toEqual({ spent: 0, budget: 20, translated: 2, queued: 0 })
   })
 })
+
+describe('动态网页行内句固定词库协同与局部重绘扫描优化', () => {
+  it('含固定词库链接的行内句完整翻译并保留链接结构，网站改写原文后恢复不回写旧文本', async () => {
+    document.body.innerHTML = '<p id="line">Open <a id="lnk" href="/settings">Settings</a> to continue.</p>'
+    const linkBefore = document.querySelector('#lnk')!
+    engine = makeEngine({ fixed: true, auto: true })
+    engine.start()
+    await settle(600)
+
+    expect(batches).toHaveLength(1)
+    batches[0]!.apply([batches[0]!.texts[0]!.replace('Open ', '打开').replace(' to continue.', '以继续。')])
+    await settle(200)
+
+    const paragraph = document.querySelector('#line')!
+    expect(paragraph.querySelector('#lnk')).toBe(linkBefore)
+    expect(paragraph.querySelector('#lnk')?.getAttribute('href')).toBe('/settings')
+    expect(paragraph.textContent).toContain('打开')
+    expect(paragraph.textContent).toContain('以继续。')
+
+    // 恢复时保留原有 <a> 节点结构
+    engine.restore()
+    expect(paragraph.querySelector('#lnk')).toBe(linkBefore)
+    expect(paragraph.textContent).toBe('Open Settings to continue.')
+
+    // 重新翻译后，网站把链接文字 A ("Settings") 改成新原文 B ("Billing")，恢复不能把旧 A 写回去
+    engine.start()
+    await settle(600)
+    for (const batch of batches.splice(0)) {
+      batch.apply(batch.texts.map((t) => t.replace('Open ', '打开').replace(' to continue.', '以继续。')))
+    }
+    await settle(200)
+    linkBefore.firstChild!.nodeValue = 'Billing'
+    await settle(50)
+    engine.restore()
+    expect(linkBefore.textContent).toBe('Billing')
+  })
+
+  it('容器发生 FIXED_ATTRIBUTES 属性变更时只更新容器属性，不重扫整个后代子树', async () => {
+    const items = Array.from({ length: 15 }, (_, i) => `<p class="leaf">Translated item ${i} here.</p>`).join('')
+    document.body.innerHTML = `<nav id="panel" aria-label="Settings">${items}</nav>`
+    engine = makeEngine({ fixed: true, auto: true })
+    engine.start()
+    await settle(600)
+    for (const batch of batches.splice(0)) {
+      batch.apply(batch.texts.map((_, i) => `条目译文 ${i}`))
+    }
+    await settle(200)
+
+    const panel = document.querySelector('#panel')!
+    expect(panel.getAttribute('aria-label')).toBe('设置')
+    const leaves = [...panel.querySelectorAll('.leaf')].map((el) => el.firstChild as Text)
+    let leafReads = 0
+    const proto = Object.getOwnPropertyDescriptor(Node.prototype, 'nodeValue')!
+    const spy = vi.spyOn(Node.prototype, 'nodeValue', 'get').mockImplementation(function (this: Node) {
+      if (leaves.includes(this as Text)) leafReads += 1
+      return proto.get!.call(this)
+    })
+    try {
+      panel.setAttribute('aria-label', 'Close')
+      await settle(300)
+      expect(panel.getAttribute('aria-label')).toBe('关闭')
+      expect(leafReads).toBe(0)
+      expect(batches).toHaveLength(0)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})

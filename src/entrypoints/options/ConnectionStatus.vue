@@ -2,19 +2,38 @@
   <div class="connection-status">
     <div class="connection-status-row">
       <UiBadge :tone="tone" dot live data-test="wt-connection">{{ label }}</UiBadge>
-      <UiButton
-        size="sm"
-        :disabled="disabled"
-        :aria-describedby="showReason ? reasonId : undefined"
-        :aria-busy="testing"
-        data-test="wt-test-connection"
-        @click="emit('test')"
-      >
-        {{ testing ? t('wtTesting') : t('wtTest') }}
-      </UiButton>
+      <div class="connection-status-actions">
+        <UiButton
+          v-if="kind === 'unauthorized' && canGrantEndpoint"
+          variant="primary"
+          size="sm"
+          :disabled="grantingEndpoint"
+          :aria-busy="grantingEndpoint"
+          data-test="wt-grant-endpoint"
+          @click="emit('grantEndpoint')"
+        >
+          {{ t('wtConnGrantEndpoint') }}
+        </UiButton>
+        <UiButton
+          size="sm"
+          :disabled="disabled"
+          :aria-describedby="showReason ? reasonId : undefined"
+          :aria-busy="testing"
+          data-test="wt-test-connection"
+          @click="emit('test')"
+        >
+          {{ testing ? t('wtTesting') : t('wtTest') }}
+        </UiButton>
+      </div>
     </div>
-    <p v-if="showReason" :id="reasonId" class="ui-hint">{{ disabledReason }}</p>
-    <p v-if="recoveryKey !== ''" class="ui-hint">{{ t(recoveryKey) }}</p>
+    <p v-if="showSeparateReason" :id="reasonId" class="ui-hint">{{ disabledReason }}</p>
+    <p
+      v-if="recoveryKey !== ''"
+      :id="reasonDuplicatesBadge ? reasonId : undefined"
+      class="ui-hint"
+    >
+      {{ t(recoveryKey) }}
+    </p>
   </div>
 </template>
 
@@ -34,19 +53,30 @@ const props = defineProps<{
   testing?: boolean
   disabled?: boolean
   disabledReason?: string
+  canGrantEndpoint?: boolean
+  grantingEndpoint?: boolean
 }>()
 
 const emit = defineEmits<{
   test: []
+  grantEndpoint: []
 }>()
 
 const { t } = useI18n()
 const reasonId = useId()
 
 const showReason = computed(() => props.disabled === true && props.disabledReason !== undefined && props.disabledReason !== '')
+const reasonDuplicatesBadge = computed(
+  () => showReason.value && recoveryKey.value !== '' && props.disabledReason === label.value,
+)
+const showSeparateReason = computed(() => showReason.value && !reasonDuplicatesBadge.value)
 
 const recoveryKey = computed<MessageKey | ''>(() => {
   switch (props.kind) {
+    case 'missing-model':
+      return 'wtConnRecoveryMissingModel'
+    case 'unauthorized':
+      return 'wtConnRecoveryUnauthorized'
     case 'auth':
       return 'wtConnRecoveryAuth'
     case 'timeout':
@@ -70,6 +100,8 @@ const tone = computed<UiBadgeTone>(() => {
     case 'untested':
       return 'neutral'
     case 'unconfigured':
+    case 'missing-model':
+    case 'unauthorized':
     case 'testing':
     case 'timeout':
     case 'network':
@@ -83,6 +115,10 @@ const label = computed(() => {
   switch (props.kind) {
     case 'unconfigured':
       return t('wtConnUnconfigured')
+    case 'missing-model':
+      return t('wtConnMissingModel')
+    case 'unauthorized':
+      return t('wtConnUnauthorized')
     case 'untested':
       return t('wtConnUntested')
     case 'testing':
@@ -109,12 +145,28 @@ const label = computed(() => {
 .connection-status {
   display: grid;
   gap: var(--gcn-gap-8);
+  padding: 10px 12px;
+  background: var(--gcn-card-bg);
+  border: 1px solid var(--gcn-card-border);
+  border-radius: var(--gcn-card-radius);
+}
+
+.connection-status .ui-hint {
+  margin: 0;
 }
 
 .connection-status-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
+}
+
+.connection-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 </style>

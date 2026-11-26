@@ -11,6 +11,7 @@ import { normalizeHotkey } from './input-hotkey'
 import { isSiteScopeMode } from './site-scope'
 import { isSourceLanguage, isTargetLanguage, type SourceLanguage, type TargetLanguage } from './target-language'
 import { isPageContext, isPageId, type PageContext } from './reading-context'
+import { documentFormOfBrowserUrl } from './page-lifecycle'
 import { isAssistInput, parseAssistResult, type AssistInput, type AssistResult } from './intent'
 import { isFailureCode, type FailureCode } from './failure'
 import type { ChatReplacementStatus } from './chat-input'
@@ -135,6 +136,7 @@ interface ReplyFields {
   hasKey?: boolean
   keyState?: KeyState
   customHeadersState?: CustomHeadersState
+  endpointAuthorized?: boolean
   modes?: PageModes
   result?: AssistResult
   warning?: string
@@ -150,6 +152,7 @@ interface ConfigPayload {
   hasKey?: boolean
   keyState?: KeyState
   customHeadersState?: CustomHeadersState
+  endpointAuthorized?: boolean
   warning?: string
 }
 
@@ -217,6 +220,8 @@ export interface PageTranslationStatus {
   readonly paused: boolean
   readonly capped: boolean
   readonly budgetCapped?: boolean
+  /** 用户已恢复本页原文，尚未重新继续或启动翻译 */
+  readonly restored?: boolean
   /** 已放弃、仍保留原文的文本段数。 */
   readonly failed: number
   readonly error: string
@@ -425,11 +430,16 @@ function isTranslateTextMessage(value: Record<string, unknown>): boolean {
   )
 }
 
+const MAX_BROWSER_PAGE_URL_LENGTH = 65536
+
 function isOptionalPageTarget(value: Record<string, unknown>): boolean {
-  return (value.tabId === undefined && value.url === undefined) ||
-    (typeof value.tabId === 'number' && Number.isSafeInteger(value.tabId) && value.tabId >= 0 &&
-      typeof value.url === 'string' && value.url.length > 0 && value.url.length <= 8192 &&
-      /^https?:\/\//.test(value.url))
+  if (value.tabId === undefined && value.url === undefined) return true
+  if (typeof value.tabId !== 'number' || !Number.isSafeInteger(value.tabId) || value.tabId < 0) return false
+  if (typeof value.url !== 'string' || value.url.length === 0 || value.url.length > MAX_BROWSER_PAGE_URL_LENGTH) {
+    return false
+  }
+  const docUrl = documentFormOfBrowserUrl(value.url)
+  return docUrl.length > 0 && docUrl.length <= 8192 && /^https?:\/\//.test(docUrl)
 }
 
 export function isTranslationMessage(value: unknown): value is TranslationMessage {
@@ -596,6 +606,7 @@ export function isPageTranslationStatus(value: unknown): value is PageTranslatio
     typeof value.paused === 'boolean' &&
     typeof value.capped === 'boolean' &&
     (value.budgetCapped === undefined || typeof value.budgetCapped === 'boolean') &&
+    (value.restored === undefined || typeof value.restored === 'boolean') &&
     Number.isSafeInteger(value.failed) &&
     (value.failed as number) >= 0 &&
     typeof value.error === 'string' &&
@@ -686,6 +697,7 @@ export function isTranslationReply(value: unknown, message?: TranslationMessage)
   if (value.config !== undefined && !isConfigShape(value.config)) return false
   if (value.warning !== undefined && (typeof value.warning !== 'string' || value.warning.length > 500)) return false
   if (value.hasKey !== undefined && typeof value.hasKey !== 'boolean') return false
+  if (value.endpointAuthorized !== undefined && typeof value.endpointAuthorized !== 'boolean') return false
   if (
     value.keyState !== undefined &&
     !['none', 'ready', 'different-origin', 'legacy', 'unavailable'].includes(value.keyState as string)

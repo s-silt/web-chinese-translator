@@ -4974,3 +4974,314 @@ describe('inputFrameUrl 同源策略', () => {
     expect(inputFrameUrl('', 'about:blank')).toBeUndefined()
   })
 })
+
+describe('0.4.8 文本片段链接、长 URL 与字符触顶恢复回归', () => {
+  it.each([
+    ['无 hash', 'https://app.devin.ai/start', 'https://app.devin.ai/start'],
+    ['普通 #sec', 'https://app.devin.ai/start#sec', 'https://app.devin.ai/start#sec'],
+    ['#:~:text=', 'https://app.devin.ai/start#:~:text=Hello', 'https://app.devin.ai/start'],
+    ['#sec:~:text=', 'https://app.devin.ai/start#sec:~:text=Hello', 'https://app.devin.ai/start#sec'],
+    ['query 含字面 :~:', 'https://app.devin.ai/start?q=:~:a#sec:~:text=Hello', 'https://app.devin.ai/start?q=:~:a#sec'],
+  ])('顶层词库与整页模型请求通过核验：%s', async (_label, tabUrl, docUrl) => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    vi.spyOn(fakeBrowser.scripting, 'executeScript').mockResolvedValue([
+      { frameId: 0, documentId: 'doc-top', result: docUrl },
+    ] as never)
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completionReply(['译文']))
+    const sender = {
+      ...contentSender,
+      tab: { id: 7, url: tabUrl },
+      documentId: 'doc-top',
+      url: docUrl,
+    }
+    const modes = await trigger({ type: 'wt:page-modes' }, sender)
+    expect(modes).toMatchObject({ ok: true, modes: { enabled: true, fixed: true, auto: true } })
+    const translated = await trigger({ type: 'wt:translate', mode: 'auto', texts: ['Hello world'] }, sender)
+    expect(translated).toMatchObject({ ok: true, texts: ['译文'] })
+  })
+
+  it.each([
+    ['同 URL 不同 documentId', 'https://app.devin.ai/start#:~:text=Hello', 'https://app.devin.ai/start', 'doc-other'],
+    ['锚点不一致', 'https://app.devin.ai/start#other:~:text=Hello', 'https://app.devin.ai/start#sec', 'doc-top'],
+    ['query 不一致', 'https://app.devin.ai/start?q=a:~:text=Hello', 'https://app.devin.ai/start?q=a', 'doc-top'],
+  ])('不放宽非文本片段差异：%s', async (_label, tabUrl, docUrl, actualDocId) => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    vi.spyOn(fakeBrowser.scripting, 'executeScript').mockResolvedValue([
+      { frameId: 0, documentId: actualDocId, result: docUrl },
+    ] as never)
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    const sender = {
+      ...contentSender,
+      tab: { id: 7, url: tabUrl },
+      documentId: 'doc-top',
+      url: docUrl,
+    }
+    expect(await trigger({ type: 'wt:translate', mode: 'auto', texts: ['Hello world'] }, sender)).toMatchObject({
+      ok: false,
+    })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('敏感 hash 路由带文本片段指令：禁止自动外发与 Alt+T，手动右键选区剥离页面上下文且不落缓存', async () => {
+    await translationConfigItem.setValue({
+      ...VALID_CONFIG,
+      selectionPopupEnabled: true,
+      proactiveAssistEnabled: true,
+    })
+    const browserUrl = 'https://app.devin.ai/#/settings/tokens:~:text=secret'
+    const docUrl = 'https://app.devin.ai/#/settings/tokens'
+    const bodies: string[] = []
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      bodies.push(String(init?.body ?? ''))
+      return completionReply(['安全译文'])
+    })
+    vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation((async (opts: { func?: { name?: string } }) => {
+      if (opts.func?.name === 'readManualSelection') {
+        return [{
+          frameId: 0,
+          documentId: 'doc-sens',
+          result: { url: docUrl, text: 'Selected token note', focused: true, frameFocused: false },
+        }]
+      }
+      return [{ frameId: 0, documentId: 'doc-sens', result: docUrl }]
+    }) as never)
+
+    const sender = {
+      ...contentSender,
+      tab: { id: 7, url: browserUrl },
+      documentId: 'doc-sens',
+      url: docUrl,
+    }
+    const modes = await trigger({ type: 'wt:page-modes' }, sender)
+    expect(modes).toMatchObject({ ok: true, modes: { auto: false, selection: false, floating: false } })
+    const autoReply = await trigger(
+      {
+        type: 'wt:translate',
+        mode: 'auto',
+        texts: ['Secret token value'],
+        page: { title: 'PRIVATE_TITLE', heading: 'PRIVATE_HEADING', site: 'app.devin.ai' },
+      },
+      sender,
+    )
+    expect(autoReply).toMatchObject({ ok: false })
+    expect(fetcher).not.toHaveBeenCalled()
+
+    const tabSend = vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async (_tabId, msg: unknown) => {
+      const m = msg as { type?: string }
+      if (m.type === 'wt:status') {
+        return { ok: true, status: { supported: true, fixed: true, auto: false, paused: false, capped: false, failed: 0, error: '' } }
+      }
+      return { ok: true }
+    })
+    await commandTrigger!('toggle-page-translation', { id: 7, url: browserUrl } as Browser.tabs.Tab)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(tabSend.mock.calls.filter(([, m]) => (m as { type?: string }).type === 'wt:page-action')).toHaveLength(0)
+
+    let ticketId = ''
+    tabSend.mockImplementation(async (_tabId, msg: unknown) => {
+      const m = msg as { type?: string; manualSelectionId?: string }
+      if (m.type === 'wt:show-selection' && m.manualSelectionId !== undefined) ticketId = m.manualSelectionId
+      return { ok: true }
+    })
+    menuClick!(
+      { menuItemId: 'wt-selection', selectionText: 'Selected token note', pageUrl: browserUrl, frameId: 0 } as never,
+      { id: 7, url: browserUrl } as Browser.tabs.Tab,
+    )
+    await vi.waitFor(() => expect(ticketId).not.toBe(''))
+    const manualReply = await trigger(
+      {
+        type: 'wt:translate',
+        mode: 'selection',
+        texts: ['Selected token note'],
+        manualSelectionId: ticketId,
+        page: { title: 'PRIVATE_TITLE_MARKER', heading: 'PRIVATE_HEADING_MARKER', site: 'app.devin.ai' },
+      },
+      sender,
+    )
+    expect(manualReply).toMatchObject({ ok: true, texts: ['安全译文'] })
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]).not.toContain('PRIVATE_TITLE_MARKER')
+    expect(bodies[0]).not.toContain('PRIVATE_HEADING_MARKER')
+    expect(writePersistentTranslations).not.toHaveBeenCalled()
+  })
+
+  it('routeCheck 核验期间支持 wt:cancel-assist 取消，且第二次点击抢占不会让第一次结果覆盖', async () => {
+    await translationConfigItem.setValue({ ...VALID_CONFIG, selectionPopupEnabled: true })
+    const browserUrl = 'https://app.devin.ai/start#:~:text=Hello'
+    const docUrl = 'https://app.devin.ai/start'
+    const resolvers: Array<(value: unknown) => void> = []
+    vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation(
+      () => new Promise((resolve) => { resolvers.push(resolve) }) as never,
+    )
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const payload = String(init?.body ?? '')
+      return completionReply([payload.includes('Second selection') ? '第二译文' : '第一译文'])
+    })
+    const sender = {
+      ...contentSender,
+      tab: { id: 7, url: browserUrl },
+      documentId: 'doc-top',
+      url: docUrl,
+    }
+
+    const cancelledReq = trigger(
+      { type: 'wt:translate', mode: 'selection', requestId: 'req-cancel', texts: ['First cancel'] },
+      sender,
+    )
+    await vi.waitFor(() => expect(resolvers).toHaveLength(1))
+    await trigger({ type: 'wt:cancel-assist', requestId: 'req-cancel' }, sender)
+    resolvers.shift()!([{ frameId: 0, documentId: 'doc-top', result: docUrl }])
+    expect(await cancelledReq).toMatchObject({ ok: false, code: 'cancelled' })
+    expect(fetcher).not.toHaveBeenCalled()
+
+    const firstClick = trigger(
+      { type: 'wt:translate', mode: 'selection', requestId: 'req-1', texts: ['First selection'] },
+      sender,
+    )
+    await vi.waitFor(() => expect(resolvers).toHaveLength(1))
+    const secondClick = trigger(
+      { type: 'wt:translate', mode: 'selection', requestId: 'req-2', texts: ['Second selection'] },
+      sender,
+    )
+    await vi.waitFor(() => expect(resolvers).toHaveLength(2))
+    resolvers.shift()!([{ frameId: 0, documentId: 'doc-top', result: docUrl }])
+    resolvers.shift()!([{ frameId: 0, documentId: 'doc-top', result: docUrl }])
+    expect(await firstClick).toMatchObject({ ok: false, code: 'cancelled' })
+    expect(await secondClick).toMatchObject({ ok: true, texts: ['第二译文'] })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('Alt+S、同源子框架与弹出页动作在 #:~:text= 页面均能通过核验', async () => {
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true })
+    const browserUrl = 'https://app.devin.ai/#/docs:~:text=Guide'
+    const docUrl = 'https://app.devin.ai/#/docs'
+    vi.spyOn(fakeBrowser.tabs, 'get').mockResolvedValue({ id: 7, url: browserUrl } as never)
+    vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation((async (opts: {
+      func?: { name?: string }
+      target?: { documentIds?: string[] }
+    }) => {
+      if (opts.func?.name === 'readInputFrameSnapshot') {
+        return [{
+          frameId: 3,
+          documentId: 'doc-frame',
+          result: { url: 'about:blank', topUrl: docUrl, focused: true },
+        }]
+      }
+      if (opts.func?.name === 'readManualSelection') {
+        return [{
+          frameId: 0,
+          documentId: 'doc-top',
+          result: { url: docUrl, text: 'Guide paragraph', focused: true, frameFocused: false },
+        }]
+      }
+      return [{ frameId: 0, documentId: 'doc-top', result: docUrl }]
+    }) as never)
+    const shown: unknown[] = []
+    const actions: unknown[] = []
+    vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async (_tabId, msg: unknown) => {
+      const m = msg as { type?: string }
+      if (m.type === 'wt:show-selection') shown.push(msg)
+      if (m.type === 'wt:page-action') actions.push(msg)
+      return { ok: true }
+    })
+
+    await commandTrigger!('translate-selection', { id: 7, url: browserUrl } as Browser.tabs.Tab)
+    await vi.waitFor(() => expect(shown).toHaveLength(1))
+    expect(shown[0]).toMatchObject({ type: 'wt:show-selection', text: 'Guide paragraph', manualSelectionId: expect.any(String) })
+
+    const frameSender = {
+      id: fakeBrowser.runtime.id,
+      tab: { id: 7, url: browserUrl },
+      frameId: 3,
+      documentId: 'doc-frame',
+      url: 'about:blank',
+      origin: 'https://app.devin.ai',
+    }
+    const frameModes = await trigger({ type: 'wt:page-modes' }, frameSender)
+    expect(frameModes).toMatchObject({ ok: true, modes: { enabled: true, input: true } })
+
+    const pageAction = await trigger({ type: 'wt:page-action', action: 'restore', tabId: 7, url: docUrl }, extSender)
+    expect(pageAction).toEqual({ ok: true })
+    expect(actions).toContainEqual({ type: 'wt:page-action', action: 'restore', url: docUrl })
+  })
+
+  it.each([
+    ['已有译文触顶', { capped: true, budgetCapped: true, progress: { spent: 20000, budget: 20000, translated: 4, queued: 0 } }],
+    ['尚未产出译文已触顶', { capped: true, budgetCapped: true, progress: { spent: 20000, budget: 20000, translated: 0, queued: 0 } }],
+  ])('字符上限触顶后按 Alt+T 触发恢复原文且不发模型请求：%s', async (_label, extra) => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    const forwarded: unknown[] = []
+    const errors: unknown[] = []
+    vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async (_tabId, msg: unknown) => {
+      const m = msg as { type?: string }
+      if (m.type === 'wt:status') {
+        return {
+          ok: true,
+          status: { supported: true, fixed: false, auto: false, paused: false, failed: 0, error: '', ...extra },
+        }
+      }
+      if (m.type === 'wt:page-action') forwarded.push(msg)
+      if (m.type === 'wt:show-selection') errors.push(msg)
+      return { ok: true }
+    })
+    await commandTrigger!('toggle-page-translation', { id: 7, url: 'https://app.devin.ai/article#:~:text=Cap' } as Browser.tabs.Tab)
+    await vi.waitFor(() => expect(forwarded).toHaveLength(1))
+    expect(forwarded[0]).toEqual({
+      type: 'wt:page-action',
+      action: 'restore',
+      url: 'https://app.devin.ai/article',
+    })
+    expect(errors).toHaveLength(0)
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('长 URL：真实路由 4000 字符与超长文本高亮指令 9000 字符均受支持，而真实路由 >8192 与 baseUrl >2048 仍拒绝', async () => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    const longRealUrl = `https://app.devin.ai/search?q=${'a'.repeat(4000)}`
+    vi.spyOn(fakeBrowser.scripting, 'executeScript').mockResolvedValue([
+      { frameId: 0, documentId: 'doc-long', result: longRealUrl },
+    ] as never)
+    const longModes = await trigger(
+      { type: 'wt:page-modes' },
+      { ...contentSender, tab: { id: 7, url: longRealUrl }, documentId: 'doc-long', url: longRealUrl },
+    )
+    expect(longModes).toMatchObject({ ok: true, modes: { enabled: true, auto: true } })
+
+    const shortDocUrl = 'https://app.devin.ai/article'
+    const hugeDirectiveUrl = `${shortDocUrl}#:~:text=${'x'.repeat(9000)}`
+    vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation((async (opts: { func?: { name?: string } }) => {
+      if (opts.func?.name === 'readManualSelection') {
+        return [{
+          frameId: 0,
+          documentId: 'doc-huge-frag',
+          result: { url: shortDocUrl, text: 'Short quote', focused: true, frameFocused: false },
+        }]
+      }
+      return [{ frameId: 0, documentId: 'doc-huge-frag', result: shortDocUrl }]
+    }) as never)
+    const shown: unknown[] = []
+    vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async (_tabId, msg: unknown) => {
+      if ((msg as { type?: string }).type === 'wt:show-selection') shown.push(msg)
+      return { ok: true }
+    })
+    await commandTrigger!('translate-selection', { id: 7, url: hugeDirectiveUrl } as Browser.tabs.Tab)
+    await vi.waitFor(() => expect(shown).toHaveLength(1))
+    expect(shown[0]).toMatchObject({ text: 'Short quote' })
+
+    const overMaxRealUrl = `https://app.devin.ai/search?q=${'b'.repeat(8200)}`
+    expect(isTranslationMessage({ type: 'wt:translate-page', tabId: 7, url: overMaxRealUrl })).toBe(false)
+    vi.spyOn(fakeBrowser.tabs, 'query').mockResolvedValue([{ id: 7, url: overMaxRealUrl }] as never)
+    vi.spyOn(fakeBrowser.scripting, 'executeScript').mockResolvedValue([
+      { frameId: 0, documentId: 'doc-over', result: overMaxRealUrl },
+    ] as never)
+    const overReply = await trigger({ type: 'wt:translate-page' }, extSender)
+    expect(overReply).toMatchObject({ ok: false })
+
+    const overBaseSave = await trigger(
+      { type: 'wt:save-config', patch: { baseUrl: `https://api.example.com/${'p'.repeat(2050)}` } },
+      extSender,
+    )
+    expect(overBaseSave).toMatchObject({ ok: false })
+  })
+})

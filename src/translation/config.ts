@@ -106,13 +106,14 @@ export const translationConfigItem = storage.defineItem<TranslationConfig>('loca
 })
 
 const MAX_URL_LENGTH = 2048
+export const MAX_PAGE_URL_LENGTH = 8192
 const MAX_MODEL_LENGTH = 200
 const MAX_AUTO_ORIGINS = 50
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]'])
 
 export function normalizeOrigin(value: string): string {
   const trimmed = value.trim()
-  if (trimmed.length === 0 || trimmed.length > MAX_URL_LENGTH) return ''
+  if (trimmed.length === 0 || trimmed.length > MAX_PAGE_URL_LENGTH) return ''
   const candidate = trimmed.includes('://') ? trimmed : `https://${trimmed}`
   let url: URL
   try {

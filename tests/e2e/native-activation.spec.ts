@@ -53,6 +53,8 @@ $positive=Invoke-OwnedCaptionActivation -TargetPid ${targetPid} -TargetHwnd $tar
     expect(result.invalidWindow).toMatchObject({ visibleOwnedCaption: false, mouseEventsSent: 0 })
     expect(result.nonCaptionEvents).toBe(0)
     expect(result.afterRejected).toBe(result.before)
+    test.skip(result.before === 0 && result.positive.foregroundAfter === 0 && result.positive.mouseEventsSent === 0,
+      'Windows 没有前台窗口，无法验证原生标题栏激活')
     expect(result.positive).toMatchObject({ visibleOwnedCaption: true, mouseEventsSent: 3, foregroundAfter: result.target })
     await expect(page.locator('input')).toHaveValue('Synthetic draft')
   } finally {

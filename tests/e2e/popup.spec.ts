@@ -42,4 +42,37 @@ test.describe('弹出页', () => {
     await expect(more).toHaveJSProperty('open', true)
     await expect(page.locator('[data-test="wt-popup-floating"] [role="switch"]')).toBeVisible()
   })
+
+  test('真实 320px 宽度、200% 缩放、明暗主题与英文长文案下主操作不裁切且焦点可见', async ({ extension }) => {
+    const { page } = extension
+    for (const theme of ['light', 'dark'] as const) {
+      await extension.setSettings({ uiLanguage: 'en', theme, uiStyle: 'classic' })
+      for (const [width, zoom] of [[320, '1'], [640, '2']] as const) {
+        await page.setViewportSize({ width, height: 600 })
+        await page.reload()
+        if (zoom !== '1') {
+          await page.evaluate((z) => {
+            document.documentElement.style.zoom = z
+          }, zoom)
+        }
+        const primary = page.locator('[data-test="wt-translate-page"]')
+        await expect(primary).toBeVisible()
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+        expect(overflow).toBeLessThanOrEqual(1)
+        const box = await primary.boundingBox()
+        expect(box).not.toBeNull()
+        expect(box!.x).toBeGreaterThanOrEqual(0)
+        expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1)
+        await page.keyboard.press('Tab')
+        const focusRing = await page.evaluate(() => {
+          const el = document.activeElement
+          if (!(el instanceof HTMLElement)) return false
+          const style = getComputedStyle(el)
+          return (style.outlineStyle !== 'none' && style.outlineWidth !== '0px') || style.boxShadow !== 'none'
+        })
+        expect(focusRing).toBe(true)
+        await page.screenshot({ path: test.info().outputPath(`popup-en-${theme}-${width}-zoom${zoom}.png`) })
+      }
+    }
+  })
 })

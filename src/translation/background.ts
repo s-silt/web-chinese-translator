@@ -8,6 +8,7 @@ import {
   sameManualPage,
   type ManualPageGrant,
 } from './manual-page'
+import { documentFormOfBrowserUrl, matchesBrowserUrl } from './page-lifecycle'
 import { languageEnvironment } from '../shared/language-env'
 import { resolveUiLanguage, type UiLanguage } from '../shared/locale'
 import { parseGitHubUrl } from '../shared/github'
@@ -197,13 +198,14 @@ function fromOurInputFrame(sender: MessageSender): boolean {
     sender.documentId.length > 256 ||
     typeof sender.url !== 'string' ||
     typeof sender.tab.url !== 'string' ||
-    typeof sender.origin !== 'string' ||
-    inputFrameUrl(sender.tab.url, sender.url) === undefined
+    typeof sender.origin !== 'string'
   ) {
     return false
   }
-  const effective = inputFrameUrl(sender.tab.url, sender.url)
-  const expectedOrigin = normalizeOrigin(effective ?? sender.url)
+  const tabDocUrl = documentFormOfBrowserUrl(sender.tab.url)
+  const effective = inputFrameUrl(tabDocUrl, sender.url)
+  if (effective === undefined) return false
+  const expectedOrigin = normalizeOrigin(effective)
   return expectedOrigin !== '' && sender.origin === expectedOrigin
 }
 
@@ -219,13 +221,19 @@ async function inputFrameAllowed(sender: MessageSender, config: TranslationConfi
   try {
     const currentTab = await tabs.get(tabId)
     if (currentTab.incognito === true || typeof currentTab.url !== 'string') return false
-    const topUrl = currentTab.url
-    const effectiveUrl = inputFrameUrl(topUrl, sourceUrl)
-    if (effectiveUrl === undefined) return false
-    if (!isSiteScopeAllowed(topUrl, config) || !isSiteScopeAllowed(effectiveUrl, config)) return false
-    if (isExcludedSite(topUrl, config.excludedHosts) || isExcludedSite(effectiveUrl, config.excludedHosts)) return false
-    if (isSensitivePage(topUrl) || isSensitivePage(effectiveUrl)) return false
-    const origin = normalizeOrigin(topUrl)
+    const browserTopUrl = currentTab.url
+    const candidateTopUrl = documentFormOfBrowserUrl(browserTopUrl)
+    const candidateEffectiveUrl = inputFrameUrl(candidateTopUrl, sourceUrl)
+    if (candidateEffectiveUrl === undefined) return false
+    if (!isSiteScopeAllowed(candidateTopUrl, config) || !isSiteScopeAllowed(candidateEffectiveUrl, config)) return false
+    if (
+      isExcludedSite(candidateTopUrl, config.excludedHosts) ||
+      isExcludedSite(candidateEffectiveUrl, config.excludedHosts)
+    ) {
+      return false
+    }
+    if (isSensitivePage(candidateTopUrl) || isSensitivePage(candidateEffectiveUrl)) return false
+    const origin = normalizeOrigin(candidateTopUrl)
     if (origin === '' || !(await originAllowed(origin))) return false
     const results: unknown = await scripting.executeScript({
       target: { tabId, documentIds: [documentId] },
@@ -234,12 +242,20 @@ async function inputFrameAllowed(sender: MessageSender, config: TranslationConfi
     if (!Array.isArray(results) || results.length !== 1) return false
     const parsed = parseInputFrameDocument(results[0])
     if (parsed === undefined) return false
-    return (
-      parsed.frameId === frameId &&
-      parsed.documentId === documentId &&
-      inputFrameUrl(topUrl, parsed.snapshot.url) === effectiveUrl &&
-      parsed.snapshot.topUrl === topUrl
-    )
+    if (
+      parsed.frameId !== frameId ||
+      parsed.documentId !== documentId ||
+      !matchesBrowserUrl(parsed.snapshot.topUrl, browserTopUrl)
+    ) {
+      return false
+    }
+    const topUrl = parsed.snapshot.topUrl
+    const effectiveUrl = inputFrameUrl(topUrl, parsed.snapshot.url)
+    if (effectiveUrl === undefined || inputFrameUrl(topUrl, sourceUrl) !== effectiveUrl) return false
+    if (!isSiteScopeAllowed(topUrl, config) || !isSiteScopeAllowed(effectiveUrl, config)) return false
+    if (isExcludedSite(topUrl, config.excludedHosts) || isExcludedSite(effectiveUrl, config.excludedHosts)) return false
+    if (isSensitivePage(topUrl) || isSensitivePage(effectiveUrl)) return false
+    return true
   } catch {
     return false
   }
@@ -367,11 +383,11 @@ async function assertPageStart(snapshot: ModelSnapshot, signal: AbortSignal, url
 
 async function startPageTranslation(tab: PageTarget): Promise<TranslationReply<'wt:translate-page'>> {
   if (tab.incognito) return { ok: false, error: '无痕窗口不启用模型功能' }
-  if (typeof tab.id !== 'number' || typeof tab.url !== 'string' || normalizeOrigin(tab.url) === '') {
+  const requestedDocUrl = typeof tab.url === 'string' ? documentFormOfBrowserUrl(tab.url) : ''
+  if (typeof tab.id !== 'number' || requestedDocUrl === '' || normalizeOrigin(requestedDocUrl) === '') {
     return { ok: false, error: '当前页面不支持' }
   }
   const tabId = tab.id
-  const requestedUrl = tab.url
   const signal = new AbortController().signal
   const policyGeneration = readingGeneration
   const checkReadingPolicy = (): void => {
@@ -382,7 +398,7 @@ async function startPageTranslation(tab: PageTarget): Promise<TranslationReply<'
   try {
     const top = await readTopDocument(tabId)
     if (top === undefined) throw new TranslationError('当前页面不支持翻译，或浏览器未授予访问权限')
-    if (!sameManualPage(top.url, requestedUrl) || (tab.documentId !== undefined && tab.documentId !== top.documentId)) {
+    if (!sameManualPage(top.url, requestedDocUrl) || (tab.documentId !== undefined && tab.documentId !== top.documentId)) {
       throw new TranslationError(PAGE_CHANGED_ERROR)
     }
     const url = top.url
@@ -733,7 +749,7 @@ async function translationContext(
 /** 在途请求及其适用范围：配置变更时只中止受影响的请求。 */
 class TrackedRequest extends AbortController implements RequestScope {
   readonly kind: RequestKind
-  readonly url: string
+  url: string
   readonly pageSession: string | undefined
   sourceUrl: string | undefined
   recentSites: readonly string[] = []
@@ -1315,7 +1331,7 @@ function autoTextsValid(texts: readonly string[]): boolean {
 async function handleTranslate(
   message: Extract<TranslationMessage, { type: 'wt:translate' }>,
   sender: MessageSender,
-  routeCheck?: Promise<boolean>,
+  routeCheck?: Promise<MessageSender | undefined>,
 ): Promise<TranslationReply<'wt:translate'>> {
   const pageSession = pageSessionKey(sender, message.pageSession)
   if (pageSessionEnded(pageSession)) return failureReply(new CompletionCancelledError())
@@ -1323,10 +1339,8 @@ async function handleTranslate(
   const key = `${scope}:${message.requestId ?? crypto.randomUUID()}`
   if (requests.has(key)) return { ok: false, error: '请求 ID 重复' }
   const controller = new TrackedRequest(message.mode, sender.url ?? '', pageSession)
-  if (fromOurInputFrame(sender)) controller.sourceUrl = sender.tab?.url
-  const sourceUrl = fromOurInputFrame(sender)
-    ? (inputFrameUrl(sender.tab!.url!, sender.url!) ?? '')
-    : (sender.url ?? '')
+  const tabDocUrl = sender.tab?.url === undefined ? '' : documentFormOfBrowserUrl(sender.tab.url)
+  if (fromOurInputFrame(sender)) controller.sourceUrl = tabDocUrl
   const failed = (error: unknown): TranslationFailure => {
     const reply = failureReply(error)
     if (message.manualSelectionId === undefined || reply.code !== 'cancelled') return reply
@@ -1358,7 +1372,15 @@ async function handleTranslate(
   const reading0 = readingGeneration
   let grant: ManualGrant | undefined
   try {
-    if (routeCheck !== undefined && !(await routeCheck)) throw new CompletionCancelledError()
+    if (routeCheck !== undefined) {
+      const verified = await routeCheck
+      if (verified === undefined) throw new CompletionCancelledError()
+      sender = verified
+      controller.url = sender.url ?? ''
+    }
+    const sourceUrl = fromOurInputFrame(sender)
+      ? (inputFrameUrl(tabDocUrl, sender.url!) ?? '')
+      : (sender.url ?? '')
     await restoreAutomaticPause()
     const settings = await getSettings()
     if (!settings.enabled) return { ok: false, error: '总开关已关闭' }
@@ -1516,15 +1538,14 @@ function assistScope(sender: MessageSender): string {
 async function handleAssist(
   message: Extract<TranslationMessage, { type: 'wt:assist' }>,
   sender: MessageSender,
-  routeCheck?: Promise<boolean>,
+  routeCheck?: Promise<MessageSender | undefined>,
 ): Promise<TranslationReply<'wt:assist'>> {
   const pageSession = pageSessionKey(sender, message.pageSession)
   if (pageSessionEnded(pageSession)) return failureReply(new CompletionCancelledError())
-  const senderUrl = sender.url ?? ''
   const scope = assistScope(sender)
   const key = `${scope}:${message.requestId}`
   if (requests.has(key)) return { ok: false, error: '请求 ID 重复' }
-  const controller = new TrackedRequest('assist', senderUrl, pageSession)
+  const controller = new TrackedRequest('assist', sender.url ?? '', pageSession)
   for (const other of interactive) {
     if (other !== key && other.startsWith(`${scope}:`)) {
       requests.get(other)?.abort()
@@ -1535,7 +1556,13 @@ async function handleAssist(
   requests.set(key, controller)
   interactive.add(key)
   try {
-    if (routeCheck !== undefined && !(await routeCheck)) throw new CompletionCancelledError()
+    if (routeCheck !== undefined) {
+      const verified = await routeCheck
+      if (verified === undefined) throw new CompletionCancelledError()
+      sender = verified
+      controller.url = sender.url ?? ''
+    }
+    const senderUrl = sender.url ?? ''
     await restoreAutomaticPause()
     const snapshot = await modelSnapshot().catch(() => undefined)
     if (snapshot === undefined || controller.signal.aborted) {
@@ -1669,17 +1696,18 @@ async function handlePageAction(
   const tabs = browser.tabs
   if (message.tabId !== undefined && message.url !== undefined) {
     try {
+      const requestedDocUrl = documentFormOfBrowserUrl(message.url)
       const tab = await tabs.get(message.tabId)
       if (tab.incognito) return { ok: false, error: '无痕窗口不启用模型功能' }
-      if (typeof tab.url !== 'string' || !sameManualPage(tab.url, message.url)) {
+      if (typeof tab.url !== 'string' || !sameManualPage(documentFormOfBrowserUrl(tab.url), requestedDocUrl)) {
         return { ok: false, error: PAGE_CHANGED_ERROR }
       }
       const top = await readTopDocument(message.tabId)
-      if (top === undefined || !sameManualPage(top.url, message.url)) {
+      if (top === undefined || !sameManualPage(top.url, requestedDocUrl)) {
         return { ok: false, error: PAGE_CHANGED_ERROR }
       }
       const forward: ContentTranslationMessage = {
-        type: 'wt:page-action', action: message.action, url: message.url,
+        type: 'wt:page-action', action: message.action, url: requestedDocUrl,
       }
       const reply = await sendToTabMessage(message.tabId, forward, top.documentId)
       if (!isContentTranslationReply(reply, forward)) return { ok: false, error: '当前页面不支持' }
@@ -1841,7 +1869,7 @@ async function handleDocumentInput(
   }
   const isFrame = sender.frameId !== 0
   if (isFrame && !fromOurInputFrame(sender)) return { ok: false, error: '无权访问' }
-  const effectiveUrl = isFrame ? inputFrameUrl(topUrl, sourceUrl) : sourceUrl
+  const effectiveUrl = isFrame ? inputFrameUrl(documentFormOfBrowserUrl(topUrl), sourceUrl) : sourceUrl
   if (effectiveUrl === undefined) return { ok: false, error: '无权访问' }
   const snapshot = await modelSnapshot().catch(() => undefined)
   if (snapshot === undefined) return unavailableReply(snapshot)
@@ -1906,32 +1934,45 @@ async function handleDocumentInput(
   }
 }
 
+function verifiedRouteSender(
+  sender: MessageSender,
+  tabUrl: string,
+): Promise<MessageSender | undefined> | undefined {
+  const documentId = sender.documentId
+  const tabDocUrl = documentFormOfBrowserUrl(tabUrl)
+  if (!documentId || normalizeOrigin(tabDocUrl) !== normalizeOrigin(sender.url!)) return undefined
+  return readTopDocument(sender.tab!.id!).then((top) =>
+    top !== undefined && top.documentId === documentId && matchesBrowserUrl(top.url, tabUrl)
+      ? { ...sender, url: top.url }
+      : undefined,
+  )
+}
+
 async function dispatch(message: TranslationMessage, sender: MessageSender): Promise<TranslationReply> {
   if (sender.tab?.incognito === true) return { ok: false, error: '无痕窗口不启用模型功能' }
-  // SPA 导航后，Chrome 可能保留内容脚本注入时的 sender.url；tab.url 则随顶层路由更新。
-  // 只为仍在当前顶层文档的发送者采用新地址，子框架保持自己的地址。
+  // SPA 导航后，Chrome 可能保留内容脚本注入时的 sender.url；而文本片段链接会让 tab.url 带 #:~: 指令、location.href 隐去指令。
+  // 只为仍在当前顶层文档的发送者采用实时核验过的 top.url，子框架保持自己的地址。
   const tabUrl = sender.tab?.url
-  let routeCheck: Promise<boolean> | undefined
+  let routeCheck: Promise<MessageSender | undefined> | undefined
   if (message.type !== 'wt:cancel-assist' && fromOurContent(sender) &&
     typeof tabUrl === 'string' && tabUrl !== sender.url) {
-    const documentId = sender.documentId
-    if (!documentId || normalizeOrigin(tabUrl) !== normalizeOrigin(sender.url!)) {
-      return { ok: false, error: PAGE_CHANGED_ERROR }
-    }
-    routeCheck = readTopDocument(sender.tab!.id!).then((top) => top?.documentId === documentId && top.url === tabUrl)
-    sender = { ...sender, url: tabUrl }
+    routeCheck = verifiedRouteSender(sender, tabUrl)
+    if (routeCheck === undefined) return { ok: false, error: PAGE_CHANGED_ERROR }
     // 可取消的请求先登记 requestId，再等待核验，确保取消和后一次点击能及时中止它。
-    if (message.type !== 'wt:translate' && message.type !== 'wt:assist' && !(await routeCheck)) {
-      return { ok: false, error: PAGE_CHANGED_ERROR }
+    if (message.type !== 'wt:translate' && message.type !== 'wt:assist') {
+      const verified = await routeCheck
+      if (verified === undefined) return { ok: false, error: PAGE_CHANGED_ERROR }
+      sender = verified
     }
   }
   switch (message.type) {
     case 'wt:get-config': {
       if (!fromExtensionPage(sender)) return { ok: false, error: '无权访问' }
       return readConsistentModelState(async (config) => {
-        const [state, customHeadersState] = await Promise.all([
+        const [state, customHeadersState, allowed] = await Promise.all([
           keyStateFor(config.baseUrl),
           customHeadersStateFor(config.baseUrl, config.customHeadersRevision),
+          config.baseUrl === '' ? Promise.resolve(true) : endpointAllowed(config.baseUrl),
         ])
         if (state.keyState === 'unavailable') {
           const reply: TranslationReply<'wt:get-config'> = {
@@ -1939,6 +1980,7 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
             config,
             keyState: 'unavailable',
             customHeadersState,
+            ...(allowed ? {} : { endpointAuthorized: false }),
           }
           return reply
         }
@@ -1948,6 +1990,7 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
           hasKey: state.hasKey,
           keyState: state.keyState,
           customHeadersState,
+          ...(allowed ? {} : { endpointAuthorized: false }),
         }
         return reply
       }).catch((): TranslationFailure => ({ ok: false, error: '无法读取接口配置或密钥，请在设置中检查' }))
@@ -2027,7 +2070,13 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
           ? (await browser.tabs.query({ active: true, currentWindow: true }))[0]
           : await browser.tabs.get(message.tabId)
         if (tab === undefined) return { ok: false, error: '当前页面不支持' }
-        if (message.url !== undefined && message.url !== tab.url) return { ok: false, error: PAGE_CHANGED_ERROR }
+        if (
+          message.url !== undefined &&
+          (typeof tab.url !== 'string' ||
+            documentFormOfBrowserUrl(message.url) !== documentFormOfBrowserUrl(tab.url))
+        ) {
+          return { ok: false, error: PAGE_CHANGED_ERROR }
+        }
         return startPageTranslation(tab)
       } catch {
         return { ok: false, error: '当前页面不支持' }
@@ -2300,16 +2349,25 @@ async function sourceFrameFailure(
   return undefined
 }
 
+function hasPageModelTranslation(status: {
+  readonly auto: boolean
+  readonly budgetCapped?: boolean
+  readonly progress?: { readonly translated: number }
+}): boolean {
+  return status.auto || status.budgetCapped === true || (status.progress?.translated ?? 0) > 0
+}
+
 async function shortcutBlocked(url: string, tabId?: number): Promise<boolean> {
-  if (!/^https?:/.test(url)) return true
+  const docUrl = documentFormOfBrowserUrl(url)
+  if (!/^https?:/.test(docUrl)) return true
   const [settings, config] = await Promise.all([getSettings(), getTranslationConfig()])
   if (!settings.enabled) return true
-  if (!isSiteScopeAllowed(url, config)) return true
-  if (isExcludedSite(url, config.excludedHosts) || isSensitivePage(url)) return true
-  if (!(await originAllowed(normalizeOrigin(url)))) {
+  if (!isSiteScopeAllowed(docUrl, config)) return true
+  if (isExcludedSite(docUrl, config.excludedHosts) || isSensitivePage(docUrl)) return true
+  if (!(await originAllowed(normalizeOrigin(docUrl)))) {
     if (tabId === undefined) return true
     const top = await readTopDocument(tabId)
-    if (top === undefined || !sameManualPage(top.url, url)) return true
+    if (top === undefined || !(matchesBrowserUrl(top.url, url) || sameManualPage(top.url, docUrl))) return true
     const grant = await getManualPageGrant(tabId, top.documentId, top.url)
     if (grant === undefined || !(await pageGrantCurrent(grant))) return true
   }
@@ -2321,7 +2379,7 @@ async function pageMenuAction(
   top: SelectionDocument,
 ): Promise<TranslationReply<'wt:translate-page'>> {
   if (tab.incognito) return { ok: false, error: '无痕窗口不启用模型功能' }
-  if (typeof tab.id !== 'number' || typeof tab.url !== 'string' || !sameManualPage(top.url, tab.url)) {
+  if (typeof tab.id !== 'number' || typeof tab.url !== 'string' || !sameManualPage(top.url, documentFormOfBrowserUrl(tab.url))) {
     return { ok: false, error: PAGE_CHANGED_ERROR }
   }
   const tabId = tab.id
@@ -2372,7 +2430,7 @@ async function pageMenuAction(
   // 词库只覆盖部分文本；模型可用时第一次点菜单要翻译其余内容。
   const dictionaryOnly = !modelAvailable && policy === 'normal'
   // 字数用完会停止调度。即使尚未产出译文，右键也不能自行追加额度。
-  const modelPage = status.auto || status.budgetCapped === true || (status.progress?.translated ?? 0) > 0
+  const modelPage = hasPageModelTranslation(status)
   const translated = (modelPage && !status.paused) ||
     (dictionaryOnly && ((status.fixed && !status.paused) || (legacy.active && !legacy.paused)))
   const action = translated ? 'restore' : status.paused || legacy.paused ? 'resume' : undefined
@@ -2384,7 +2442,7 @@ async function pageMenuAction(
     action === undefined ||
     (modelAvailable && (!config.autoOrigins.includes(origin) || !(await originAllowed(origin))))
   ) {
-    return startPageTranslation({ ...tab, documentId: top.documentId })
+    return startPageTranslation({ ...tab, url: top.url, documentId: top.documentId })
   }
   return forwardPageAction(tabId, top.documentId, url, 'resume', recheck)
 }
@@ -2436,7 +2494,7 @@ function enqueuePageMenu(
           ? { ok: false, error: '嵌入页面暂不支持整页翻译，请在主页面操作' }
           : top === undefined
             ? { ok: false, error: '当前页面不支持翻译，或浏览器未授予访问权限' }
-            : info.pageUrl !== undefined && !sameManualPage(info.pageUrl, top.url)
+            : info.pageUrl !== undefined && !sameManualPage(documentFormOfBrowserUrl(info.pageUrl), top.url)
               ? { ok: false, error: PAGE_CHANGED_ERROR }
               : await pageMenuAction(tab, top)
       if (!reply.ok) await pageMenuFeedback(tab, top, reply.error)
@@ -2498,7 +2556,7 @@ function installMenuClickListener(): void {
             const topFallback = parseInjectionSnapshots(topOnly).find((item) => item.frameId === 0)
             if (topFallback !== undefined && normalizeOrigin(topFallback.snapshot.url) !== '') {
               const error =
-                typeof info.frameUrl === 'string' && normalizeOrigin(info.frameUrl) === ''
+                typeof info.frameUrl === 'string' && normalizeOrigin(documentFormOfBrowserUrl(info.frameUrl)) === ''
                   ? '暂不支持在嵌入框架中划词'
                   : '未授权访问该站点'
               await showSelectionInTab(
@@ -2521,7 +2579,7 @@ function installMenuClickListener(): void {
           if (sourceEntry === undefined) {
             if (sourceFrameId !== 0) {
               const error =
-                typeof info.frameUrl === 'string' && normalizeOrigin(info.frameUrl) === ''
+                typeof info.frameUrl === 'string' && normalizeOrigin(documentFormOfBrowserUrl(info.frameUrl)) === ''
                   ? '暂不支持在嵌入框架中划词'
                   : '未授权访问该站点'
               await showSelectionInTab(
@@ -2537,10 +2595,10 @@ function installMenuClickListener(): void {
             documentId: sourceEntry.documentId,
             url: sourceEntry.snapshot.url,
           }
-          if (typeof info.frameUrl === 'string' && info.frameUrl !== '' && source.url !== info.frameUrl) {
+          if (typeof info.frameUrl === 'string' && info.frameUrl !== '' && !matchesBrowserUrl(source.url, info.frameUrl)) {
             return
           }
-          if (sourceFrameId === 0 && typeof info.pageUrl === 'string' && info.pageUrl !== '' && top.url !== info.pageUrl) {
+          if (sourceFrameId === 0 && typeof info.pageUrl === 'string' && info.pageUrl !== '' && !matchesBrowserUrl(top.url, info.pageUrl)) {
             return
           }
           if (sourceFrameId !== 0) {
@@ -2590,9 +2648,10 @@ function installCommandListener(): void {
           if (typeof tab?.id !== 'number' || tab.incognito === true || typeof tab.url !== 'string') return
           const tabId = tab.id
           const url = tab.url
+          const docUrl = documentFormOfBrowserUrl(url)
           if (await shortcutBlocked(url, tabId)) return
           if (command === 'toggle-page-translation') {
-            const isGithub = parseGitHubUrl(url) !== undefined
+            const isGithub = parseGitHubUrl(docUrl) !== undefined
             const statusMessage: ContentTranslationMessage = { type: 'wt:status' }
             let genericOk = false
             let githubOk = false
@@ -2607,7 +2666,7 @@ function installCommandListener(): void {
                 })
                 .catch(() => ({ fixed: false, auto: false, paused: false })),
               isGithub
-                ? sendToTabMessage(tabId, { type: 'gcn:page-translation', action: 'status', url }, undefined)
+                ? sendToTabMessage(tabId, { type: 'gcn:page-translation', action: 'status', url: docUrl }, undefined)
                     .then((reply) => {
                       if (isGitHubPageReply(reply)) {
                         githubOk = true
@@ -2619,7 +2678,9 @@ function installCommandListener(): void {
                 : Promise.resolve({ active: false, paused: false }),
             ])
             if (!genericOk && !githubOk) return
-            const translatedNow = ((status.fixed || status.auto) && !status.paused) || (legacy.active && !legacy.paused)
+            const translatedNow =
+              ((status.fixed || hasPageModelTranslation(status)) && !status.paused) ||
+              (legacy.active && !legacy.paused)
             const action = translatedNow ? 'restore' : status.paused || legacy.paused ? 'resume' : undefined
             if (action === undefined) {
               // 文案是「翻译本页 / 恢复原文」：没有可切换的翻译时要告诉用户，而不是静默
@@ -2627,7 +2688,7 @@ function installCommandListener(): void {
               return
             }
             // 两次往返期间总开关、运行范围可能已变化：动作链里再查一次，与悬浮菜单路径一致
-            await forwardPageAction(tabId, undefined, url, action, async () =>
+            await forwardPageAction(tabId, undefined, docUrl, action, async () =>
               (await shortcutBlocked(url, tabId)) ? SITE_SCOPE_BLOCKED_ERROR : undefined,
             )
             return
@@ -2650,7 +2711,7 @@ function installCommandListener(): void {
             documentId: topEntry.documentId,
             url: topEntry.snapshot.url,
           }
-          if (top.url !== url || (await shortcutBlocked(top.url, tabId))) return
+          if (!matchesBrowserUrl(top.url, url) || (await shortcutBlocked(top.url, tabId))) return
           const focusedEntry = snapshots.find((item) => item.snapshot.focused && !item.snapshot.frameFocused)
           if (focusedEntry === undefined) {
             const error = snapshots.some((item) => item.snapshot.frameFocused)
@@ -2751,9 +2812,9 @@ export function installTranslationBackground(): void {
       browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
         // 子框架导航也会触发 loading；只按顶层地址变化清票据，同 URL 重载由 documentId 复查拦截。
         if (typeof changeInfo.url === 'string') {
-          void expireNavigatedManualPage(tabId, changeInfo.url).catch(reportError)
+          void expireNavigatedManualPage(tabId, documentFormOfBrowserUrl(changeInfo.url)).catch(reportError)
           const grant = manualGrants.get(tabId)
-          if (grant !== undefined && grant.top.url !== changeInfo.url) manualGrants.delete(tabId)
+          if (grant !== undefined && !matchesBrowserUrl(grant.top.url, changeInfo.url)) manualGrants.delete(tabId)
         }
       })
     }
