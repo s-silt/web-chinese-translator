@@ -3028,7 +3028,10 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         await route.fulfill({
           status: 200,
           contentType: 'text/html; charset=utf-8',
-          body: `<!doctype html><html><head><title>PARENT_CONTEXT_MARKER</title></head><body style="margin:24px;font:24px/1.5 sans-serif"><div role="alert" id="manual-source" style="max-width:440px">Failed to create project: permission denied. Please try again.</div><iframe id="noise" src="${noiseAUrl}" width="640" height="60"></iframe><iframe id="source-frame" src="https://manual-frame.fixture.test/a" width="700" height="130"></iframe></body></html>`,
+          body: `<!doctype html><html><head><title>PARENT_CONTEXT_MARKER</title></head><body style="margin:24px;font:24px/1.5 sans-serif">
+            <div role="alert" id="manual-source" style="max-width:440px">Failed to create project: permission denied. Please try again.</div>
+            <div id="top-multiline">First fixture line.<br>Second fixture line.</div>
+            <iframe id="noise" src="${noiseAUrl}" width="640" height="60"></iframe><iframe id="source-frame" src="https://manual-frame.fixture.test/a" width="700" height="130"></iframe></body></html>`,
         })
       })
       await context.route('https://manual-frame.fixture.test/**', async (route) => {
@@ -3121,6 +3124,13 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await expect(page.frameLocator('#noise').locator('#noise-b')).toBeVisible()
       api.release(A)
       await expect(page.locator('.panel-target')).toHaveText('中文译文', { timeout: 15_000 })
+
+      await page.keyboard.press('Escape')
+      await expect(page.locator('.panel')).toBeHidden()
+      const topMultiline = 'First fixture line.\nSecond fixture line.'
+      await selectAndRightClick(page.locator('#top-multiline'), topMultiline)
+      await expect(page.locator('.panel-target')).toHaveText('中文译文')
+      expect(api.calls.filter((call) => call.kind === 'texts').map((call) => call.payload.texts)).toContainEqual([topMultiline])
 
       await page.keyboard.press('Escape')
       await expect(page.locator('.panel')).toBeHidden()

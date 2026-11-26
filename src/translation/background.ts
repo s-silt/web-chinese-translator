@@ -2339,7 +2339,7 @@ async function pageMenuAction(
   }
   const initialFailure = await recheck()
   if (initialFailure !== undefined) return { ok: false, error: initialFailure }
-  const emptyStatus = { fixed: false, auto: false, paused: false }
+  const emptyStatus = { fixed: false, auto: false, paused: false, budgetCapped: false, progress: undefined }
   const emptyLegacy = { active: false, paused: false }
   const statusMessage: ContentTranslationMessage = { type: 'wt:status' }
   const [status, legacy] = await Promise.all([
@@ -2368,10 +2368,12 @@ async function pageMenuAction(
   const currentFailure = await recheck()
   if (currentFailure !== undefined) return { ok: false, error: currentFailure }
   const config = await getTranslationConfig()
-  const modelConfigured = config.baseUrl !== '' && config.model !== ''
-  // 有模型时，词库只覆盖部分文本；第一次点菜单要翻译其余内容。
-  const dictionaryOnly = !modelConfigured && policy === 'normal'
-  const translated = (status.auto && !status.paused) ||
+  const modelAvailable = config.model !== '' && await endpointAllowed(config.baseUrl)
+  // 词库只覆盖部分文本；模型可用时第一次点菜单要翻译其余内容。
+  const dictionaryOnly = !modelAvailable && policy === 'normal'
+  // 字数用完会停止调度。即使尚未产出译文，右键也不能自行追加额度。
+  const modelPage = status.auto || status.budgetCapped === true || (status.progress?.translated ?? 0) > 0
+  const translated = (modelPage && !status.paused) ||
     (dictionaryOnly && ((status.fixed && !status.paused) || (legacy.active && !legacy.paused)))
   const action = translated ? 'restore' : status.paused || legacy.paused ? 'resume' : undefined
   if (action === 'restore' || (action === 'resume' && policy === 'manual-settings')) {
@@ -2380,7 +2382,7 @@ async function pageMenuAction(
   const origin = normalizeOrigin(url)
   if (
     action === undefined ||
-    (modelConfigured && (!config.autoOrigins.includes(origin) || !(await originAllowed(origin))))
+    (modelAvailable && (!config.autoOrigins.includes(origin) || !(await originAllowed(origin))))
   ) {
     return startPageTranslation({ ...tab, documentId: top.documentId })
   }

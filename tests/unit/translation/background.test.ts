@@ -4066,9 +4066,10 @@ describe('普通页面菜单与启动边界', () => {
     expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
-  it('未配置模型时，内置词库仍能通过右键恢复和继续', async () => {
+  it.each(['未配置模型', '接口授权已撤回'])('%s时，内置词库仍能通过右键恢复和继续', async (cause) => {
     const { sender, state, send, fetcher } = await prepareManualPage('https://aistudio.google.com/projects')
-    await translationConfigItem.setValue({ ...DEFAULT_TRANSLATION_CONFIG })
+    if (cause === '未配置模型') await translationConfigItem.setValue({ ...DEFAULT_TRANSLATION_CONFIG })
+    else vi.mocked(fakeBrowser.permissions.contains).mockImplementation(async () => false)
     state.status.fixed = true
     const click = () => menuClick!(
       { menuItemId: 'wt-page', pageUrl: sender.url, frameId: 0, editable: false },
@@ -4079,6 +4080,25 @@ describe('普通页面菜单与启动边界', () => {
     click()
     await vi.waitFor(() => expect(state.status.paused).toBe(false))
     expect(send).not.toHaveBeenCalledWith(sender.tab.id, { type: 'wt:refresh' }, expect.anything())
+    expect(await getManualPageGrant(sender.tab.id, sender.documentId, sender.url)).toBeUndefined()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { budgetCapped: true, translated: 0 },
+    { budgetCapped: false, translated: 2 },
+  ])('达到上限后右键恢复原文，不追加额度（$budgetCapped, $translated）', async ({ budgetCapped, translated }) => {
+    const { sender, state, send, fetcher } = await prepareManualPage('https://aistudio.google.com/projects')
+    Object.assign(state.status, {
+      fixed: true, auto: false, paused: false, capped: true, budgetCapped,
+      progress: { spent: 200, budget: 200, translated, queued: 0 },
+    })
+    menuClick!(
+      { menuItemId: 'wt-page', pageUrl: sender.url, frameId: 0, editable: false },
+      { id: sender.tab.id, url: sender.url } as never,
+    )
+    await vi.waitFor(() => expect(state.status.paused).toBe(true))
+    expect(send).not.toHaveBeenCalledWith(sender.tab.id, expect.objectContaining({ action: 'resume' }), expect.anything())
     expect(await getManualPageGrant(sender.tab.id, sender.documentId, sender.url)).toBeUndefined()
     expect(fetcher).not.toHaveBeenCalled()
   })
