@@ -966,6 +966,44 @@ describe('选项页真实挂载', () => {
     }
   })
 
+  it.each([
+    [CONFIG.baseUrl, true],
+    ['https://api.example.com/other', true],
+    ['https://draft.example.com/v1', false],
+  ] as const)('获取模型授权后，已保存接口按授权范围更新，无需重新聚焦（%s）', async (url, coversSaved) => {
+    const testConnection = vi.fn(() => ({ ok: true, texts: ['ok'] }))
+    replies({
+      'wt:get-config': () => ({ ok: true, config: CONFIG, endpointAuthorized: false }),
+      'wt:list-models': () => ({ ok: true, models: ['m'] }),
+      'wt:test': testConnection,
+    })
+    vi.spyOn(fakeBrowser.permissions, 'request').mockImplementation(async () => true)
+    const wrapper = mount(TranslationSection)
+    try {
+      await flushPromises()
+      const base = wrapper.get('input[placeholder="https://api.example.com/v1"]')
+      const testButton = wrapper.get('[data-test="wt-test-connection"]')
+      expect(testButton.attributes('disabled')).toBeDefined()
+      await base.setValue(url)
+      await wrapper.get('[data-test="wt-fetch-models"]').trigger('click')
+      await flushPromises()
+      await base.setValue(CONFIG.baseUrl)
+      expect(wrapper.get('[data-test="wt-connection"]').text()).toBe(
+        coversSaved ? en.wtConnUntested : en.wtConnUnauthorized,
+      )
+      expect(testButton.attributes('disabled') === undefined).toBe(coversSaved)
+      expect(testConnection).not.toHaveBeenCalled()
+      if (coversSaved) {
+        await testButton.trigger('click')
+        await flushPromises()
+        expect(testConnection).toHaveBeenCalledTimes(1)
+      }
+    } finally {
+      wrapper.unmount()
+      clearToasts()
+    }
+  })
+
   it('获取模型失败（401/权限拒绝）保留全部草稿，非法自定义头展开高级设置且不发权限或网络请求', async () => {
     const sent: Record<string, unknown>[] = []
     replies({

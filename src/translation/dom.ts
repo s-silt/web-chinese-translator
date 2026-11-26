@@ -1437,12 +1437,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     visitElement(node) {
       if (disposed || suspended) return 0
       if (!node.isConnected) return 0
-      // 发现的 open shadow root 同样进 MutationObserver；host 排除时不进（walker 已挡）
-      const shadow = node.shadowRoot
-      if (shadow !== null && !isExcludedElement(node) && !observedShadows.has(shadow)) {
-        observedShadows.add(shadow)
-        observer.observe(shadow, OBSERVER_INIT)
-      }
+      observeNewShadow(node)
       return applyFixedAttributes(node)
     },
   })
@@ -1539,6 +1534,14 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     attributeFilter: [...ATTR_WATCH, ...FIXED_ATTRIBUTES],
   }
   let observedShadows = new WeakSet<ShadowRoot>()
+  function observeNewShadow(host: Element): ShadowRoot | undefined {
+    const shadow = host.shadowRoot
+    if (shadow === null || observedShadows.has(shadow) || !host.isConnected || isExcludedElement(host)) return
+    observer.observe(shadow, OBSERVER_INIT)
+    observedShadows.add(shadow)
+    return shadow
+  }
+
   const observer = new MutationObserver((mutations) => {
     syncPageIdentity()
     if (suspended || disposed) return
@@ -1574,7 +1577,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
         }
       } else if (mutation.type === 'characterData' && mutation.target instanceof Text) {
         const node = mutation.target
-        if (node.parentElement?.closest('[data-wt-root]') !== null) continue
+        if (node.parentElement?.closest('[data-wt-root]')) continue
         if (isOwnTextWrite(node)) continue
         const record = records.get(node)
         if (record !== undefined) {
@@ -1591,6 +1594,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       } else if (mutation.type === 'attributes' && mutation.target instanceof Element) {
         const element = mutation.target
         if (mutation.attributeName !== null && FIXED_ATTRIBUTES.includes(mutation.attributeName)) {
+          const shadow = observeNewShadow(element)
+          if (shadow !== undefined) roots.add(shadow)
           const record = attrRecords.get(element)?.get(mutation.attributeName)
           if (record !== undefined && element.getAttribute(mutation.attributeName) === record.applied) continue
           releaseStaleAttributes(element)

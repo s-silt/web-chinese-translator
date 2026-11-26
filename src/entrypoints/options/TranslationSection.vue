@@ -1013,14 +1013,19 @@ async function fetchModels(): Promise<void> {
   modelsMessage.value = t('wtModelsLoading')
   modelsError.value = false
   try {
+    const requestedOrigin = hostPermissionPattern(base)
     const granted = await browser.permissions
-      .request({ origins: [hostPermissionPattern(base)] })
+      .request({ origins: [requestedOrigin] })
       .catch(() => false)
     if (modelLookupId !== requestId) return
     if (!granted) {
       modelsMessage.value = t('wtPermissionDenied')
       modelsError.value = true
       return
+    }
+    if (persistedBase !== '' && hostPermissionPattern(persistedBase) === requestedOrigin) {
+      endpointAccessEpoch += 1
+      updateEndpointAccess(true)
     }
     const reply = await send({
       type: 'wt:list-models',
@@ -1547,19 +1552,22 @@ async function openShortcuts(): Promise<void> {
   }
 }
 
+function updateEndpointAccess(granted: boolean): void {
+  endpointAuthorized.value = granted
+  if (!granted && connection.value.kind !== 'testing') {
+    connection.value = { kind: 'unauthorized' }
+  } else if (granted && connection.value.kind === 'unauthorized') {
+    connection.value = { kind: persistedModel === '' ? 'missing-model' : 'untested' }
+  }
+}
+
 async function refreshEndpointAccess(): Promise<void> {
   if (!ready.value || saving.value || testing.value || grantingEndpoint.value || persistedBase === '') return
   const epoch = ++endpointAccessEpoch
   try {
     const reply = await send({ type: 'wt:get-config' })
     if (epoch !== endpointAccessEpoch || !reply.ok) return
-    const granted = reply.endpointAuthorized !== false
-    endpointAuthorized.value = granted
-    if (!granted && connection.value.kind !== 'testing') {
-      connection.value = { kind: 'unauthorized' }
-    } else if (granted && connection.value.kind === 'unauthorized') {
-      connection.value = { kind: persistedModel === '' ? 'missing-model' : 'untested' }
-    }
+    updateEndpointAccess(reply.endpointAuthorized !== false)
   } catch {
     void 0
   }
@@ -1578,14 +1586,8 @@ async function grantEndpointAccess(): Promise<void> {
       .request({ origins: [hostPermissionPattern(endpoint)] })
       .catch(() => false)
     if (epoch !== endpointAccessEpoch) return
-    endpointAuthorized.value = granted
-    if (!granted) {
-      setStatus(t('wtPermissionDenied'), true)
-      return
-    }
-    if (connection.value.kind === 'unauthorized') {
-      connection.value = { kind: persistedModel === '' ? 'missing-model' : 'untested' }
-    }
+    updateEndpointAccess(granted)
+    if (!granted) setStatus(t('wtPermissionDenied'), true)
   } finally {
     grantingEndpoint.value = false
   }

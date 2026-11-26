@@ -10,6 +10,7 @@ import {
   inputFrameUrl,
   readInputFrameDocuments,
 } from './input-frame'
+import { documentFormOfBrowserUrl, matchesBrowserUrl } from './page-lifecycle'
 import { isExcludedSite, isSensitivePage } from './page-policy'
 import { isSiteScopeAllowed, restrictSitePatterns, siteScopeExclusions } from './site-scope'
 
@@ -268,11 +269,12 @@ async function sendInputFrameControl(
 
 async function syncInputFramesInTab(
   tabId: number,
-  tabUrl: string,
+  browserUrl: string,
   config: TranslationConfig,
   masterOn: boolean,
 ): Promise<void> {
   const scripting = browser.scripting
+  const tabUrl = documentFormOfBrowserUrl(browserUrl)
   const origin = normalizeOrigin(tabUrl)
   const enabled =
     masterOn &&
@@ -288,7 +290,7 @@ async function syncInputFramesInTab(
   if (!enabled || typeof scripting?.executeScript !== 'function') return
   const docs = await readInputFrameDocuments(tabId)
   const matching = docs.filter((doc) => {
-    if (doc.frameId <= 0 || doc.snapshot.topUrl !== tabUrl) return false
+    if (doc.frameId <= 0 || !matchesBrowserUrl(doc.snapshot.topUrl, browserUrl)) return false
     const effectiveUrl = inputFrameUrl(tabUrl, doc.snapshot.url)
     return (
       effectiveUrl !== undefined &&

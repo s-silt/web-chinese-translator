@@ -5015,9 +5015,10 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await inspectClosedShadowPage(targetPage)
     }
 
-    test('内嵌输入：YouTube 同源 live_chat 子框架自动替换', async () => {
+    test('内嵌输入：已打开的文本片段页面启用 YouTube 同源 live_chat 子框架自动替换', async () => {
       const { context, extensionId } = await launch()
-      const watchUrl = 'https://www.youtube.com/watch?v=input-frame'
+      const watchRequestUrl = 'https://www.youtube.com/watch?v=input-frame'
+      const watchUrl = `${watchRequestUrl}#top-draft:~:text=Draft`
       const liveChatUrl = 'https://www.youtube.com/live_chat?v=input-frame'
       const liveChatHtml = VIDEO_SITES[1].html
       const watchHtml =
@@ -5029,7 +5030,7 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
 
       await context.route('https://www.youtube.com/**', async (route) => {
         const requestUrl = route.request().url()
-        if (requestUrl === watchUrl) {
+        if (requestUrl === watchRequestUrl) {
           await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: watchHtml })
           return
         }
@@ -5075,6 +5076,7 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         })
         await page.goto(watchUrl)
         await page.waitForLoadState('domcontentloaded')
+        expect(await page.evaluate(() => location.href)).toBe(`${watchRequestUrl}#top-draft`)
         const chatFrame = page.frameLocator('#chat-frame')
         const editor = chatFrame.locator('#input')
         await expect(page.locator('#top-draft')).toHaveValue('顶层草稿')

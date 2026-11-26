@@ -2823,6 +2823,75 @@ describe('行内单元快照失效矩阵', () => {
 })
 
 describe('Shadow 单元与排除', () => {
+  it('已翻译文本移入开放 ShadowRoot 后被改写，会释放旧译文记录', async () => {
+    const host = document.body.appendChild(document.createElement('div'))
+    const shadow = host.attachShadow({ mode: 'open' })
+    const paragraph = document.body.appendChild(document.createElement('p'))
+    const text = paragraph.appendChild(document.createTextNode('Previously translated paragraph.'))
+    engine = makeEngine({ auto: true })
+    engine.start()
+    await settle(300)
+    expect(batches[0]?.texts).toEqual(['Previously translated paragraph.'])
+    batches[0]!.apply(['先前已译的段落。'])
+    await settle()
+
+    shadow.append(text)
+    await settle()
+    expect(text.parentElement).toBeNull()
+    expect(engine.progress().translated).toBe(1)
+    text.data = 'A new paragraph written by the page.'
+    await settle()
+    expect(engine.progress().translated).toBe(0)
+
+    paragraph.append(text)
+    await settle(300)
+    expect(batches[1]?.texts).toEqual(['A new paragraph written by the page.'])
+    batches[1]!.apply(['新的段落。'])
+    await settle()
+    engine.restore()
+    expect(text.data).toBe('A new paragraph written by the page.')
+  })
+
+  it('宿主只改标题时发现新开放 ShadowRoot，持续观察它且不重扫普通后代', async () => {
+    const host = document.body.appendChild(document.createElement('section'))
+    const excluded = document.body.appendChild(document.createElement('section'))
+    excluded.setAttribute('data-sensitive', '')
+    const light = host.appendChild(document.createElement('p')).appendChild(document.createTextNode('Light DOM paragraph.'))
+    engine = makeEngine({ auto: true })
+    engine.start()
+    await settle(300)
+    expect(batches[0]?.texts).toEqual(['Light DOM paragraph.'])
+    batches[0]!.apply(['普通段落。'])
+    await settle()
+    const readLight = vi.spyOn(light, 'nodeValue', 'get')
+    expect(light.nodeValue).toBe('普通段落。')
+    expect(readLight).toHaveBeenCalledOnce()
+    readLight.mockClear()
+
+    const shadow = host.attachShadow({ mode: 'open' })
+    const paragraph = shadow.appendChild(document.createElement('p'))
+    paragraph.textContent = 'A newly mounted shadow paragraph.'
+    excluded.attachShadow({ mode: 'open' }).innerHTML = '<p>Excluded shadow paragraph.</p>'
+    excluded.setAttribute('aria-label', 'Settings')
+    host.setAttribute('title', 'Settings')
+    await settle(300)
+    expect(batches[1]?.texts).toEqual(['A newly mounted shadow paragraph.'])
+    batches[1]!.apply(['新挂载的段落。'])
+    await settle()
+    expect(paragraph.textContent).toBe('新挂载的段落。')
+    expect(readLight).not.toHaveBeenCalled()
+
+    const readShadow = vi.spyOn(paragraph.firstChild!, 'nodeValue', 'get')
+    host.setAttribute('title', 'Close')
+    await settle()
+    expect(readShadow).not.toHaveBeenCalled()
+    expect(readLight).not.toHaveBeenCalled()
+
+    paragraph.firstChild!.nodeValue = 'Updated inside the shadow tree.'
+    await settle(300)
+    expect(batches[2]?.texts).toEqual(['Updated inside the shadow tree.'])
+  })
+
   function shadowPara(): { host: HTMLElement; getP: () => HTMLElement | null } {
     const host = document.createElement('div')
     host.id = 'sh'
