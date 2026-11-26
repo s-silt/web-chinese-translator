@@ -23,6 +23,8 @@ import type { PageTranslationProgress } from './messages'
 import type { SourceLanguage, TargetLanguage } from './target-language'
 
 export interface DomEngine {
+  /** 地址标识变化时清理上一页的调度和额度，暂停扫描时也可调用。 */
+  syncPageIdentity(): void
   start(): void
   stop(): void
   restore(): void
@@ -1501,7 +1503,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   }
   let observedShadows = new WeakSet<ShadowRoot>()
   const observer = new MutationObserver((mutations) => {
-    if (pageIdentity(location.href) !== lastLocation) onNavigation()
+    syncPageIdentity()
     if (suspended || disposed) return
     const roots = new Set<Node>()
     let removed = false
@@ -1652,8 +1654,10 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     return false
   }
 
-  function onNavigation(): void {
-    lastLocation = pageIdentity(location.href)
+  function syncPageIdentity(): void {
+    const current = pageIdentity(location.href)
+    if (current === lastLocation) return
+    lastLocation = current
     releaseBatchReservation()
     spent = 0
     budgetShares = 1
@@ -1743,9 +1747,10 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   document.addEventListener('focusin', onHint, true)
 
   return {
+    syncPageIdentity,
     start() {
       if (disposed || document.body === null) return
-      if (pageIdentity(location.href) !== lastLocation) onNavigation()
+      syncPageIdentity()
       if (!suspended) {
         scanner.queue(document.body)
         return

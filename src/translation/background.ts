@@ -1315,6 +1315,7 @@ function autoTextsValid(texts: readonly string[]): boolean {
 async function handleTranslate(
   message: Extract<TranslationMessage, { type: 'wt:translate' }>,
   sender: MessageSender,
+  routeCheck?: Promise<boolean>,
 ): Promise<TranslationReply<'wt:translate'>> {
   const pageSession = pageSessionKey(sender, message.pageSession)
   if (pageSessionEnded(pageSession)) return failureReply(new CompletionCancelledError())
@@ -1357,6 +1358,7 @@ async function handleTranslate(
   const reading0 = readingGeneration
   let grant: ManualGrant | undefined
   try {
+    if (routeCheck !== undefined && !(await routeCheck)) throw new CompletionCancelledError()
     await restoreAutomaticPause()
     const settings = await getSettings()
     if (!settings.enabled) return { ok: false, error: '总开关已关闭' }
@@ -1514,6 +1516,7 @@ function assistScope(sender: MessageSender): string {
 async function handleAssist(
   message: Extract<TranslationMessage, { type: 'wt:assist' }>,
   sender: MessageSender,
+  routeCheck?: Promise<boolean>,
 ): Promise<TranslationReply<'wt:assist'>> {
   const pageSession = pageSessionKey(sender, message.pageSession)
   if (pageSessionEnded(pageSession)) return failureReply(new CompletionCancelledError())
@@ -1532,6 +1535,7 @@ async function handleAssist(
   requests.set(key, controller)
   interactive.add(key)
   try {
+    if (routeCheck !== undefined && !(await routeCheck)) throw new CompletionCancelledError()
     await restoreAutomaticPause()
     const snapshot = await modelSnapshot().catch(() => undefined)
     if (snapshot === undefined || controller.signal.aborted) {
@@ -1904,6 +1908,23 @@ async function handleDocumentInput(
 
 async function dispatch(message: TranslationMessage, sender: MessageSender): Promise<TranslationReply> {
   if (sender.tab?.incognito === true) return { ok: false, error: '无痕窗口不启用模型功能' }
+  // SPA 导航后，Chrome 可能保留内容脚本注入时的 sender.url；tab.url 则随顶层路由更新。
+  // 只为仍在当前顶层文档的发送者采用新地址，子框架保持自己的地址。
+  const tabUrl = sender.tab?.url
+  let routeCheck: Promise<boolean> | undefined
+  if (message.type !== 'wt:cancel-assist' && fromOurContent(sender) &&
+    typeof tabUrl === 'string' && tabUrl !== sender.url) {
+    const documentId = sender.documentId
+    if (!documentId || normalizeOrigin(tabUrl) !== normalizeOrigin(sender.url!)) {
+      return { ok: false, error: PAGE_CHANGED_ERROR }
+    }
+    routeCheck = readTopDocument(sender.tab!.id!).then((top) => top?.documentId === documentId && top.url === tabUrl)
+    sender = { ...sender, url: tabUrl }
+    // 可取消的请求先登记 requestId，再等待核验，确保取消和后一次点击能及时中止它。
+    if (message.type !== 'wt:translate' && message.type !== 'wt:assist' && !(await routeCheck)) {
+      return { ok: false, error: PAGE_CHANGED_ERROR }
+    }
+  }
   switch (message.type) {
     case 'wt:get-config': {
       if (!fromExtensionPage(sender)) return { ok: false, error: '无权访问' }
@@ -2086,7 +2107,7 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
       if (!fromOurContent(sender) && !(fromOurInputFrame(sender) && message.mode === 'input')) {
         return { ok: false, error: '无权访问' }
       }
-      return handleTranslate(message, sender)
+      return handleTranslate(message, sender, routeCheck)
     case 'wt:translate-text':
       if (!fromTextWindow(sender)) return { ok: false, error: '无权访问' }
       return handleTextTranslation(message, sender)
@@ -2100,7 +2121,7 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
       return handleDocumentInput(message, sender)
     case 'wt:assist':
       if (!fromOurContent(sender)) return { ok: false, error: '无权访问' }
-      return handleAssist(message, sender)
+      return handleAssist(message, sender, routeCheck)
     case 'wt:cancel-assist':
       if (!fromOurContent(sender) && !fromOurInputFrame(sender) && !fromTextWindow(sender)) {
         return { ok: false, error: '无权访问' }
@@ -2318,7 +2339,7 @@ async function pageMenuAction(
   }
   const initialFailure = await recheck()
   if (initialFailure !== undefined) return { ok: false, error: initialFailure }
-  const emptyStatus = { fixed: false, auto: false, paused: false }
+  const emptyStatus = { fixed: false, auto: false, paused: false, budgetCapped: false, progress: undefined }
   const emptyLegacy = { active: false, paused: false }
   const statusMessage: ContentTranslationMessage = { type: 'wt:status' }
   const [status, legacy] = await Promise.all([
@@ -2346,19 +2367,22 @@ async function pageMenuAction(
   ])
   const currentFailure = await recheck()
   if (currentFailure !== undefined) return { ok: false, error: currentFailure }
-  const translated = policy === 'manual-settings'
-    ? status.auto && !status.paused
-    : ((status.fixed || status.auto) && !status.paused) || (legacy.active && !legacy.paused)
+  const config = await getTranslationConfig()
+  const modelAvailable = config.model !== '' && await endpointAllowed(config.baseUrl)
+  // 词库只覆盖部分文本；模型可用时第一次点菜单要翻译其余内容。
+  const dictionaryOnly = !modelAvailable && policy === 'normal'
+  // 字数用完会停止调度。即使尚未产出译文，右键也不能自行追加额度。
+  const modelPage = status.auto || status.budgetCapped === true || (status.progress?.translated ?? 0) > 0
+  const translated = (modelPage && !status.paused) ||
+    (dictionaryOnly && ((status.fixed && !status.paused) || (legacy.active && !legacy.paused)))
   const action = translated ? 'restore' : status.paused || legacy.paused ? 'resume' : undefined
   if (action === 'restore' || (action === 'resume' && policy === 'manual-settings')) {
     return forwardPageAction(tabId, top.documentId, url, action, recheck)
   }
-  const config = await getTranslationConfig()
   const origin = normalizeOrigin(url)
   if (
     action === undefined ||
-    (config.baseUrl !== '' && config.model !== '' &&
-      (!config.autoOrigins.includes(origin) || !(await originAllowed(origin))))
+    (modelAvailable && (!config.autoOrigins.includes(origin) || !(await originAllowed(origin))))
   ) {
     return startPageTranslation({ ...tab, documentId: top.documentId })
   }

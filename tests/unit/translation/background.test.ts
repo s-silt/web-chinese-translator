@@ -323,6 +323,55 @@ describe('模型隐私边界真实消息入口', () => {
     expect(writePersistentTranslations).toHaveBeenCalledTimes(1)
   })
 
+  it('同文档切换到敏感路由后，右键只发送这次选区，不附带旧页面的语境或缓存', async () => {
+    await enableSmart()
+    const url = sensitiveSender.url
+    const sender = { ...contentSender, tab: { ...contentSender.tab, url } }
+    const manualSelectionId = await grant(url)
+    vi.mocked(fakeBrowser.scripting.executeScript).mockResolvedValue([
+      { frameId: 0, documentId: sender.documentId, result: url },
+    ] as never)
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completionReply(['手动译文']))
+    vi.mocked(readPersistentTranslations).mockClear()
+    vi.mocked(writePersistentTranslations).mockClear()
+
+    const message = {
+      type: 'wt:translate', mode: 'selection', texts: [text], manualSelectionId,
+      page: { site: 'app.devin.ai', title: input.pageTitle, heading: input.context },
+    }
+    expect(await trigger(message, { ...sender, documentId: 'replaced-document' })).toMatchObject({ ok: false })
+    expect(await trigger(message, { ...sender, url: 'https://unrelated.example/' })).toMatchObject({ ok: false })
+    expect(await trigger({ type: 'wt:translate', mode: 'auto', texts: [text] }, sender)).toMatchObject({ ok: false })
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(await trigger(message, sender)).toMatchObject({ ok: true, texts: ['手动译文'] })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    const body = JSON.parse(fetcher.mock.calls[0]![1]!.body as string)
+    expect(JSON.parse(body.messages[1].content)).toEqual({
+      texts: [text], currentPage: { title: '', heading: '', site: '' }, recentPages: [],
+    })
+    expect(readPersistentTranslations).not.toHaveBeenCalled()
+    expect(writePersistentTranslations).not.toHaveBeenCalled()
+  })
+
+  it('核对同文档路由期间仍可取消划词请求', async () => {
+    await enableSmart()
+    const url = 'https://app.devin.ai/projects'
+    const sender = { ...contentSender, tab: { ...contentSender.tab, url } }
+    const { promise, resolve } = Promise.withResolvers<void>()
+    const execute = vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation((async () => {
+      await promise
+      return [{ frameId: 0, documentId: sender.documentId, result: url }]
+    }) as never)
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    const requestId = 'cancel-during-route-check'
+    const pending = trigger({ type: 'wt:translate', mode: 'selection', texts: [text], requestId }, sender)
+    await vi.waitFor(() => expect(execute).toHaveBeenCalled())
+    await trigger({ type: 'wt:cancel-assist', requestId }, sender)
+    resolve()
+    expect(await pending).toMatchObject({ ok: false, code: 'cancelled' })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
   it('过期右键授权不能发送敏感选区', async () => {
     await enableSmart()
     const sender = { ...sensitiveSender, id: contentSender.id }
@@ -4015,6 +4064,48 @@ describe('普通页面菜单与启动边界', () => {
       type: 'wt:translate', mode: 'auto', texts: ['Native page menu synthetic text.'],
     }, sender)).toMatchObject({ ok: true, texts: ['译文'] })
     expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['未配置模型', '接口授权已撤回'])('%s时，内置词库仍能通过右键恢复和继续', async (cause) => {
+    const { sender, state, send, fetcher } = await prepareManualPage('https://aistudio.google.com/projects')
+    if (cause === '未配置模型') await translationConfigItem.setValue({ ...DEFAULT_TRANSLATION_CONFIG })
+    else vi.mocked(fakeBrowser.permissions.contains).mockImplementation(async (query) =>
+      Boolean(query.origins?.length && query.origins.every((origin) => origin === 'https://aistudio.google.com/*')),
+    )
+    state.status.fixed = true
+    const click = () => menuClick!(
+      { menuItemId: 'wt-page', pageUrl: sender.url, frameId: 0, editable: false },
+      { id: sender.tab.id, url: sender.url } as never,
+    )
+    click()
+    await vi.waitFor(() => expect(state.status.paused).toBe(true))
+    click()
+    await vi.waitFor(() => expect(state.status.paused).toBe(false))
+    if (cause === '接口授权已撤回') {
+      expect(await trigger({ type: 'wt:page-modes' }, sender)).toMatchObject({ ok: true, modes: { fixed: true, auto: false } })
+    }
+    expect(send).not.toHaveBeenCalledWith(sender.tab.id, { type: 'wt:refresh' }, expect.anything())
+    expect(await getManualPageGrant(sender.tab.id, sender.documentId, sender.url)).toBeUndefined()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { budgetCapped: true, translated: 0 },
+    { budgetCapped: false, translated: 2 },
+  ])('达到上限后右键恢复原文，不追加额度（$budgetCapped, $translated）', async ({ budgetCapped, translated }) => {
+    const { sender, state, send, fetcher } = await prepareManualPage('https://aistudio.google.com/projects')
+    Object.assign(state.status, {
+      fixed: true, auto: false, paused: false, capped: true, budgetCapped,
+      progress: { spent: 200, budget: 200, translated, queued: 0 },
+    })
+    menuClick!(
+      { menuItemId: 'wt-page', pageUrl: sender.url, frameId: 0, editable: false },
+      { id: sender.tab.id, url: sender.url } as never,
+    )
+    await vi.waitFor(() => expect(state.status.paused).toBe(true))
+    expect(send).not.toHaveBeenCalledWith(sender.tab.id, expect.objectContaining({ action: 'resume' }), expect.anything())
+    expect(await getManualPageGrant(sender.tab.id, sender.documentId, sender.url)).toBeUndefined()
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   it('未配置打开模型设置；嵌入页面显示明确错误且不授权', async () => {

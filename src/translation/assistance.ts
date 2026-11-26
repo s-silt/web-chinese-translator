@@ -135,7 +135,8 @@ export function createAssistance(o: AssistOptions) {
       o.panel.showNotice(message('wtAssistConfigure'))
       return
     }
-    const sourceGuard = guard ?? guardFor(source)
+    // 右键已确认这段文字，通知消失或页面重绘后仍可显示结果；后台另行复核来源文档。
+    const sourceGuard = guard ?? (manualSelectionId === undefined ? guardFor(source) : undefined)
     const { id, doc, current, valid } = begin(source, anchor, sourceGuard, manualSelectionId)
     if (!valid()) {
       cancel()

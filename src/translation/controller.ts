@@ -805,6 +805,7 @@ function createInstance(inputOnly = false): Instance {
 
   function onNavigate(): void {
     if (disposed) return
+    engine?.syncPageIdentity()
     resetFloating()
     pageId = createId()
     proactiveSuppressed = false

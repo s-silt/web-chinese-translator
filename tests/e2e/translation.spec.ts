@@ -2027,6 +2027,59 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
     await context.close()
   })
 
+  async function invokePageTranslation(page: Page, target: Locator): Promise<void> {
+    await page.bringToFront()
+    await page.mouse.click(4, 4)
+    await target.click({ button: 'right' })
+    await expect(async () => {
+      await invokeOwnedContextMenu(page, '翻译本页 / 恢复原文')
+    }).toPass({ timeout: 10_000, intervals: [200, 500, 1000] })
+  }
+
+  test('原生右键：内置词库站点切换 SPA 路由后翻译本页、恢复并保护敏感页面', async () => {
+    test.skip(process.platform !== 'win32', '原生菜单验收需要 Windows UIAutomation')
+    const { context, extensionId } = await launch()
+    const notice = 'Failed to create project: permission denied. Please try again.'
+    const privateText = 'Synthetic billing details must stay on this page.'
+    try {
+      const options = await saveAndConnect(context, extensionId)
+      const url = 'https://aistudio.google.com/start'
+      await context.route(url, (route) => route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<!doctype html><html lang="zh-CN"><body><button>Settings</button><div role="alert">${notice}</div></body></html>`,
+      }))
+      await waitForSiteScriptRegistration(options, { url })
+      const page = await context.newPage()
+      await page.goto(url)
+      await waitForSiteContentReady(options, page, { fixed: true, auto: false })
+      await expect(page.getByRole('button', { name: '设置' })).toBeVisible()
+      await page.evaluate(() => history.pushState(null, '', '/projects'))
+      const alert = page.getByRole('alert')
+      await expect(alert).toHaveText(notice)
+      expect(api.calls.filter((call) => call.kind === 'texts')).toHaveLength(0)
+      await invokePageTranslation(page, alert)
+      await expect(alert).toHaveText('中文译文')
+      await expect(page.getByRole('button', { name: '设置' })).toBeVisible()
+      expect(api.calls.filter((call) => call.kind === 'texts').map((call) => call.payload.texts)).toContainEqual([notice])
+      await invokePageTranslation(page, alert)
+      await expect(alert).toHaveText(notice)
+      expect((await entryConfig(options)).autoOrigins).toEqual([])
+
+      await page.evaluate((text) => {
+        history.replaceState(null, '', '/billing')
+        document.querySelector('[role="alert"]')!.textContent = text
+      }, privateText)
+      const before = api.calls.length
+      await invokePageTranslation(page, alert)
+      await expect(page.locator('.panel .panel-status')).toHaveText('该页面仅支持通过右键菜单主动翻译所选文字')
+      await expect(alert).toHaveText(privateText)
+      expect(api.calls).toHaveLength(before)
+      expect(JSON.stringify(api.calls.map((call) => call.payload))).not.toContain(privateText)
+    } finally {
+      await context.close()
+    }
+  })
+
   test('入口改进：普通页面原生右键翻译、恢复与继续，不加入自动名单', async () => {
     test.skip(process.platform !== 'win32', '原生菜单验收需要Windows UIAutomation')
     const { context, extensionId } = await launch()
@@ -2047,14 +2100,7 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await page.goto(`${readingUrl()}/page`)
       await expect(page.locator('#p1')).toHaveText(PHYSICS)
       expect(api.calls.filter((call) => call.kind === 'texts')).toHaveLength(0)
-      const menu = async (): Promise<void> => {
-        await page.bringToFront()
-        await page.mouse.click(4, 4)
-        await page.locator('#p1').click({ button: 'right' })
-        await expect(async () => {
-          await invokeOwnedContextMenu(page, '翻译本页 / 恢复原文')
-        }).toPass({ timeout: 10_000, intervals: [200, 500, 1000] })
-      }
+      const menu = (): Promise<void> => invokePageTranslation(page, page.locator('#p1'))
       await menu()
       await expect(page.locator('#p1')).toHaveText('中文译文')
       await expect(page.locator('#entry-protected-code')).toHaveText(protectedCode)
@@ -2982,7 +3028,10 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         await route.fulfill({
           status: 200,
           contentType: 'text/html; charset=utf-8',
-          body: `<!doctype html><html><head><title>PARENT_CONTEXT_MARKER</title></head><body style="margin:24px;font:24px/1.5 sans-serif"><div id="manual-source">First fixture line.<br>Second fixture line.</div><iframe id="noise" src="${noiseAUrl}" width="640" height="60"></iframe><iframe id="source-frame" src="https://manual-frame.fixture.test/a" width="700" height="130"></iframe></body></html>`,
+          body: `<!doctype html><html><head><title>PARENT_CONTEXT_MARKER</title></head><body style="margin:24px;font:24px/1.5 sans-serif">
+            <div role="alert" id="manual-source" style="max-width:440px">Failed to create project: permission denied. Please try again.</div>
+            <div id="top-multiline">First fixture line.<br>Second fixture line.</div>
+            <iframe id="noise" src="${noiseAUrl}" width="640" height="60"></iframe><iframe id="source-frame" src="https://manual-frame.fixture.test/a" width="700" height="130"></iframe></body></html>`,
         })
       })
       await context.route('https://manual-frame.fixture.test/**', async (route) => {
@@ -3061,18 +3110,27 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         await invokeOwnedSelectionMenu(page)
       }
 
-      const A = 'First fixture line.\nSecond fixture line.'
+      await page.evaluate(() => history.pushState(null, '', '/projects'))
+      const A = 'Failed to create project: permission denied. Please try again.'
       api.hold(A)
       await selectAndRightClick(page.locator('#manual-source'), A)
       await expect
         .poll(() => api.calls.some((call) => call.kind === 'texts' && JSON.stringify(call.payload.texts) === JSON.stringify([A])))
         .toBe(true)
+      await page.locator('#manual-source').evaluate((alert) => alert.remove())
       await page.locator('#noise').evaluate((el, url) => {
         ;(el as HTMLIFrameElement).src = url
       }, noiseBUrl)
       await expect(page.frameLocator('#noise').locator('#noise-b')).toBeVisible()
       api.release(A)
       await expect(page.locator('.panel-target')).toHaveText('中文译文', { timeout: 15_000 })
+
+      await page.keyboard.press('Escape')
+      await expect(page.locator('.panel')).toBeHidden()
+      const topMultiline = 'First fixture line.\nSecond fixture line.'
+      await selectAndRightClick(page.locator('#top-multiline'), topMultiline)
+      await expect(page.locator('.panel-target')).toHaveText('中文译文')
+      expect(api.calls.filter((call) => call.kind === 'texts').map((call) => call.payload.texts)).toContainEqual([topMultiline])
 
       await page.keyboard.press('Escape')
       await expect(page.locator('.panel')).toBeHidden()
