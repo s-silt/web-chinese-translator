@@ -250,6 +250,21 @@ describe('页面额度上限', () => {
     expect(await translateCalls()).toBe(2 * (PARAGRAPHS - 1))
   })
 
+  it('单页应用切到未开启翻译的页面时，旧页的字符上限不再生效', async () => {
+    await capPage()
+    await triggerMessage({ type: 'wt:page-action', action: 'restore' })
+    expect(await pageStatus()).toMatchObject({ paused: true, budgetCapped: true })
+    smartMode.enabled = true // 新页没有本地词库，也未授权自动翻译。
+    vi.stubGlobal('location', new URL('https://app.devin.ai/projects'))
+    window.dispatchEvent(new Event('popstate'))
+    await settle(200)
+    expect(await pageStatus()).toMatchObject({
+      fixed: false, auto: false, paused: false, capped: false, budgetCapped: false,
+      progress: { spent: 0, translated: 0 },
+    })
+    expect(await translateCalls()).toBe(PARAGRAPHS - 1)
+  })
+
   it.each([
     ['模型', { model: 'm2' }],
     ['接口地址', { baseUrl: 'https://other.example.com/v1' }],
