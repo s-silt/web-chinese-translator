@@ -205,6 +205,7 @@ function createInstance(inputOnly = false): Instance {
       paused: pageRestored || (modes.auto && (engine?.isAutoPaused() ?? false)),
       capped: engine?.isCapped() ?? false,
       budgetCapped: engine?.isBudgetCapped() ?? false,
+      ...(pageRestored ? { restored: true } : {}),
       failed: engine?.failedCount() ?? 0,
       error: lastError,
       ...(engine === undefined ? {} : { progress: engine.progress() }),
@@ -244,7 +245,12 @@ function createInstance(inputOnly = false): Instance {
       pageOn: status().auto && !(config?.autoOrigins.includes(origin) ?? false),
       configured: Boolean(config?.baseUrl && config?.model),
       restored,
-      canRestore: restored || fixedOn || autoOn(),
+      canRestore:
+        restored ||
+        fixedOn ||
+        autoOn() ||
+        currentStatus.capped ||
+        (currentStatus.progress?.translated ?? 0) > 0,
       resumable: (!currentStatus.capped || currentStatus.budgetCapped === true) &&
         (restored || currentStatus.paused || currentStatus.budgetCapped === true),
       busy: floatingBusy,

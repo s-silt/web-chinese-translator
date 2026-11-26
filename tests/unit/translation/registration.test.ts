@@ -486,9 +486,9 @@ describe('网站运行范围脚本注册', () => {
 })
 
 describe('同源输入子框架注册与同步', () => {
-  it('普通编辑器仅注入同源与继承来源框架，排除站、敏感页和范围外仍停止', async () => {
-    let topUrl = 'https://editor.example/document'
-    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [{ id: 19, url: topUrl }] as never)
+  it.each(['', ':~:text=Editor'])('已打开页面只注入同源与继承来源框架，敏感、范围外和撤权时停止（指令 %j）', async (directive) => {
+    let topUrl = 'https://editor.example/document?v=1#/edit'
+    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [{ id: 19, url: topUrl + directive }] as never)
     const send = vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async () => ({ ok: true }))
     const injected: unknown[] = []
     vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation((async (injection: {
@@ -503,6 +503,7 @@ describe('同源输入子框架注册与同步', () => {
           { frameId: 5, documentId: 'cross', result: { url: 'https://other.example/frame', topUrl, focused: false } },
           { frameId: 6, documentId: 'sensitive', result: { url: 'https://editor.example/account', topUrl, focused: false } },
           { frameId: 7, documentId: 'stale', result: { url: 'https://editor.example/frame', topUrl: 'https://editor.example/previous', focused: false } },
+          { frameId: 8, documentId: 'stale-route', result: { url: 'about:blank', topUrl: topUrl + '/other', focused: false } },
         ]
       }
       injected.push(injection.target)
@@ -532,8 +533,14 @@ describe('同源输入子框架注册与同步', () => {
     }
     injected.length = 0
     send.mockClear()
-    topUrl = 'https://editor.example/account'
+    topUrl = 'https://editor.example/document#/account'
     await translationConfigItem.setValue({ ...CONFIG, inputTranslationEnabled: true })
+    await syncAllSiteScripts()
+    expect(injected).toEqual([])
+    expect(send).toHaveBeenCalledWith(19, { type: 'wt:stop-input-frame' })
+    topUrl = 'https://editor.example/document#/edit'
+    vi.mocked(fakeBrowser.permissions.contains).mockImplementation(async () => false)
+    send.mockClear()
     await syncAllSiteScripts()
     expect(injected).toEqual([])
     expect(send).toHaveBeenCalledWith(19, { type: 'wt:stop-input-frame' })

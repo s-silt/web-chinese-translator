@@ -1,7 +1,9 @@
-import type { TranslationReply } from '../../translation/messages'
+import { TRANSLATION_PERMISSION_REMOVED_ERROR, type TranslationReply } from '../../translation/messages'
 
 export type ConnectionKind =
   | 'unconfigured'
+  | 'missing-model'
+  | 'unauthorized'
   | 'untested'
   | 'testing'
   | 'ok'
@@ -15,6 +17,9 @@ export type ConnectionKind =
 /** 把 wt:test 的 reply.code 映射成连接徽章状态 */
 export function connectionKindFromReply(reply: TranslationReply<'wt:test'>): ConnectionKind {
   if (reply.ok) return 'ok'
+  if (reply.error === '未授权访问该接口地址' || reply.error === TRANSLATION_PERMISSION_REMOVED_ERROR) {
+    return 'unauthorized'
+  }
   switch (reply.code) {
     case 'auth':
       return 'auth'

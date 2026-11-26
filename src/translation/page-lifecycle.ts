@@ -23,6 +23,27 @@ export function pageIdentity(href: string): string {
   return `${url.origin}${url.pathname}${url.search}${route}`
 }
 
+/**
+ * 浏览器侧地址（tab.url / info.pageUrl / changeInfo.url）可能保留 `#:~:text=...` 片段指令，
+ * 而文档实际 `location.href` 按规范隐去该指令。仅剥离 `#` 后的 `:~:` 指令段，
+ * 保留路径、query（含字面 `:~:`）、普通锚点与 hash 路由。
+ */
+export function documentFormOfBrowserUrl(url: string): string {
+  const hash = url.indexOf('#')
+  if (hash === -1) return url
+  const directive = url.indexOf(':~:', hash + 1)
+  if (directive === -1) return url
+  return url.slice(0, directive === hash + 1 ? hash : directive)
+}
+
+/**
+ * 核对已核验文档的 `location.href` 与浏览器报告 URL：仅允许相差文本片段指令，
+ * 不放宽两个真实文档快照之间的比较。
+ */
+export function matchesBrowserUrl(documentUrl: string, browserUrl: string): boolean {
+  return documentUrl === browserUrl || documentUrl === documentFormOfBrowserUrl(browserUrl)
+}
+
 export function watchPageLifecycle(options: {
   onNavigate(): void
   onSuspend(): void

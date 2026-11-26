@@ -17,6 +17,7 @@ import type { MessageKey } from '../../i18n'
 import { getSettings, watchSettings } from '../../shared/settings'
 import { hostPermissionPattern, normalizeOrigin, watchTranslationConfig, type TranslationConfig } from '../../translation/config'
 import { isExcludedSite, normalizeExcludedHost, pageModelPolicy } from '../../translation/page-policy'
+import { documentFormOfBrowserUrl } from '../../translation/page-lifecycle'
 import { isSiteScopeAllowed } from '../../translation/site-scope'
 import { sendTranslationMessage } from '../../translation/client'
 import { openTextTranslationWindow } from '../../translation/text-window'
@@ -38,6 +39,7 @@ export type WtState =
   | 'off'
   | 'paused'
   | 'capped'
+  | 'restored'
   | 'error'
   | 'fixed'
   | 'master-off'
@@ -53,6 +55,7 @@ export const WT_STATE_MESSAGE: Readonly<Record<WtState, MessageKey>> = {
   off: 'wtAutoOff',
   paused: 'wtAutoPaused',
   capped: 'wtAutoCapped',
+  restored: 'wtRestored',
   error: 'wtAutoError',
   fixed: 'wtStateFixed',
   'master-off': 'wtMasterOff',
@@ -127,15 +130,19 @@ export interface UseTranslationControls {
   openTranslateWindow(): Promise<void>
 }
 
+const MAX_BROWSER_TAB_URL_LENGTH = 65536
+
 async function queryActiveTab(): Promise<ActiveTab | undefined> {
   try {
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true })
     if (
       tab?.id === undefined || !Number.isSafeInteger(tab.id) || tab.id < 0 ||
-      tab.incognito === true || typeof tab.url !== 'string' || tab.url.length > 8192
+      tab.incognito === true || typeof tab.url !== 'string' || tab.url.length > MAX_BROWSER_TAB_URL_LENGTH
     ) return undefined
-    const origin = normalizeOrigin(tab.url)
-    return origin === '' ? undefined : { id: tab.id, origin, url: tab.url }
+    const url = documentFormOfBrowserUrl(tab.url)
+    if (url.length === 0 || url.length > 8192) return undefined
+    const origin = normalizeOrigin(url)
+    return origin === '' ? undefined : { id: tab.id, origin, url }
   } catch {
     return undefined
   }
@@ -226,6 +233,7 @@ export function useTranslationControls(): UseTranslationControls {
   )
   const canRestore = computed(
     () => masterEnabled.value && !outOfScope.value && status.value?.supported === true &&
+      status.value.restored !== true &&
       ((!manualSettings.value && status.value.fixed) || status.value.auto || status.value.paused || status.value.capped),
   )
   const canRestoreFixed = computed(
@@ -265,6 +273,7 @@ export function useTranslationControls(): UseTranslationControls {
     if (outOfScope.value) return 'out-of-scope'
     const page = status.value
     if (page !== undefined && page.error !== '') return 'error'
+    if (page?.restored === true) return 'restored'
     if (page?.capped) return 'capped'
     if (page?.paused) return 'paused'
     const configured = config.value !== undefined && config.value.baseUrl !== '' && config.value.model !== ''

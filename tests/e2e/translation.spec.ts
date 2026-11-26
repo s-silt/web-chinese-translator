@@ -5015,9 +5015,10 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
       await inspectClosedShadowPage(targetPage)
     }
 
-    test('内嵌输入：YouTube 同源 live_chat 子框架自动替换', async () => {
+    test('内嵌输入：已打开的文本片段页面启用 YouTube 同源 live_chat 子框架自动替换', async () => {
       const { context, extensionId } = await launch()
-      const watchUrl = 'https://www.youtube.com/watch?v=input-frame'
+      const watchRequestUrl = 'https://www.youtube.com/watch?v=input-frame'
+      const watchUrl = `${watchRequestUrl}#top-draft:~:text=Draft`
       const liveChatUrl = 'https://www.youtube.com/live_chat?v=input-frame'
       const liveChatHtml = VIDEO_SITES[1].html
       const watchHtml =
@@ -5029,7 +5030,7 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
 
       await context.route('https://www.youtube.com/**', async (route) => {
         const requestUrl = route.request().url()
-        if (requestUrl === watchUrl) {
+        if (requestUrl === watchRequestUrl) {
           await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: watchHtml })
           return
         }
@@ -5075,6 +5076,7 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         })
         await page.goto(watchUrl)
         await page.waitForLoadState('domcontentloaded')
+        expect(await page.evaluate(() => location.href)).toBe(`${watchRequestUrl}#top-draft`)
         const chatFrame = page.frameLocator('#chat-frame')
         const editor = chatFrame.locator('#input')
         await expect(page.locator('#top-draft')).toHaveValue('顶层草稿')
@@ -5537,6 +5539,638 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
     } finally {
       await context.close()
     }
+  })
+
+  test.describe('0.4.8 文本片段、上限恢复、交互边界与性能实测', () => {
+    test('文本片段 URL 矩阵、敏感 hash 路由、长 URL 与行内词库句恢复', async () => {
+      const { context, extensionId } = await launch()
+      api.setTextTranslator((text) =>
+        text
+          .split(/(<\/?[a-z]?\d+\/?>)/i)
+          .map((part) => (part.startsWith('<') || part.trim() === '' ? part : '中文译文'))
+          .join(''),
+      )
+      const aiHtml = `<!doctype html><html><head><title>AI Studio Fixture</title></head><body>
+        <button id="btn-settings">Settings</button>
+        <p id="inline-line">Open <a id="inline-link" href="/settings">Settings</a> to continue.</p>
+        <p id="prose-hello">Hello from offline synthetic studio page.</p>
+      </body></html>`
+      const sensitiveHtml = `<!doctype html><html><head><title>PRIVATE_TITLE_MARKER</title></head><body>
+        <h1>PRIVATE_HEADING_MARKER</h1>
+        <p id="sens-secret">PRIVATE_AUTO_SECRET_SENTENCE must never be auto-sent.</p>
+        <p id="sens-select">Selected safe phrase for manual lookup.</p>
+      </body></html>`
+      try {
+        const options = await saveAndConnect(context, extensionId)
+        await enableSelection(options)
+        await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          const current = await chrome.runtime.sendMessage({ type: 'wt:get-config' }) as { config: Record<string, unknown> }
+          await chrome.storage.local.set({
+            translationConfig: {
+              ...current.config,
+              autoOrigins: ['https://aistudio.google.com', 'https://app.devin.ai'],
+            },
+          })
+        })
+        await context.route(/^https:\/\/aistudio\.google\.com\//, (route) =>
+          route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: aiHtml }),
+        )
+        await context.route(/^https:\/\/app\.devin\.ai\//, (route) =>
+          route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: sensitiveHtml }),
+        )
+        await waitForSiteScriptRegistration(options, { url: 'https://aistudio.google.com/start' })
+
+        const page = await context.newPage()
+        for (const [targetUrl, expectedDocHref] of [
+          ['https://aistudio.google.com/start', 'https://aistudio.google.com/start'],
+          ['https://aistudio.google.com/start#sec', 'https://aistudio.google.com/start#sec'],
+          ['https://aistudio.google.com/start#:~:text=Hello', 'https://aistudio.google.com/start'],
+          ['https://aistudio.google.com/start#sec:~:text=Hello', 'https://aistudio.google.com/start#sec'],
+          ['https://aistudio.google.com/start?q=:~:a#sec:~:text=Hello', 'https://aistudio.google.com/start?q=:~:a#sec'],
+        ] as const) {
+          await page.goto(targetUrl)
+          expect(await page.evaluate(() => location.href)).toBe(expectedDocHref)
+          await expect(page.locator('#btn-settings')).toHaveText('设置')
+          await expect(page.locator('#prose-hello')).toHaveText('中文译文')
+          await expect(page.locator('#inline-line')).toContainText('中文译文')
+          await expect(page.locator('#inline-link')).toHaveAttribute('href', '/settings')
+        }
+
+        // 验证行内词库链接句恢复结构完整，且网站改写原文 A->B 后恢复不回写 A
+        const tabId = await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          const tabs = await chrome.tabs.query({})
+          return tabs.find((t) => t.url?.startsWith('https://aistudio.google.com/'))?.id
+        })
+        expect(tabId).toBeDefined()
+        await page.evaluate(() => {
+          ;(window as unknown as { __lnkRef?: Element | null }).__lnkRef = document.querySelector('#inline-link')
+        })
+        await options.evaluate(async (id) => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({
+            type: 'wt:page-action',
+            action: 'restore',
+            tabId: id,
+            url: 'https://aistudio.google.com/start?q=:~:a#sec:~:text=Hello',
+          })
+        }, tabId!)
+        await expect(page.locator('#inline-line')).toHaveText('Open Settings to continue.')
+        expect(
+          await page.evaluate(
+            () => (window as unknown as { __lnkRef?: Element | null }).__lnkRef === document.querySelector('#inline-link'),
+          ),
+        ).toBe(true)
+
+        await options.evaluate(async (id) => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({
+            type: 'wt:page-action',
+            action: 'resume',
+            tabId: id,
+            url: 'https://aistudio.google.com/start?q=:~:a#sec:~:text=Hello',
+          })
+        }, tabId!)
+        await expect(page.locator('#inline-line')).toContainText('中文译文')
+        await page.evaluate(() => {
+          document.querySelector('#inline-link')!.textContent = 'Billing'
+        })
+        await options.evaluate(async (id) => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          return chrome.runtime.sendMessage({
+            type: 'wt:page-action',
+            action: 'restore',
+            tabId: id,
+            url: 'https://aistudio.google.com/start?q=:~:a#sec:~:text=Hello',
+          })
+        }, tabId!)
+        await expect(page.locator('#inline-link')).toHaveText('Billing')
+
+        // 长 URL：真实路由 4000 字符与超长高亮指令 9000 字符
+        const longRouteUrl = `https://aistudio.google.com/start?q=${'r'.repeat(4000)}`
+        await page.goto(longRouteUrl)
+        await expect(page.locator('#btn-settings')).toHaveText('设置')
+        await expect(page.locator('#prose-hello')).toHaveText('中文译文')
+
+        const hugeFragUrl = `https://aistudio.google.com/start#:~:text=${'f'.repeat(9000)}`
+        await page.goto(hugeFragUrl)
+        await expect(page.locator('#btn-settings')).toHaveText('设置')
+        await expect(page.locator('#prose-hello')).toHaveText('中文译文')
+
+        // 敏感 hash 路由带文本片段时，自动翻译不发送页面内容。
+        const callsBeforeSensitive = api.calls.length
+        const sensitiveUrl = 'https://app.devin.ai/#/settings/tokens:~:text=Selected'
+        await page.goto(sensitiveUrl)
+        expect(await page.evaluate(() => location.href)).toBe('https://app.devin.ai/#/settings/tokens')
+        await page.waitForTimeout(800)
+        expect(api.calls).toHaveLength(callsBeforeSensitive)
+        await expect(page.locator('#sens-secret')).toHaveText('PRIVATE_AUTO_SECRET_SENTENCE must never be auto-sent.')
+
+        if (process.platform === 'win32') {
+          const selected = 'Selected safe phrase for manual lookup.'
+          await dragText(page, '#sens-select')
+          expect(await page.evaluate(() => getSelection()?.toString())).toBe(selected)
+          await page.locator('#sens-select').click({ button: 'right', position: { x: 12, y: 8 } })
+          await expect(async () => { await invokeOwnedContextMenu(page, '翻译选中文字') }).toPass({ timeout: 10_000 })
+          await inspectClosedShadowPage(page)
+          await expect(page.locator('.panel-target')).toHaveText('中文译文')
+          const manual = api.calls.slice(callsBeforeSensitive).map(call => call.payload)
+          expect(manual.map(payload => payload.texts)).toEqual([[selected]])
+          expect(manual[0]!.currentPage).toEqual({ title: '', heading: '', site: '' })
+          expect(manual[0]!.recentPages).toEqual([])
+          expect(JSON.stringify(manual)).not.toMatch(/PRIVATE_TITLE_MARKER|PRIVATE_HEADING_MARKER|PRIVATE_AUTO_SECRET_SENTENCE/)
+        }
+      } finally {
+        await context.close()
+      }
+    })
+
+    test('原生 Alt+S：文本片段主文档、同源框架和敏感页面的选区权限', async () => {
+      test.skip(process.platform !== 'win32', '此用例核验 Chromium 收到的 Windows 原生快捷键')
+      const { context, extensionId } = await launch()
+      try {
+        const options = await saveAndConnect(context, extensionId)
+        await enableToolbarMode(options)
+        const parent = `${readingUrl()}/fragment-parent`
+        const frame = `${readingUrl()}/fragment-child`
+        const sensitive = 'https://app.devin.ai/#/settings/tokens:~:text=ManualSelectionProof'
+        await context.route(parent, (route) => route.fulfill({ contentType: 'text/html', body:
+          `<title>Fragment Selection Fixture</title><p><span id="main">TopSelectionProof</span></p><iframe id="child" src="${frame}#:~:text=FrameSelectionProof"></iframe>`,
+        }))
+        await context.route(frame, (route) => route.fulfill({ contentType: 'text/html', body:
+          '<p><span id="in-frame">FrameSelectionProof</span></p>',
+        }))
+        await context.route('https://app.devin.ai/**', (route) => route.fulfill({ contentType: 'text/html', body:
+          '<title>PRIVATE_TITLE_MARKER</title><h1>PRIVATE_HEADING_MARKER</h1><p>PRIVATE_BODY_MARKER</p><span id="safe">ManualSelectionProof</span>',
+        }))
+        await waitForSiteScriptRegistration(options, { url: parent, selectionToolbarEnabled: true })
+        const worker = context.serviceWorkers()[0]!
+        await worker.evaluate(() => {
+          const g = globalThis as unknown as { chrome: FixtureChrome; fragmentCommands: string[] }
+          g.fragmentCommands = []
+          g.chrome.commands.onCommand.addListener((command) => { g.fragmentCommands.push(command) })
+        })
+        const commands = () => worker.evaluate(() => (globalThis as unknown as { fragmentCommands: string[] }).fragmentCommands)
+        const page = await context.newPage()
+        await page.goto(`${parent}#:~:text=TopSelectionProof`)
+        await waitForSiteContentReady(options, page, { supported: true })
+        await page.bringToFront()
+        const selectWord = async (target: Locator, word: string) => {
+          // 用鼠标双击，使实际包含选区的框架获得焦点。
+          await target.dblclick()
+          expect(await target.evaluate((el) => el.ownerDocument.getSelection()?.toString().trim())).toBe(word)
+        }
+        const pressSelection = async () => {
+          const previous = (await commands()).length
+          const key = await sendOwnedBrowserAltShortcut(page, 'S', async () => (await commands()).length > previous)
+          test.skip(!key.sent && key.reason?.includes('FOREGROUND_MISMATCH') === true && (await commands()).length === previous,
+            'Windows 前台不属于测试窗口，未发送原生 Alt+S')
+          expect(key.sent, key.reason).toBe(true)
+          expect((await commands()).slice(previous)).toEqual(['translate-selection'])
+        }
+        for (const [target, word] of [
+          [page.locator('#main'), 'TopSelectionProof'],
+          [page.frameLocator('#child').locator('#in-frame'), 'FrameSelectionProof'],
+        ] as const) {
+          const before = api.calls.length
+          await selectWord(target, word)
+          await pressSelection()
+          await expect(page.locator('.panel-target')).toHaveText('中文译文')
+          expect(api.calls.slice(before).map((call) => call.payload.texts)).toEqual([[word]])
+          await page.locator('.panel-close').click()
+        }
+
+        const beforeSensitive = api.calls.length
+        await page.goto(sensitive)
+        expect(await page.evaluate(() => location.href)).toBe('https://app.devin.ai/#/settings/tokens')
+        const safeWord = page.locator('#safe')
+        await selectWord(safeWord, 'ManualSelectionProof')
+        await pressSelection()
+        await page.waitForTimeout(500)
+        expect(api.calls).toHaveLength(beforeSensitive)
+        await expect(page.locator('.panel-target')).toHaveCount(0)
+      } finally {
+        await context.close()
+      }
+    })
+
+    async function checkCappedRecovery(entry: 'popup' | 'shortcut', zeroTranslations = false) {
+      const attachBefore = process.env.PW_CHROMIUM_ATTACH_TO_OTHER
+      process.env.PW_CHROMIUM_ATTACH_TO_OTHER = '1'
+      let context: BrowserContext | undefined
+      try {
+        const launched = await launch(null)
+        context = launched.context
+        const options = await saveAndConnect(context, launched.extensionId)
+        // 普通阅读页没有内置词库，测试通过真实权限弹窗授予站点访问。
+        await enableToolbarMode(options)
+        await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          const current = await chrome.runtime.sendMessage({ type: 'wt:get-config' }) as { config: Record<string, unknown> }
+          await chrome.storage.local.set({
+            translationConfig: { ...current.config, pageCharLimit: 20_000 },
+          })
+        })
+        const chunkParagraphs = Array.from({ length: 22 }, (_, idx) => {
+          const body = `Paragraph ${idx} synthetic English prose segment for character cap verification. `.repeat(13).trim()
+          return `<p id="cap-${idx}">${body}</p>`
+        }).join('\n')
+        const capBase = `${readingUrl()}/${zeroTranslations ? 'cap-article-zero' : 'cap-article'}`
+        const capUrl = zeroTranslations ? capBase : `${capBase}#:~:text=Paragraph`
+        const shortLabel = 'A constrained table label'
+        const longParagraph = 'The remaining text exceeds the available page budget. '.repeat(400).slice(0, 19_990)
+        const content = zeroTranslations
+          ? `<button id="cap-0" style="width:230px;max-width:230px;overflow:hidden;white-space:nowrap">${shortLabel}</button><p>${longParagraph}</p>`
+          : `<a id="jump-sec" href="#sec2">Jump</a><main>${chunkParagraphs}</main><section id="sec2"></section>`
+        await context.route(`${capBase}*`, (route) => route.fulfill({
+          status: 200,
+          contentType: 'text/html; charset=utf-8',
+          body: `<!doctype html><html><head><title>Cap Article Fixture</title></head><body>${content}</body></html>`,
+        }))
+        await waitForSiteScriptRegistration(options, { url: capBase })
+
+        const page = await context.newPage()
+        await page.goto(capUrl)
+        const firstOriginal = await page.locator('#cap-0').textContent()
+        await page.bringToFront()
+        const worker = context.serviceWorkers()[0]!
+        const tabId = await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          const tabs = await chrome.tabs.query({})
+          return tabs.find((t) => t.url?.includes('/cap-article'))?.id
+        })
+        expect(tabId).toBeDefined()
+
+        // 通过后台启动本页翻译，直至触发 20,000 字符上限
+        const callsBeforeStart = api.calls.length
+        expect(
+          await options.evaluate(
+            async ({ id, url }) => {
+              const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+              return chrome.runtime.sendMessage({ type: 'wt:translate-page', tabId: id, url })
+            },
+            { id: tabId!, url: capUrl },
+          ),
+        ).toEqual({ ok: true })
+        const readStatus = () => options.evaluate(async (id) => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          const r = await chrome.tabs.sendMessage(id, { type: 'wt:status' }) as {
+            status: { fixed: boolean; paused: boolean; restored?: boolean; auto: boolean; capped: boolean; budgetCapped?: boolean;
+              progress: { budget: number; spent: number; translated: number; layoutSkipped?: number } }
+          }
+          return r.status
+        }, tabId!)
+        await expect.poll(readStatus, { timeout: 25_000 }).toMatchObject({
+          auto: false, paused: false, capped: true, budgetCapped: true, progress: { budget: 20_000 },
+        })
+        const atCap = await readStatus()
+        expect(atCap.fixed).toBe(false)
+        if (!zeroTranslations) {
+          // 触顶时跳转同页锚点，页面额度和已经消耗的字符必须保留。
+          await page.evaluate(() => { location.hash = 'cap-anchor' })
+          await expect(page).toHaveURL(/#cap-anchor$/)
+          await expect.poll(readStatus).toMatchObject({
+            capped: true, budgetCapped: true,
+            progress: { budget: atCap.progress.budget, spent: atCap.progress.spent },
+          })
+        }
+        if (zeroTranslations) {
+          // mock 返回的长译文触发布局保护。虽然没有写入译文，已完成的请求仍计入字符额度。
+          expect(atCap).toMatchObject({
+            fixed: false, progress: { spent: shortLabel.length, translated: 0, layoutSkipped: 1 },
+          })
+          expect(api.calls.slice(callsBeforeStart).map((call) => call.payload.texts)).toEqual([[shortLabel]])
+          await expect(page.locator('#cap-0')).toHaveText(shortLabel)
+        } else {
+          expect(atCap.progress.translated).toBeGreaterThan(0)
+          await expect(page.locator('#cap-0')).toHaveText('中文译文')
+        }
+
+        // 打开原生弹出页：同时显示「继续翻译」与「恢复本页原文」
+        await page.bringToFront()
+        const [popup] = await Promise.all([
+          context.waitForEvent('page', { timeout: 10_000 }),
+          worker.evaluate(async (id) => {
+            const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+            const tab = await chrome.tabs.get(id)
+            await chrome.action.openPopup({ windowId: tab.windowId })
+          }, tabId!),
+        ])
+        await expect(popup.locator('[data-test="wt-page-state"]')).toHaveText(zhCN.wtAutoCapped)
+        await expect(popup.locator('[data-test="wt-translate-page"]')).toHaveText(zhCN.wtResume)
+        await expect(popup.locator('[data-test="wt-restore-page"]')).toHaveText(zhCN.wtRestore)
+        await popup.screenshot({ path: test.info().outputPath('popup-capped-dual-actions.png') })
+
+        // 点击弹出页「恢复本页原文」：不发模型请求、不扩增额度，状态更新为「已恢复原文」
+        const callsAtCap = api.calls.length
+        const budgetAtCap = atCap.progress.budget
+        if (entry === 'popup') {
+          await popup.locator('[data-test="wt-restore-page"]').click()
+          await expect(popup.locator('[data-test="wt-page-state"]')).toHaveText(zhCN.wtRestored)
+          await expect(popup.locator('[data-test="wt-restore-page"]')).toHaveCount(0)
+          await expect(popup.locator('[data-test="wt-translate-page"]')).toHaveText(zhCN.wtResume)
+          await popup.close().catch(() => undefined)
+        } else {
+          await popup.close()
+          await page.bringToFront()
+          await worker.evaluate(() => {
+            const g = globalThis as unknown as { chrome: FixtureChrome; capCommands: string[] }
+            g.capCommands = []
+            g.chrome.commands.onCommand.addListener((command) => { g.capCommands.push(command) })
+          })
+          const getCommands = () => worker.evaluate(() => (globalThis as unknown as { capCommands: string[] }).capCommands)
+          const key = await sendOwnedBrowserAltShortcut(page, 'T', async () => (await getCommands()).length > 0)
+          test.skip(!key.sent && key.reason?.includes('FOREGROUND_MISMATCH') === true && (await getCommands()).length === 0,
+            'Windows 前台不属于测试窗口，未发送原生 Alt+T')
+          expect(key.sent, key.reason).toBe(true)
+          expect(await getCommands()).toEqual(['toggle-page-translation'])
+        }
+        await expect(page.locator('#cap-0')).toHaveText(firstOriginal!)
+        await expect.poll(readStatus).toMatchObject({ restored: true, paused: true, progress: { budget: budgetAtCap } })
+        expect(api.calls).toHaveLength(callsAtCap)
+        if (zeroTranslations) {
+          const restored = await readStatus()
+          expect(restored.progress).toMatchObject({ spent: atCap.progress.spent, translated: 0 })
+          await test.info().attach('zero-translation-budget', {
+            body: JSON.stringify({ entry, atCap, restored, additionalRequests: api.calls.length - callsAtCap }),
+            contentType: 'application/json',
+          })
+          return
+        }
+
+        // 用户明确继续翻译后，普通锚点保留该页额度。
+        await options.evaluate(
+          async ({ id, url }) => {
+            const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+            return chrome.runtime.sendMessage({ type: 'wt:page-action', action: 'resume', tabId: id, url })
+          },
+          { id: tabId!, url: page.url() },
+        )
+        await expect(page.locator('#cap-0')).toHaveText('中文译文')
+        await expect.poll(async () => {
+          const r = await options.evaluate(async (id) => {
+            const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+            return chrome.tabs.sendMessage(id, { type: 'wt:status' }) as Promise<{
+              status?: { progress?: { queued: number; spent: number } }
+            }>
+          }, tabId!)
+          return r.status?.progress?.queued === 0 && (r.status?.progress?.spent ?? 0) > 0
+        }).toBe(true)
+        const spentBeforeAnchor = await options.evaluate(async (id) => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          const r = await chrome.tabs.sendMessage(id, { type: 'wt:status' }) as { status?: { progress?: { spent: number } } }
+          return r.status?.progress?.spent ?? 0
+        }, tabId!)
+        expect(spentBeforeAnchor).toBeGreaterThan(0)
+
+        await page.locator('#jump-sec').click()
+        await expect(page).toHaveURL(/#sec2$/)
+        const spentAfterAnchor = await options.evaluate(async (id) => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          const r = await chrome.tabs.sendMessage(id, { type: 'wt:status' }) as { status?: { progress?: { spent: number } } }
+          return r.status?.progress?.spent ?? 0
+        }, tabId!)
+        expect(spentAfterAnchor).toBe(spentBeforeAnchor)
+
+        // 同一 SPA 切到新路由：旧页额度与暂停/触顶状态清空，不污染新路由
+        await page.evaluate(() => {
+          history.pushState(null, '', '/next-spa-route')
+          document.body.innerHTML = '<p id="fresh-p">Fresh route paragraph after capped page.</p>'
+        })
+        await expect.poll(async () => {
+          const st = await options.evaluate(async (id) => {
+            const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+            const r = await chrome.tabs.sendMessage(id, { type: 'wt:status' }) as {
+              status?: { capped?: boolean; paused?: boolean; progress?: { spent: number } }
+            }
+            return r?.status
+          }, tabId!)
+          return { capped: st?.capped, paused: st?.paused, spent: st?.progress?.spent ?? 0 }
+        }).toEqual({ capped: false, paused: false, spent: 0 })
+      } finally {
+        if (attachBefore === undefined) delete process.env.PW_CHROMIUM_ATTACH_TO_OTHER
+        else process.env.PW_CHROMIUM_ATTACH_TO_OTHER = attachBefore
+        await context?.close()
+      }
+    }
+
+    test('字符上限触顶后原生弹出页恢复、双按钮与 SPA 额度隔离', () => checkCappedRecovery('popup'))
+
+    test('字符上限触顶后原生 Alt+T 恢复、零请求且不追加额度', async () => {
+      test.skip(process.platform !== 'win32', '此用例核验 Chromium 收到的 Windows 原生快捷键')
+      await checkCappedRecovery('shortcut')
+    })
+
+    test('字符上限触顶后原生弹出页恢复无词库且零译文的普通页', () => checkCappedRecovery('popup', true))
+
+    test('字符上限触顶后原生 Alt+T 恢复无词库且零译文的普通页', async () => {
+      test.skip(process.platform !== 'win32', '此用例核验 Chromium 收到的 Windows 原生快捷键')
+      await checkCappedRecovery('shortcut', true)
+    })
+
+    test('页内边缘选区、连续划词取消、Escape 不重开不抢焦点、独立窗口慢失败保留草稿与动态重绘指标', async () => {
+      const { context, extensionId } = await launch({ width: 960, height: 640 })
+      try {
+        const options = await saveAndConnect(context, extensionId)
+        await enableSelection(options)
+        await options.evaluate(async () => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          const current = await chrome.runtime.sendMessage({ type: 'wt:get-config' }) as { config: Record<string, unknown> }
+          await chrome.storage.local.set({
+            translationConfig: { ...current.config, autoOrigins: ['https://aistudio.google.com'] },
+          })
+        })
+
+        // 1) 页内边缘定位、连续两次划词、Escape 关闭后慢响应不重开且不抢编辑器焦点
+        const edgeTextA = 'First edge selection sentence held in flight.'
+        const edgeTextB = 'Second consecutive selection sentence wins.'
+        const escapeText = 'Slow selection closed by Escape key press.'
+        await context.route(`${readingUrl()}/edge`, (route) =>
+          route.fulfill({
+            status: 200,
+            contentType: 'text/html; charset=utf-8',
+            body: `<!doctype html><html><body style="margin:0;height:640px;position:relative">
+              <textarea id="editor" style="margin:16px">editor draft</textarea>
+              <p id="sel-a" style="position:fixed;right:4px;bottom:8px;margin:0">${edgeTextA}</p>
+              <p id="sel-b" style="position:fixed;left:16px;bottom:42px;margin:0">${edgeTextB}</p>
+              <p id="sel-esc" style="margin:16px">${escapeText}</p>
+            </body></html>`,
+          }),
+        )
+        const edgePage = await context.newPage()
+        await edgePage.goto(`${readingUrl()}/edge`)
+        await waitForSiteContentReady(options, edgePage, { supported: true, refresh: true })
+        await inspectClosedShadowPage(edgePage)
+
+        const selectionCall = (text: string) => api.calls.find(({ payload }) =>
+          payload.text === text || (Array.isArray(payload.texts) && payload.texts.includes(text)),
+        )
+        api.hold(edgeTextA)
+        await dragText(edgePage, '#sel-a')
+        await expect.poll(() => selectionCall(edgeTextA)).toBeDefined()
+        const panelBox = await edgePage.locator('.panel').boundingBox()
+        expect(panelBox).not.toBeNull()
+        expect(panelBox!.x).toBeGreaterThanOrEqual(0)
+        expect(panelBox!.y).toBeGreaterThanOrEqual(0)
+        expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(961)
+        expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(641)
+
+        // 连续第二次划词：中止第一次并显示第二次结果
+        await dragText(edgePage, '#sel-b')
+        expect(await edgePage.evaluate(() => getSelection()?.toString())).toBe(edgeTextB)
+        await expect.poll(() => selectionCall(edgeTextB)).toBeDefined()
+        await expect(edgePage.locator('.panel-target')).not.toBeEmpty()
+        await expect.poll(() => selectionCall(edgeTextA)?.aborted).toBe(true)
+
+        // Escape 关闭面板且慢响应到达后不能重新打开面板，也不抢走编辑器焦点
+        api.hold(escapeText)
+        await dragText(edgePage, '#sel-esc')
+        await expect(edgePage.locator('.panel')).toBeVisible()
+        await edgePage.locator('#editor').focus()
+        await edgePage.keyboard.press('Escape')
+        await expect(edgePage.locator('.panel')).toBeHidden()
+        expect(await edgePage.evaluate(() => document.activeElement?.id)).toBe('editor')
+        try { api.release(escapeText) } catch { /* 已随 Escape 取消断开 */ }
+        await edgePage.waitForTimeout(200)
+        await expect(edgePage.locator('.panel')).toBeHidden()
+        expect(await edgePage.evaluate(() => document.activeElement?.id)).toBe('editor')
+
+        // 2) 独立翻译窗口：失败保留输入，改写后再次失败仍不清空草稿，点重试发送最新改写文本
+        const textWin = await context.newPage()
+        await textWin.goto(`chrome-extension://${extensionId}/translate.html`)
+        await textWin.locator('[data-test="wt-text-input"]').fill('Initial draft before failure.')
+        api.failNext({ kind: 'status', status: 500 })
+        await textWin.locator('[data-test="wt-text-translate"]').click()
+        await expect(textWin.locator('[data-test="wt-text-error"]')).toBeVisible()
+        await expect(textWin.locator('[data-test="wt-text-input"]')).toHaveValue('Initial draft before failure.')
+        await textWin.locator('[data-test="wt-text-input"]').fill('Edited draft right before retry.')
+        api.failNext({ kind: 'status', status: 500 })
+        await textWin.locator('[data-test="wt-text-translate"]').click()
+        await expect(textWin.locator('[data-test="wt-text-error"]')).toBeVisible()
+        await expect(textWin.locator('[data-test="wt-text-input"]')).toHaveValue('Edited draft right before retry.')
+        await textWin.locator('[data-test="wt-text-retry"]').click()
+        await expect(textWin.locator('[data-test="wt-text-result"]')).toHaveValue('中文译文')
+        await expect(textWin.locator('[data-test="wt-text-input"]')).toHaveValue('Edited draft right before retry.')
+        expect(api.calls.at(-1)?.payload.texts).toEqual(['Edited draft right before retry.'])
+        await textWin.close()
+
+        // 3) 动态页面重绘与 SPA executeScript 调用次数实测记录
+        const worker = context.serviceWorkers()[0]!
+        await worker.evaluate(() => {
+          const g = globalThis as unknown as {
+            __execCount?: number
+            chrome: { scripting: { executeScript: (...args: unknown[]) => Promise<unknown> } }
+          }
+          g.__execCount = 0
+          const orig = g.chrome.scripting.executeScript.bind(g.chrome.scripting)
+          g.chrome.scripting.executeScript = (...args: unknown[]) => {
+            g.__execCount = (g.__execCount ?? 0) + 1
+            return orig(...args)
+          }
+        })
+
+        const itemsHtml = Array.from(
+          { length: 20 },
+          (_, i) => `<p class="dyn-item" style="margin:2px 0;font:13px/1.2 sans-serif">Dynamic dashboard item number ${i} ready.</p>`,
+        ).join('')
+        await context.route('https://aistudio.google.com/perf', (route) =>
+          route.fulfill({
+            status: 200,
+            contentType: 'text/html; charset=utf-8',
+            body: `<!doctype html><html><body><nav id="perf-nav" aria-label="Settings">${itemsHtml}</nav></body></html>`,
+          }),
+        )
+        const perfPage = await context.newPage()
+        const modelCallsStart = api.calls.filter((c) => c.kind === 'texts').length
+        await perfPage.goto('https://aistudio.google.com/perf')
+        await expect(perfPage.locator('#perf-nav')).toHaveAttribute('aria-label', '设置')
+        await expect(perfPage.locator('.dyn-item').last()).toHaveText('中文译文')
+        const initialBatches = api.calls.filter((c) => c.kind === 'texts').length - modelCallsStart
+
+        // 局部重绘 A：10 次修改容器 aria-label，统计 20 个后代文本节点的 nodeValue 读取次数
+        const measurement = await worker.evaluate(async (url) => {
+          const { chrome } = globalThis as unknown as { chrome: FixtureChrome }
+          const [tab] = await chrome.tabs.query({ url })
+          if (tab?.id === undefined) throw new Error('Metrics fixture tab missing')
+          const [injection] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id, frameIds: [0] },
+            world: 'ISOLATED',
+            func: async () => {
+              const nav = document.querySelector('#perf-nav')!
+              const leaves = [...nav.querySelectorAll('.dyn-item')].map((item) => item.firstChild as Text)
+              const descriptor = Object.getOwnPropertyDescriptor(Node.prototype, 'nodeValue')!
+              let reads = 0
+              Object.defineProperty(Node.prototype, 'nodeValue', {
+                ...descriptor,
+                get(this: Node) {
+                  if (leaves.includes(this as Text)) reads += 1
+                  return descriptor.get!.call(this)
+                },
+              })
+              try {
+                // 保留文字并触发引擎的 characterData 观察器，探针自身不读取 nodeValue。
+                const first = leaves[0]!
+                first.replaceData(0, first.length, first.data)
+                for (let i = 0; i < 20 && reads === 0; i++) {
+                  await new Promise((resolve) => setTimeout(resolve, 25))
+                }
+                const positiveControlReads = reads
+                reads = 0
+                for (const label of ['Close', 'Settings', 'Search', 'Filter', 'Refresh', 'Save', 'Cancel', 'Edit', 'Share', 'Close']) {
+                  nav.setAttribute('aria-label', label)
+                  await new Promise((resolve) => setTimeout(resolve, 25))
+                }
+                return { positiveControlReads, attrLeafReads: reads }
+              } finally {
+                Object.defineProperty(Node.prototype, 'nodeValue', descriptor)
+              }
+            },
+          })
+          return injection?.result
+        }, perfPage.url())
+        if (measurement === undefined || measurement === null) throw new Error('Isolated-world read probe returned no result')
+        const { attrLeafReads, positiveControlReads } = measurement
+        expect(positiveControlReads).toBeGreaterThan(0)
+        await expect(perfPage.locator('#perf-nav')).toHaveAttribute('aria-label', '关闭')
+        const callsAfterAttr = api.calls.filter((c) => c.kind === 'texts').length - modelCallsStart - initialBatches
+
+        // 局部重绘 B：网站按相同英文重绘全部 20 段，验证本地重放 0 新增模型请求
+        await perfPage.evaluate(() => {
+          const nav = document.querySelector('#perf-nav')!
+          nav.innerHTML = Array.from(
+            { length: 20 },
+            (_, i) => `<p class="dyn-item" style="margin:2px 0;font:13px/1.2 sans-serif">Dynamic dashboard item number ${i} ready.</p>`,
+          ).join('')
+        })
+        await expect(perfPage.locator('.dyn-item').last()).toHaveText('中文译文')
+        const extraCallsOnRedraw = api.calls.filter((c) => c.kind === 'texts').length - modelCallsStart - initialBatches
+
+        // SPA pushState 2 次路由切换并触发批次，记录 executeScript 次数
+        const execBeforeSpa = await worker.evaluate(() => (globalThis as unknown as { __execCount?: number }).__execCount ?? 0)
+        await perfPage.evaluate(() => {
+          history.pushState(null, '', '/perf-route-1')
+          document.querySelector('#perf-nav')!.insertAdjacentHTML('beforeend', '<p id="spa-1">First SPA route fresh text.</p>')
+        })
+        await expect(perfPage.locator('#spa-1')).toHaveText('中文译文')
+        await perfPage.evaluate(() => {
+          history.pushState(null, '', '/perf-route-2')
+          document.querySelector('#perf-nav')!.insertAdjacentHTML('beforeend', '<p id="spa-2">Second SPA route fresh text.</p>')
+        })
+        await expect(perfPage.locator('#spa-2')).toHaveText('中文译文')
+        const spaExecCalls = (await worker.evaluate(() => (globalThis as unknown as { __execCount?: number }).__execCount ?? 0)) - execBeforeSpa
+
+        expect(attrLeafReads).toBe(0)
+        expect(callsAfterAttr).toBe(0)
+        expect(extraCallsOnRedraw).toBe(0)
+        await writeFile(
+          test.info().outputPath('engine-and-spa-metrics.json'),
+          JSON.stringify({ initialBatches, positiveControlReads, attrLeafReads, callsAfterAttr, extraCallsOnRedraw, spaExecCalls }, null, 2),
+        )
+      } finally {
+        await context.close()
+      }
+    })
   })
 })
 

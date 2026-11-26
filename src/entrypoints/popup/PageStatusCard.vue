@@ -19,25 +19,29 @@
       >
         {{ primaryLabel }}
       </UiButton>
-      <UiButton
-        v-if="canRestoreFixed"
-        variant="invisible"
-        size="sm"
-        :disabled="busy"
-        @click="restore"
-      >
-        {{ t('wtRestore') }}
-      </UiButton>
-      <UiButton
-        variant="invisible"
-        size="sm"
-        :disabled="excludeDisabled"
-        :aria-describedby="excludeDisabled && primaryReason !== '' ? 'wt-primary-reason' : undefined"
-        data-test="wt-exclude-site"
-        @click="excludeSite(!siteExcluded)"
-      >
-        {{ siteExcluded ? t('includePage') : t('wtExcludeSite') }}
-      </UiButton>
+      <div class="popup-card-secondary-actions">
+        <UiButton
+          v-if="canRestoreFixed || (canRestore && canResume)"
+          variant="default"
+          size="sm"
+          :disabled="busy"
+          data-test="wt-restore-page"
+          @click="restore"
+        >
+          {{ t('wtRestore') }}
+        </UiButton>
+        <UiButton
+          class="popup-card-exclude"
+          variant="invisible"
+          size="sm"
+          :disabled="excludeDisabled"
+          :aria-describedby="excludeDisabled && primaryReason !== '' ? 'wt-primary-reason' : undefined"
+          data-test="wt-exclude-site"
+          @click="excludeSite(!siteExcluded)"
+        >
+          {{ siteExcluded ? t('includePage') : t('wtExcludeSite') }}
+        </UiButton>
+      </div>
     </div>
     <div v-if="progress" class="popup-card-progress" data-test="wt-progress">
       <div
@@ -253,6 +257,23 @@ const progressText = computed(() => {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
+}
+
+.popup-card-secondary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.popup-card-secondary-actions :deep(.ui-button) {
+  max-width: 100%;
+}
+
+.popup-card-exclude {
+  margin-left: auto;
 }
 
 .popup-card-progress {

@@ -966,6 +966,44 @@ describe('选项页真实挂载', () => {
     }
   })
 
+  it.each([
+    [CONFIG.baseUrl, true],
+    ['https://api.example.com/other', true],
+    ['https://draft.example.com/v1', false],
+  ] as const)('获取模型授权后，已保存接口按授权范围更新，无需重新聚焦（%s）', async (url, coversSaved) => {
+    const testConnection = vi.fn(() => ({ ok: true, texts: ['ok'] }))
+    replies({
+      'wt:get-config': () => ({ ok: true, config: CONFIG, endpointAuthorized: false }),
+      'wt:list-models': () => ({ ok: true, models: ['m'] }),
+      'wt:test': testConnection,
+    })
+    vi.spyOn(fakeBrowser.permissions, 'request').mockImplementation(async () => true)
+    const wrapper = mount(TranslationSection)
+    try {
+      await flushPromises()
+      const base = wrapper.get('input[placeholder="https://api.example.com/v1"]')
+      const testButton = wrapper.get('[data-test="wt-test-connection"]')
+      expect(testButton.attributes('disabled')).toBeDefined()
+      await base.setValue(url)
+      await wrapper.get('[data-test="wt-fetch-models"]').trigger('click')
+      await flushPromises()
+      await base.setValue(CONFIG.baseUrl)
+      expect(wrapper.get('[data-test="wt-connection"]').text()).toBe(
+        coversSaved ? en.wtConnUntested : en.wtConnUnauthorized,
+      )
+      expect(testButton.attributes('disabled') === undefined).toBe(coversSaved)
+      expect(testConnection).not.toHaveBeenCalled()
+      if (coversSaved) {
+        await testButton.trigger('click')
+        await flushPromises()
+        expect(testConnection).toHaveBeenCalledTimes(1)
+      }
+    } finally {
+      wrapper.unmount()
+      clearToasts()
+    }
+  })
+
   it('获取模型失败（401/权限拒绝）保留全部草稿，非法自定义头展开高级设置且不发权限或网络请求', async () => {
     const sent: Record<string, unknown>[] = []
     replies({
@@ -2475,5 +2513,173 @@ describe('模型引导与连接试译', () => {
     } finally {
       dirty.unmount()
     }
+  })
+
+  describe('弹出页额度触顶恢复区分与设置页障碍指引', () => {
+    it('额度耗尽且有译文时同时提供「恢复本页原文」与「继续翻译」，恢复后显示已恢复原文且不发模型请求', async () => {
+      await settingsItem.setValue({ ...DEFAULT_SETTINGS, uiLanguage: 'en' })
+      let currentStatus: Record<string, unknown> = {
+        supported: true,
+        fixed: false,
+        auto: false,
+        paused: false,
+        capped: true,
+        budgetCapped: true,
+        restored: false,
+        failed: 0,
+        error: '',
+        progress: { spent: 20000, budget: 20000, translated: 5, queued: 0 },
+      }
+      vi.spyOn(fakeBrowser.tabs, 'query').mockResolvedValue([{ id: 9, url: 'https://example.com/article#:~:text=Cap' }] as never)
+      vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockImplementation(async () => ({ ok: true, status: currentStatus }))
+      const sent: Record<string, unknown>[] = []
+      replies({
+        'wt:get-config': () => ({ ok: true, config: CONFIG }),
+        'wt:page-action': (message) => {
+          sent.push(message)
+          if (message.action === 'restore') {
+            currentStatus = { ...currentStatus, paused: true, restored: true }
+          }
+          return { ok: true }
+        },
+        'wt:translate-page': (message) => {
+          sent.push(message)
+          return { ok: true }
+        },
+      })
+      const wrapper = mount(PageStatusCard)
+      try {
+        await flushPromises()
+        await flushPromises()
+        expect(wrapper.get('[data-test="wt-page-state"]').text()).toBe(en.wtAutoCapped)
+        expect(wrapper.get('[data-test="wt-translate-page"]').text()).toBe(en.wtResume)
+        const restoreBtn = wrapper.get('[data-test="wt-restore-page"]')
+        expect(restoreBtn.text()).toBe(en.wtRestore)
+        expect(restoreBtn.classes()).toContain('ui-button-default')
+        expect(wrapper.get('[data-test="wt-exclude-site"]').classes()).toContain('ui-button-invisible')
+        await restoreBtn.trigger('click')
+        await flushPromises()
+        await flushPromises()
+        expect(sent).toEqual([{
+          type: 'wt:page-action',
+          action: 'restore',
+          tabId: 9,
+          url: 'https://example.com/article',
+        }])
+        expect(wrapper.get('[data-test="wt-page-state"]').text()).toBe(en.wtRestored)
+        expect(wrapper.find('[data-test="wt-restore-page"]').exists()).toBe(false)
+        expect(wrapper.get('[data-test="wt-translate-page"]').text()).toBe(en.wtResume)
+      } finally {
+        wrapper.unmount()
+        clearToasts()
+      }
+    })
+
+    it('弹出页识别敏感 hash 路由带文本片段指令及超长文本片段指令', async () => {
+      await settingsItem.setValue({ ...DEFAULT_SETTINGS, uiLanguage: 'en' })
+      vi.spyOn(fakeBrowser.tabs, 'query').mockResolvedValue([
+        { id: 9, url: 'https://app.devin.ai/#/settings/tokens:~:text=secret' },
+      ] as never)
+      vi.spyOn(fakeBrowser.tabs, 'sendMessage').mockResolvedValue({
+        ok: true,
+        status: { supported: true, fixed: false, auto: false, paused: false, capped: false, failed: 0, error: '' },
+      } as never)
+      replies({ 'wt:get-config': () => ({ ok: true, config: CONFIG }) })
+      const sensitiveWrapper = mount(PageStatusCard)
+      try {
+        await flushPromises()
+        await flushPromises()
+        expect(sensitiveWrapper.get('[data-test="wt-page-state"]').text()).toBe(en.wtSensitiveSkipped)
+        expect((sensitiveWrapper.get('[data-test="wt-translate-page"]').element as HTMLButtonElement).disabled).toBe(true)
+      } finally {
+        sensitiveWrapper.unmount()
+      }
+
+      vi.spyOn(fakeBrowser.tabs, 'query').mockResolvedValue([
+        { id: 9, url: `https://example.com/doc#:~:text=${'a'.repeat(9000)}` },
+      ] as never)
+      const hugeWrapper = mount(PageStatusCard)
+      try {
+        await flushPromises()
+        await flushPromises()
+        expect(hugeWrapper.get('[data-test="wt-page-state"]').text()).not.toBe(en.wtUnsupportedPage)
+        expect((hugeWrapper.get('[data-test="wt-translate-page"]').element as HTMLButtonElement).disabled).toBe(false)
+      } finally {
+        hugeWrapper.unmount()
+      }
+    })
+
+    it('设置页区分「未填模型」与「接口未授权」，不自动申请权限，且保存失败保留草稿不泄露密钥', async () => {
+      await settingsItem.setValue({ ...DEFAULT_SETTINGS, uiLanguage: 'en' })
+      const permRequest = vi.spyOn(fakeBrowser.permissions, 'request').mockResolvedValue(true as never)
+
+      // 1) 已填 Base URL 但未填模型
+      replies({
+        'wt:get-config': () => ({
+          ok: true,
+          config: { ...DEFAULT_TRANSLATION_CONFIG, baseUrl: 'https://api.example.com/v1', model: '' },
+          hasKey: true,
+          keyState: 'ready',
+        }),
+      })
+      const missingModel = mount(TranslationSection)
+      try {
+        await flushPromises()
+        await flushPromises()
+        expect(missingModel.get('[data-test="wt-connection"]').text()).toBe(en.wtConnMissingModel)
+        const missingHints = missingModel.findAll('.connection-status .ui-hint')
+        expect(missingHints).toHaveLength(1)
+        expect(missingHints[0]!.text()).toBe(en.wtConnRecoveryMissingModel)
+        const testBtn = missingModel.get('[data-test="wt-test-connection"]')
+        expect(missingModel.get(`#${CSS.escape(testBtn.attributes('aria-describedby') ?? '')}`).text()).toBe(
+          en.wtConnRecoveryMissingModel,
+        )
+        expect(permRequest).not.toHaveBeenCalled()
+      } finally {
+        missingModel.unmount()
+      }
+
+      // 2) 已保存接口与模型，但接口来源未授权 -> 显示未授权并提供显式授权按钮，不自动弹窗
+      replies({
+        'wt:get-config': () => ({
+          ok: true,
+          config: CONFIG,
+          hasKey: true,
+          keyState: 'ready',
+          endpointAuthorized: false,
+        }),
+        'wt:save-config': () => ({ ok: false, error: '存储写入失败' }),
+      })
+      const unauth = mount(TranslationSection)
+      try {
+        await flushPromises()
+        await flushPromises()
+        expect(permRequest).not.toHaveBeenCalled()
+        expect(unauth.get('[data-test="wt-connection"]').text()).toBe(en.wtConnUnauthorized)
+        expect(unauth.text()).toContain(en.wtConnRecoveryUnauthorized)
+        const grantBtn = unauth.get('[data-test="wt-grant-endpoint"]')
+        await grantBtn.trigger('click')
+        await flushPromises()
+        expect(permRequest).toHaveBeenCalledWith({ origins: ['https://api.example.com/*'] })
+        expect(unauth.get('[data-test="wt-connection"]').text()).toBe(en.wtConnUntested)
+
+        // 3) 保存失败保留草稿且绝不暴露密钥
+        const secret = 'sk-super-secret-never-leak-998877'
+        const inputs = unauth.findAll('input')
+        await inputs[0]!.setValue('https://api.deepseek.com')
+        await inputs[1]!.setValue(secret)
+        await unauth.get('[data-test="wt-model-input"]').setValue('deepseek-chat')
+        await unauth.get('[data-test="wt-save"]').trigger('click')
+        await flushPromises()
+        expect((inputs[0]!.element as HTMLInputElement).value).toBe('https://api.deepseek.com')
+        expect((inputs[1]!.element as HTMLInputElement).value).toBe(secret)
+        expect((unauth.get('[data-test="wt-model-input"]').element as HTMLInputElement).value).toBe('deepseek-chat')
+        expect(unauth.text()).not.toContain(secret)
+        expect(JSON.stringify(useToasts().value)).not.toContain(secret)
+      } finally {
+        unauth.unmount()
+        clearToasts()
+      }
+    })
   })
 })

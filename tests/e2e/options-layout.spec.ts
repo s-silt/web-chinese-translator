@@ -34,3 +34,76 @@ test('模型设置在各外观与宽窄视口下正常布局，保存按钮可�
     }
   }
 })
+
+test('英文长文案、200% 缩放与窄窗明暗主题下区分未填模型、接口未授权与保存失败草稿保留', async ({ page, extensionId, extension }) => {
+  test.setTimeout(120_000)
+  const secret = 'sk-never-expose-in-ui-or-toast-991122'
+  await page.goto(`chrome-extension://${extensionId}/options.html#wt-title`)
+  await expect(page.locator('[data-test="wt-model-view"]')).toBeVisible()
+  for (const theme of ['light', 'dark'] as const) {
+    await extension.setSettings({ uiLanguage: 'en', uiStyle: 'classic', theme })
+
+    // 1) 已存 Base URL 但未填模型 -> 显示 Model not set 及下一步说明
+    await page.evaluate(async () => {
+      const { chrome } = globalThis as unknown as {
+        chrome: { storage: { local: { set(items: Record<string, unknown>): Promise<void> } } }
+      }
+      await chrome.storage.local.set({
+        translationConfig: { baseUrl: 'https://api.example.com/v1', model: '', targetLanguage: 'zh-CN' },
+      })
+    })
+    for (const [width, zoom] of [[360, '1'], [640, '1'], [1280, '2']] as const) {
+      await page.setViewportSize({ width, height: 800 })
+      await page.reload()
+      await expect(page.locator('[data-test="wt-model-view"]')).toBeVisible()
+      if (zoom !== '1') {
+        await page.evaluate((z) => {
+          document.documentElement.style.zoom = z
+        }, zoom)
+      }
+      await expect(page.locator('[data-test="wt-connection"]')).toHaveText('Model not set')
+      await expect(page.locator('.connection-status')).toContainText('Enter a model name or click Fetch models, then save.')
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+      expect(overflow).toBeLessThanOrEqual(1)
+    }
+
+    // 2) 已存 Base URL 与模型，但尚未授予该接口主机权限 -> 显示 Endpoint not authorized 与显式授权按钮
+    await page.evaluate(async () => {
+      document.documentElement.style.zoom = '1'
+      const { chrome } = globalThis as unknown as {
+        chrome: { storage: { local: { set(items: Record<string, unknown>): Promise<void> } } }
+      }
+      await chrome.storage.local.set({
+        translationConfig: { baseUrl: 'https://ungranted-api.fixture.test/v1', model: 'gpt-4o-mini', targetLanguage: 'zh-CN' },
+      })
+    })
+    await page.setViewportSize({ width: 360, height: 800 })
+    await page.reload()
+    await expect(page.locator('[data-test="wt-connection"]')).toHaveText('Endpoint not authorized')
+    const grantBtn = page.locator('[data-test="wt-grant-endpoint"]')
+    await expect(grantBtn).toBeVisible()
+    await expect(grantBtn).toHaveText('Authorize endpoint')
+    await page.keyboard.press('Tab')
+    await grantBtn.focus()
+    const focusVisible = await grantBtn.evaluate((el) => {
+      const style = getComputedStyle(el)
+      return (style.outlineStyle !== 'none' && style.outlineWidth !== '0px') || style.boxShadow !== 'none'
+    })
+    expect(focusVisible).toBe(true)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
+    await page.screenshot({ path: test.info().outputPath(`options-unauthorized-en-${theme}-360.png`) })
+
+    // 3) 保存校验失败保留全部草稿，不以纯颜色报错，且不暴露 API Key
+    await page.getByPlaceholder(/api\.example\.com|v1/).fill('http://insecure-non-loopback.example/v1')
+    await page.locator('input[type="password"]').fill(secret)
+    await page.locator('[data-test="wt-model-input"]').fill('draft-model-keep')
+    const save = page.locator('[data-test="wt-save"]')
+    await save.scrollIntoViewIfNeeded()
+    await save.click()
+    await expect(page.locator('[role="alert"], [role="status"]').filter({ hasText: /invalid|value|Enter/i }).first()).toBeVisible()
+    await expect(page.getByPlaceholder(/api\.example\.com|v1/)).toHaveValue('http://insecure-non-loopback.example/v1')
+    await expect(page.locator('input[type="password"]')).toHaveValue(secret)
+    await expect(page.locator('[data-test="wt-model-input"]')).toHaveValue('draft-model-keep')
+    expect(await page.locator('body').innerText()).not.toContain(secret)
+  }
+})

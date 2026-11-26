@@ -111,7 +111,7 @@ test.describe('划词卡片风格', () => {
     throw new Error(`selection mismatch for ${selector}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
   }
 
-  for (const style of ['cyber', 'glass'] as const) {
+  for (const style of STYLES) {
     test(`${style} 卡片 data-style 正确并截图`, async () => {
       const { context, extensionId } = await launch()
       try {
@@ -151,8 +151,14 @@ test.describe('划词卡片风格', () => {
         await page.waitForSelector('#p1')
         await waitForSiteContentReady(options, page, { supported: true, refresh: true })
         await dragText(page, '#p1', PHYSICS)
-        const panel = page.locator(`.panel[data-style="${style}"]`)
+        const panel = page.locator('.panel')
         await expect(panel).toBeVisible()
+        expect(await panel.getAttribute('data-style')).toBe(style === 'classic' ? null : style)
+        await expect(panel.locator('.panel-target')).toHaveText('量子退相干')
+        expect(await panel.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+        for (const token of ['--wt-ink', '--wt-surface']) {
+          expect(await panel.evaluate((el, name) => getComputedStyle(el).getPropertyValue(name).trim(), token)).not.toBe('')
+        }
         // HUD 角标用 background-image 绘制，不得在 overflow:auto 面板上撑出滚动条
         if (style === 'cyber') {
           const scrollbarFree = await panel.evaluate((el) => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight)

@@ -248,6 +248,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   const unitReplayTexts = new Map<string, number>()
   /** 同一时间片内已判过的单元成员：同一段落的其余成员不再重复序列化。 */
   let unitReplaySeen: WeakMap<Text, { source: string; result: ReplayResult }> | undefined
+  /** 同一扫描时间片内已排队或核验有效的行内单元：避免同段多节点重复序列化布局。 */
+  let unitQueuedSeen: WeakSet<InlineUnit> | undefined
   let replayChars = 0
   let replaySlotsNeeded = 0
   let redrawBatch = 0
@@ -488,12 +490,15 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   }
 
   const fixedWrites = new Map<Text, TextReplacement & { parent: Element }>()
+  const fixedRescanBlocks = new Set<Element>()
   let recordCapDeferred = false
 
   function flushFixedWrites(): void {
     const queued = [...fixedWrites.values()]
+    const rescanBlocks = [...fixedRescanBlocks]
     const recheck = recordCapDeferred
     fixedWrites.clear()
+    fixedRescanBlocks.clear()
     recordCapDeferred = false
     if (disposed || suspended || !options.fixedEnabled()) return
     const changes = queued.filter(({ node, source, parent }) =>
@@ -510,6 +515,12 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     // 字符上限不能挡住本地词典；被暂存占位跳过的候选也需要重扫。
     if (recheck && retainedRecordCount() < recordBudget && !disposed && !suspended && document.body !== null) {
       scanner.queue(document.body)
+      return
+    }
+    if (rescanBlocks.length > 0 && autoActive()) {
+      for (const block of rescanBlocks) {
+        if (block.isConnected && !isExcludedElement(block)) scanner.queue(block)
+      }
     }
   }
 
@@ -530,6 +541,14 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       return 0
     }
     fixedWrites.set(node, { node, source, translated, parent })
+    const anchored = unitMembers.get(node)
+    if (anchored?.unit !== undefined) {
+      const block = anchored.unit.block
+      clearUnit(anchored)
+      if (pending.get(anchored.node) === anchored) pending.delete(anchored.node)
+      unitQueuedSeen = undefined
+      fixedRescanBlocks.add(block)
+    }
     return 1
   }
 
@@ -610,6 +629,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     isExcluded: (el: Element) => isExcludedElement(el) || !isVisible(el),
     isFrozen: (text: Text) =>
       records.has(text) ||
+      fixedWrites.has(text) ||
       ownership.ownerOf(text) === 'github' ||
       wasRejected(text, textValue(text)) ||
       failedItems.get(text) === textValue(text),
@@ -682,7 +702,11 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     // 行内单元：该节点已属于 pending/在途单元 → 快照仍有效则不再排队；失效则清理并重建
     const anchored = unitMembers.get(node)
     if (anchored?.unit !== undefined) {
-      if (unitCurrent(anchored.unit)) return
+      if (unitQueuedSeen?.has(anchored.unit) || unitCurrent(anchored.unit)) {
+        unitQueuedSeen ??= new WeakSet()
+        unitQueuedSeen.add(anchored.unit)
+        return
+      }
       clearUnit(anchored)
       if (pending.get(anchored.node) === anchored) pending.delete(anchored.node)
     }
@@ -715,6 +739,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       }
       pending.set(anchor, entry)
       for (const member of unit.nodes) unitMembers.set(member, entry)
+      unitQueuedSeen ??= new WeakSet()
+      unitQueuedSeen.add(unit)
       scheduleFlush()
       return
     }
@@ -876,6 +902,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     viewportPending.clear()
     intersectingDeferred.clear()
     unitMembers = new WeakMap()
+    unitQueuedSeen = undefined
+    fixedRescanBlocks.clear()
     observationOverflow = false
     pendingOverflow = false
     if (viewportTimer !== undefined) {
@@ -916,7 +944,15 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       if (entry.readyAt > now) continue
       const state = liveEntry(entry)
       if (state === 'dead') {
+        const staleUnitBlock =
+          entry.unit !== undefined &&
+          entry.unit.block.isConnected &&
+          !isExcludedElement(entry.unit.block) &&
+          !unitCurrent(entry.unit)
+            ? entry.unit.block
+            : undefined
         dropEntry(entry.node)
+        if (staleUnitBlock !== undefined && autoActive()) scanner.queue(staleUnitBlock)
         continue
       }
       if (state === 'hidden') {
@@ -1370,6 +1406,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   const scanner: DomScanner = createDomScanner({
     flushWrites() {
       unitReplaySeen = undefined
+      unitQueuedSeen = undefined
       flushFixedWrites()
     },
     visitText(node) {
@@ -1400,12 +1437,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     visitElement(node) {
       if (disposed || suspended) return 0
       if (!node.isConnected) return 0
-      // 发现的 open shadow root 同样进 MutationObserver；host 排除时不进（walker 已挡）
-      const shadow = node.shadowRoot
-      if (shadow !== null && !isExcludedElement(node) && !observedShadows.has(shadow)) {
-        observedShadows.add(shadow)
-        observer.observe(shadow, OBSERVER_INIT)
-      }
+      observeNewShadow(node)
       return applyFixedAttributes(node)
     },
   })
@@ -1502,20 +1534,33 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     attributeFilter: [...ATTR_WATCH, ...FIXED_ATTRIBUTES],
   }
   let observedShadows = new WeakSet<ShadowRoot>()
+  function observeNewShadow(host: Element): ShadowRoot | undefined {
+    const shadow = host.shadowRoot
+    if (shadow === null || observedShadows.has(shadow) || !host.isConnected || isExcludedElement(host)) return
+    observer.observe(shadow, OBSERVER_INIT)
+    observedShadows.add(shadow)
+    return shadow
+  }
+
   const observer = new MutationObserver((mutations) => {
     syncPageIdentity()
     if (suspended || disposed) return
     const roots = new Set<Node>()
+    const fixedAttrTargets = new Set<Element>()
     let removed = false
     let inspected = 0
     const started = performance.now()
     const fullScan = (): void => {
       removed = true
       roots.clear()
+      fixedAttrTargets.clear()
       if (document.body !== null) roots.add(document.body)
     }
     mutationLoop:
     for (const mutation of mutations) {
+      if (mutation.target instanceof Element && mutation.target.closest('[data-wt-root]') !== null) {
+        continue
+      }
       if (++inspected > 200 || performance.now() - started >= 4) {
         fullScan()
         break
@@ -1523,6 +1568,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       if (mutation.type === 'childList') {
         removed ||= mutation.removedNodes.length > 0
         for (const added of mutation.addedNodes) {
+          if (added instanceof Element && added.closest('[data-wt-root]') !== null) continue
           if (++inspected > 200 || performance.now() - started >= 4) {
             fullScan()
             break mutationLoop
@@ -1531,6 +1577,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
         }
       } else if (mutation.type === 'characterData' && mutation.target instanceof Text) {
         const node = mutation.target
+        if (node.parentElement?.closest('[data-wt-root]')) continue
         if (isOwnTextWrite(node)) continue
         const record = records.get(node)
         if (record !== undefined) {
@@ -1547,15 +1594,24 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       } else if (mutation.type === 'attributes' && mutation.target instanceof Element) {
         const element = mutation.target
         if (mutation.attributeName !== null && FIXED_ATTRIBUTES.includes(mutation.attributeName)) {
+          const shadow = observeNewShadow(element)
+          if (shadow !== undefined) roots.add(shadow)
           const record = attrRecords.get(element)?.get(mutation.attributeName)
           if (record !== undefined && element.getAttribute(mutation.attributeName) === record.applied) continue
           releaseStaleAttributes(element)
+          fixedAttrTargets.add(element)
+          continue
         }
         if (!rootsContain(roots, element)) roots.add(element)
       }
     }
     if (removed) scheduleCleanup()
     if (roots.size > 0) redrawBatch += 1
+    for (const element of fixedAttrTargets) {
+      if (!element.isConnected || rootsContain(roots, element)) continue
+      if (isExcludedElement(element) && !canTranslateFixedFormAttributes(element)) continue
+      applyFixedAttributes(element)
+    }
     for (const root of roots) {
       if (root instanceof Element && root.closest('[data-wt-root]') !== null) continue
       if (root instanceof Element && isExcludedElement(root) && !canTranslateFixedFormAttributes(root)) continue

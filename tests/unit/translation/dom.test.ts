@@ -2823,6 +2823,75 @@ describe('行内单元快照失效矩阵', () => {
 })
 
 describe('Shadow 单元与排除', () => {
+  it('已翻译文本移入开放 ShadowRoot 后被改写，会释放旧译文记录', async () => {
+    const host = document.body.appendChild(document.createElement('div'))
+    const shadow = host.attachShadow({ mode: 'open' })
+    const paragraph = document.body.appendChild(document.createElement('p'))
+    const text = paragraph.appendChild(document.createTextNode('Previously translated paragraph.'))
+    engine = makeEngine({ auto: true })
+    engine.start()
+    await settle(300)
+    expect(batches[0]?.texts).toEqual(['Previously translated paragraph.'])
+    batches[0]!.apply(['先前已译的段落。'])
+    await settle()
+
+    shadow.append(text)
+    await settle()
+    expect(text.parentElement).toBeNull()
+    expect(engine.progress().translated).toBe(1)
+    text.data = 'A new paragraph written by the page.'
+    await settle()
+    expect(engine.progress().translated).toBe(0)
+
+    paragraph.append(text)
+    await settle(300)
+    expect(batches[1]?.texts).toEqual(['A new paragraph written by the page.'])
+    batches[1]!.apply(['新的段落。'])
+    await settle()
+    engine.restore()
+    expect(text.data).toBe('A new paragraph written by the page.')
+  })
+
+  it('宿主只改标题时发现新开放 ShadowRoot，持续观察它且不重扫普通后代', async () => {
+    const host = document.body.appendChild(document.createElement('section'))
+    const excluded = document.body.appendChild(document.createElement('section'))
+    excluded.setAttribute('data-sensitive', '')
+    const light = host.appendChild(document.createElement('p')).appendChild(document.createTextNode('Light DOM paragraph.'))
+    engine = makeEngine({ auto: true })
+    engine.start()
+    await settle(300)
+    expect(batches[0]?.texts).toEqual(['Light DOM paragraph.'])
+    batches[0]!.apply(['普通段落。'])
+    await settle()
+    const readLight = vi.spyOn(light, 'nodeValue', 'get')
+    expect(light.nodeValue).toBe('普通段落。')
+    expect(readLight).toHaveBeenCalledOnce()
+    readLight.mockClear()
+
+    const shadow = host.attachShadow({ mode: 'open' })
+    const paragraph = shadow.appendChild(document.createElement('p'))
+    paragraph.textContent = 'A newly mounted shadow paragraph.'
+    excluded.attachShadow({ mode: 'open' }).innerHTML = '<p>Excluded shadow paragraph.</p>'
+    excluded.setAttribute('aria-label', 'Settings')
+    host.setAttribute('title', 'Settings')
+    await settle(300)
+    expect(batches[1]?.texts).toEqual(['A newly mounted shadow paragraph.'])
+    batches[1]!.apply(['新挂载的段落。'])
+    await settle()
+    expect(paragraph.textContent).toBe('新挂载的段落。')
+    expect(readLight).not.toHaveBeenCalled()
+
+    const readShadow = vi.spyOn(paragraph.firstChild!, 'nodeValue', 'get')
+    host.setAttribute('title', 'Close')
+    await settle()
+    expect(readShadow).not.toHaveBeenCalled()
+    expect(readLight).not.toHaveBeenCalled()
+
+    paragraph.firstChild!.nodeValue = 'Updated inside the shadow tree.'
+    await settle(300)
+    expect(batches[2]?.texts).toEqual(['Updated inside the shadow tree.'])
+  })
+
   function shadowPara(): { host: HTMLElement; getP: () => HTMLElement | null } {
     const host = document.createElement('div')
     host.id = 'sh'
@@ -3139,5 +3208,73 @@ describe('翻译进度', () => {
     await settle()
     engine.resetBudget()
     expect(engine.progress()).toEqual({ spent: 0, budget: 20, translated: 2, queued: 0 })
+  })
+})
+
+describe('动态网页行内句固定词库协同与局部重绘扫描优化', () => {
+  it('含固定词库链接的行内句完整翻译并保留链接结构，网站改写原文后恢复不回写旧文本', async () => {
+    document.body.innerHTML = '<p id="line">Open <a id="lnk" href="/settings">Settings</a> to continue.</p>'
+    const linkBefore = document.querySelector('#lnk')!
+    engine = makeEngine({ fixed: true, auto: true })
+    engine.start()
+    await settle(600)
+
+    expect(batches).toHaveLength(1)
+    batches[0]!.apply([batches[0]!.texts[0]!.replace('Open ', '打开').replace(' to continue.', '以继续。')])
+    await settle(200)
+
+    const paragraph = document.querySelector('#line')!
+    expect(paragraph.querySelector('#lnk')).toBe(linkBefore)
+    expect(paragraph.querySelector('#lnk')?.getAttribute('href')).toBe('/settings')
+    expect(paragraph.textContent).toContain('打开')
+    expect(paragraph.textContent).toContain('以继续。')
+
+    // 恢复时保留原有 <a> 节点结构
+    engine.restore()
+    expect(paragraph.querySelector('#lnk')).toBe(linkBefore)
+    expect(paragraph.textContent).toBe('Open Settings to continue.')
+
+    // 重新翻译后，网站把链接文字 A ("Settings") 改成新原文 B ("Billing")，恢复不能把旧 A 写回去
+    engine.start()
+    await settle(600)
+    for (const batch of batches.splice(0)) {
+      batch.apply(batch.texts.map((t) => t.replace('Open ', '打开').replace(' to continue.', '以继续。')))
+    }
+    await settle(200)
+    linkBefore.firstChild!.nodeValue = 'Billing'
+    await settle(50)
+    engine.restore()
+    expect(linkBefore.textContent).toBe('Billing')
+  })
+
+  it('容器发生 FIXED_ATTRIBUTES 属性变更时只更新容器属性，不重扫整个后代子树', async () => {
+    const items = Array.from({ length: 15 }, (_, i) => `<p class="leaf">Translated item ${i} here.</p>`).join('')
+    document.body.innerHTML = `<nav id="panel" aria-label="Settings">${items}</nav>`
+    engine = makeEngine({ fixed: true, auto: true })
+    engine.start()
+    await settle(600)
+    for (const batch of batches.splice(0)) {
+      batch.apply(batch.texts.map((_, i) => `条目译文 ${i}`))
+    }
+    await settle(200)
+
+    const panel = document.querySelector('#panel')!
+    expect(panel.getAttribute('aria-label')).toBe('设置')
+    const leaves = [...panel.querySelectorAll('.leaf')].map((el) => el.firstChild as Text)
+    let leafReads = 0
+    const proto = Object.getOwnPropertyDescriptor(Node.prototype, 'nodeValue')!
+    const spy = vi.spyOn(Node.prototype, 'nodeValue', 'get').mockImplementation(function (this: Node) {
+      if (leaves.includes(this as Text)) leafReads += 1
+      return proto.get!.call(this)
+    })
+    try {
+      panel.setAttribute('aria-label', 'Close')
+      await settle(300)
+      expect(panel.getAttribute('aria-label')).toBe('关闭')
+      expect(leafReads).toBe(0)
+      expect(batches).toHaveLength(0)
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
