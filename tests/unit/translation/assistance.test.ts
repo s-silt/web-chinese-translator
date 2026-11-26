@@ -62,6 +62,8 @@ beforeEach(() => {
   sent.length = 0
   deferred.clear()
   document.body.innerHTML = ''
+  // 这些用例验证选区和面板生命周期，固定 DOM 扫描时钟，避免机器负载耗尽 8 ms 预算。
+  vi.spyOn(performance, 'now').mockReturnValue(0)
   restoreShadowCapture = installShadowRootCapture()
   vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(
     () => [{ x: 0, y: 0, width: 10, height: 10, top: 0, left: 0, right: 10, bottom: 10 }] as never,
@@ -144,6 +146,22 @@ describe('assistance', () => {
     deferred.get(id)!({ ok: true, texts: ['译文'] })
     await Promise.resolve()
     expect(panel!.isOpen()).toBe(false)
+  })
+
+  it('右键确认的文字来自临时通知时，通知消失后仍展示同页译文', async () => {
+    document.body.innerHTML = '<div role="alert">Please try again.</div>'
+    const notice = document.querySelector('[role="alert"]')!
+    const range = document.createRange()
+    range.selectNodeContents(notice)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const assist = start()
+    assist.literal('Please try again.', undefined, undefined, 'menu-ticket')
+    notice.remove()
+    deferred.get(sent.at(-1)!.requestId!)!({ ok: true, texts: ['请重试。'] })
+    await Promise.resolve()
+    expect(rootShadow()?.querySelector('.panel-target')?.textContent).toBe('请重试。')
   })
 
   it('revisit 智能候选发射 wt:assist 并在点击后展示答案', async () => {
