@@ -5993,7 +5993,7 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
             body: `<!doctype html><html><body style="margin:0;height:640px;position:relative">
               <textarea id="editor" style="margin:16px">editor draft</textarea>
               <p id="sel-a" style="position:fixed;right:4px;bottom:8px;margin:0">${edgeTextA}</p>
-              <p id="sel-b" style="position:fixed;right:4px;bottom:42px;margin:0">${edgeTextB}</p>
+              <p id="sel-b" style="position:fixed;left:16px;bottom:42px;margin:0">${edgeTextB}</p>
               <p id="sel-esc" style="margin:16px">${escapeText}</p>
             </body></html>`,
           }),
@@ -6003,9 +6003,12 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
         await waitForSiteContentReady(options, edgePage, { supported: true, refresh: true })
         await inspectClosedShadowPage(edgePage)
 
+        const selectionCall = (text: string) => api.calls.find(({ payload }) =>
+          payload.text === text || (Array.isArray(payload.texts) && payload.texts.includes(text)),
+        )
         api.hold(edgeTextA)
         await dragText(edgePage, '#sel-a')
-        await expect.poll(() => api.calls.some((c) => c.payload.text === edgeTextA || (c.payload.texts as string[] | undefined)?.includes(edgeTextA))).toBe(true)
+        await expect.poll(() => selectionCall(edgeTextA)).toBeDefined()
         const panelBox = await edgePage.locator('.panel').boundingBox()
         expect(panelBox).not.toBeNull()
         expect(panelBox!.x).toBeGreaterThanOrEqual(0)
@@ -6015,9 +6018,10 @@ window.addEventListener('pageshow',e=>window.fixturePersisted=e.persisted);</scr
 
         // 连续第二次划词：中止第一次并显示第二次结果
         await dragText(edgePage, '#sel-b')
+        expect(await edgePage.evaluate(() => getSelection()?.toString())).toBe(edgeTextB)
+        await expect.poll(() => selectionCall(edgeTextB)).toBeDefined()
         await expect(edgePage.locator('.panel-target')).not.toBeEmpty()
-        const firstHeldCall = api.calls.find((c) => c.payload.text === edgeTextA || (c.payload.texts as string[] | undefined)?.includes(edgeTextA))!
-        await expect.poll(() => firstHeldCall.aborted).toBe(true)
+        await expect.poll(() => selectionCall(edgeTextA)?.aborted).toBe(true)
 
         // Escape 关闭面板且慢响应到达后不能重新打开面板，也不抢走编辑器焦点
         api.hold(escapeText)
