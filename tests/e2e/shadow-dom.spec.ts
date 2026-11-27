@@ -8,6 +8,7 @@ interface EngineProbe {
   records: number
   deliveries: number
   callbackMs: number
+  maxCallbackMs: number
   measuring: boolean
 }
 declare global {
@@ -21,7 +22,7 @@ test('已连接宿主仅改自定义属性时发现延迟的开放 Shadow DOM，
   const origin = 'https://shadow-fixture.devin.ai'
   const endpoint = 'https://mock-shadow.devin.ai'
   const ungranted = 'https://shadow-fixture.test'
-  const requests: Array<{ receivedAt: number; texts: string[] }> = []
+  const requests: Array<{ texts: string[]; body: string }> = []
   const body = `<!doctype html><meta charset="utf-8"><div id="first"></div><div id="other"></div><div id="closed"></div>
     <nav id="noise" style="display:grid;grid-template-columns:repeat(16,1fr)">${'<p style="margin:0">已有中文。</p>'.repeat(64)}</nav>
     <p id="signal">Initial scan complete.</p>`
@@ -31,11 +32,12 @@ test('已连接宿主仅改自定义属性时发现延迟的开放 Shadow DOM，
       const payload = route.request().postDataJSON() as { messages: Array<{ content: string }> }
       const input = JSON.parse(payload.messages[1]!.content) as string[] | { texts: string[] }
       const texts = Array.isArray(input) ? input : input.texts
-      requests.push({ receivedAt: Date.now(), texts })
+      requests.push({ texts, body: route.request().postData()! })
       return route.fulfill({ json: { choices: [{ message: { content: JSON.stringify(texts.map(() => '测试译文')) } }] } })
     }
     if (url.origin === origin || url.origin === ungranted) {
-      return route.fulfill({ contentType: 'text/html', body })
+      const html = url.pathname === '/boundary-control' ? body.replace('Initial scan complete.', 'Boundary control initialized.') : body
+      return route.fulfill({ contentType: 'text/html', body: html })
     }
     return route.abort()
   })
@@ -60,7 +62,7 @@ test('已连接宿主仅改自定义属性时发现延迟的开放 Shadow DOM，
     await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] }, world: 'ISOLATED',
       func: () => {
-        const probe = { observers: 0, reads: 0, deliveries: 0, records: 0, callbackMs: 0, measuring: false }
+        const probe = { observers: 0, reads: 0, deliveries: 0, records: 0, callbackMs: 0, maxCallbackMs: 0, measuring: false }
         window.__shadowReviewProbe = probe
         const leaves = new Set(Array.from(document.querySelectorAll('#noise p'), element => element.firstChild))
         const value = Object.getOwnPropertyDescriptor(Node.prototype, 'nodeValue')!
@@ -78,7 +80,9 @@ test('已连接宿主仅改自定义属性时发现延迟的开放 Shadow DOM，
               if (!probe.measuring || !engines.has(observer)) return callback(records, observer)
               const start = performance.now()
               try { callback(records, observer) } finally {
-                probe.callbackMs += performance.now() - start
+                const duration = performance.now() - start
+                probe.callbackMs += duration
+                probe.maxCallbackMs = Math.max(probe.maxCallbackMs, duration)
                 probe.deliveries++
                 probe.records += records.length
               }
@@ -103,51 +107,66 @@ test('已连接宿主仅改自定义属性时发现延迟的开放 Shadow DOM，
   expect(await setAuto(origin)).toMatchObject({ ok: true })
   await expect(page.locator('#signal')).toHaveText('测试译文')
 
-  const perfRequestsStart = requests.length
-  const perf = await worker.evaluate(async tabId => {
+  const controlStart = requests.length
+  await worker.evaluate(async tabId => {
     const { chrome } = globalThis as unknown as { chrome: ExtensionApi }
-    const [measured] = await chrome.scripting.executeScript({
+    await chrome.scripting.executeScript({
       target: { tabId, frameIds: [0] }, world: 'ISOLATED',
-      func: async () => {
-        const probe = window.__shadowReviewProbe
-        const nav = document.querySelector('#noise')!
-        const leaves = Array.from(nav.children)
-        const first = leaves[0]!.firstChild as Text
-        const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
-        probe.reads = 0
+      func: () => {
+        window.__shadowReviewProbe.reads = 0
+        const first = document.querySelector('#noise p')!.firstChild as Text
         first.data = 'Positive read and request control.'
-        for (let i = 0; i < 120 && first.data !== '测试译文'; i++) await wait(25)
-        const control = { translated: first.data === '测试译文', reads: probe.reads, observers: probe.observers }
-        await wait(250)
-        let observedWrites = 0
-        const meter = new MutationObserver(items => { observedWrites += items.length })
-        meter.observe(nav, { attributes: true, subtree: true, attributeFilter: ['data-count', 'vendor-phase'] })
-        probe.reads = 0
-        probe.measuring = true
-        const noiseStart = Date.now()
-        const started = performance.now()
-        for (let batch = 0; batch < 30; batch++) {
-          for (const element of leaves) {
-            element.setAttribute('data-count', String(batch))
-            nav.setAttribute('vendor-phase', String(batch))
-          }
-          await wait(4)
-        }
-        const elapsedMs = performance.now() - started
-        await wait(300)
-        probe.measuring = false
-        meter.disconnect()
-        return { control, noiseStart, observedWrites, elapsedMs, reads: probe.reads, deliveries: probe.deliveries, records: probe.records, callbackMs: probe.callbackMs }
       },
     })
-    return measured?.result
   }, tabId)
-  expect(perf).toBeDefined()
-  const perfRequests = requests.slice(perfRequestsStart)
-  const controlRequests = perfRequests.filter(r => r.receivedAt < perf!.noiseStart).map(r => r.texts)
-  const noiseRequests = perfRequests.filter(r => r.receivedAt >= perf!.noiseStart).map(r => r.texts)
-  const boundaries: Record<string, string | null> = {}
-  for (const [label, url] of [['sensitive', origin + '/account'], ['noGrant', ungranted + '/article']] as const) {
+  await expect(page.locator('#noise p').first()).toHaveText('测试译文')
+  const controlRequests = requests.slice(controlStart).map(r => r.texts)
+  const measureNoise = async (mode: 'batched' | 'synchronous') => {
+    const start = requests.length
+    const result = await worker.evaluate(async ({ tabId, mode }) => {
+      const { chrome } = globalThis as unknown as { chrome: ExtensionApi }
+      const [measured] = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [0] }, world: 'ISOLATED', args: [mode],
+        func: async mode => {
+          const probe = window.__shadowReviewProbe
+          const nav = document.querySelector('#noise')!
+          const leaves = Array.from(nav.children)
+          const first = leaves[0]!.firstChild as Text
+          const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+          const control = { translated: first.data === '测试译文', reads: probe.reads, observers: probe.observers }
+          let observedWrites = 0
+          const meter = new MutationObserver(items => { observedWrites += items.length })
+          meter.observe(nav, { attributes: true, subtree: true, attributeFilter: ['data-count', 'vendor-phase'] })
+          probe.reads = 0
+          probe.deliveries = 0
+          probe.records = 0
+          probe.callbackMs = 0
+          probe.maxCallbackMs = 0
+          probe.measuring = true
+          const started = performance.now()
+          for (let batch = 0; batch < 30; batch++) {
+            for (const element of leaves) {
+              element.setAttribute('data-count', String(batch))
+              nav.setAttribute('vendor-phase', String(batch))
+            }
+            if (mode === 'batched') await wait(4)
+          }
+          const elapsedMs = performance.now() - started
+          await wait(300)
+          probe.measuring = false
+          meter.disconnect()
+          return { control, observedWrites, elapsedMs, reads: probe.reads, deliveries: probe.deliveries, records: probe.records, callbackMs: probe.callbackMs, maxCallbackMs: probe.maxCallbackMs }
+        },
+      })
+      return measured?.result
+    }, { tabId, mode })
+    if (!result) throw new Error('Missing isolated-world measurements')
+    return { ...result, noiseRequests: requests.slice(start).map(r => r.texts) }
+  }
+  const perf = await measureNoise('batched')
+  const syncPerf = await measureNoise('synchronous')
+  const privatePages = new Map<string, typeof page>()
+  for (const [label, url] of [['sensitive', origin + '/account'], ['noGrant', ungranted + '/article'], ['positive', origin + '/boundary-control']] as const) {
     if (label === 'noGrant') {
       expect(await options.evaluate(async site => {
         const { chrome } = globalThis as unknown as { chrome: ExtensionApi }
@@ -155,18 +174,22 @@ test('已连接宿主仅改自定义属性时发现延迟的开放 Shadow DOM，
       }, ungranted)).toBe(false)
       expect(await setAuto(ungranted)).toMatchObject({ ok: false })
     }
-    const excluded = await context.newPage()
-    await excluded.goto(url)
-    await excluded.evaluate(name => {
+    const boundaryPage = await context.newPage()
+    await boundaryPage.goto(url)
+    if (label === 'positive') await expect(boundaryPage.locator('#signal')).toHaveText('测试译文')
+    await boundaryPage.evaluate(text => {
       const host = document.querySelector('#first')!
       const leaf = document.createElement('p')
-      leaf.textContent = 'Private marker ' + name
+      leaf.textContent = text
       host.attachShadow({ mode: 'open' }).append(leaf)
       host.setAttribute('data-state', 'ready')
-    }, label)
-    await excluded.waitForTimeout(600)
-    boundaries[label] = await excluded.locator('#first p').textContent()
-    await excluded.close()
+    }, label === 'positive' ? 'Boundary control shadow text.' : 'Private marker ' + label)
+    if (label === 'positive') {
+      await expect(boundaryPage.locator('#first p')).toHaveText('测试译文')
+      expect(requests.flatMap(r => r.texts)).toEqual(expect.arrayContaining(['Boundary control initialized.', 'Boundary control shadow text.']))
+    } else {
+      privatePages.set(label, boundaryPage)
+    }
   }
   await page.bringToFront()
   await page.evaluate(() => {
@@ -189,7 +212,7 @@ test('已连接宿主仅改自定义属性时发现延迟的开放 Shadow DOM，
     host.setAttribute('data-state', 'ready')
   })
   const waitTranslated = async (selector: string) => {
-    await page.locator(selector).filter({ hasText: /^测试译文$/ }).waitFor({ timeout: 2500 }).catch(() => {})
+    await expect(page.locator(selector)).toHaveText('测试译文')
     return page.locator(selector).textContent()
   }
   const outer = await waitTranslated('#first p')
@@ -208,15 +231,18 @@ test('已连接宿主仅改自定义属性时发现延迟的开放 Shadow DOM，
     text: window.__closedReviewText.data,
     hidden: document.querySelector('#closed')!.shadowRoot === null,
   }))
-  const measured = { outer, other, nested, updated, closed, boundaries, perf, controlRequests, noiseRequests, requests }
+  const boundaries: Record<string, string | null> = {}
+  for (const [label, privatePage] of privatePages) boundaries[label] = await privatePage.locator('#first p').textContent()
+  const measured = { outer, other, nested, updated, closed, boundaries, perf, syncPerf, controlRequests, noiseRequests: perf.noiseRequests, requests }
   await writeFile(info.outputPath('shadow-review.json'), JSON.stringify(measured, null, 2))
   expect(measured).toMatchObject({
     outer: '测试译文', other: '测试译文', nested: '测试译文', updated: '测试译文', closed: { text: 'Private marker closed', hidden: true },
     boundaries: { sensitive: 'Private marker sensitive', noGrant: 'Private marker noGrant' },
-    perf: { observedWrites: 3840, reads: 0, control: { translated: true } },
+    perf: { observedWrites: 3840, records: 3840, reads: 0, control: { translated: true } },
+    syncPerf: { observedWrites: 3840, records: 3840, deliveries: 1, reads: 0, noiseRequests: [] },
     controlRequests: [['Positive read and request control.']], noiseRequests: [],
   })
-  expect(perf!.control.reads).toBeGreaterThan(0)
-  expect(perf!.control.observers).toBeGreaterThan(0)
-  expect(requests.flatMap(r => r.texts)).not.toContainEqual(expect.stringContaining('Private marker'))
+  expect(perf.control.reads).toBeGreaterThan(0)
+  expect(perf.control.observers).toBeGreaterThan(0)
+  for (const request of requests) expect(request.body).not.toContain('Private marker')
 })

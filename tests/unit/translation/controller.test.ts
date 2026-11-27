@@ -602,9 +602,12 @@ describe('controller 自动翻译失败处理', () => {
   })
 
   it('瞬时失败耗尽重试后才暂停并显示错误', async () => {
+    // 两次重试分别等待 500、1000 毫秒，600 毫秒处仍处于首轮退避。
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
     const failure = { ok: false, error: '模型服务暂时不可用，请稍后重试', code: 'server' }
     const page = await runWith([failure, failure, failure])
     await settle(600)
+    expect(page.translates()).toBe(1)
     expect(await page.status()).toMatchObject({ paused: false, error: '' })
     await settle(10_000)
     expect(page.translates()).toBe(3)
