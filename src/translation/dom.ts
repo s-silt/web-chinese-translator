@@ -161,7 +161,10 @@ const MAX_BAD_OUTPUT_TRIES = 2
 const MAX_FAILED_STREAK = 8
 const DEFAULT_BUDGET = 20000
 const MAX_TRACKED_NODES = 2048
-const ATTR_WATCH = ['style', 'class', 'hidden', 'aria-hidden', 'contenteditable', 'translate', 'open', 'role', 'onclick']
+const TRANSLATION_ATTRIBUTES = new Set([
+  'style', 'class', 'hidden', 'aria-hidden', 'contenteditable', 'translate', 'open', 'role', 'onclick',
+  ...FIXED_ATTRIBUTES,
+])
 const RESIZE_SCAN_MS = 400
 const VIEWPORT_SCAN_MS = 200
 const VISIBILITY_RETRY_MS = 120
@@ -1531,7 +1534,6 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     subtree: true,
     characterData: true,
     attributes: true,
-    attributeFilter: [...ATTR_WATCH, ...FIXED_ATTRIBUTES],
   }
   let observedShadows = new WeakSet<ShadowRoot>()
   function observeNewShadow(host: Element): ShadowRoot | undefined {
@@ -1543,9 +1545,20 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   }
 
   const observer = new MutationObserver((mutations) => {
-    syncPageIdentity()
     if (suspended || disposed) return
     const roots = new Set<Node>()
+    // attachShadow 本身不通知宿主。自定义属性仅用来发现新根，不计入正文重扫的条数和时间预算。
+    const translationMutations = mutations.filter((mutation) => {
+      if (mutation.attributeName === null) return true
+      if (mutation.attributeNamespace === null && TRANSLATION_ATTRIBUTES.has(mutation.attributeName)) return true
+      if (mutation.target instanceof Element) {
+        const shadow = observeNewShadow(mutation.target)
+        if (shadow !== undefined) roots.add(shadow)
+      }
+      return false
+    })
+    if (translationMutations.length === 0 && roots.size === 0) return
+    syncPageIdentity()
     const fixedAttrTargets = new Set<Element>()
     let removed = false
     let inspected = 0
@@ -1557,7 +1570,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       if (document.body !== null) roots.add(document.body)
     }
     mutationLoop:
-    for (const mutation of mutations) {
+    for (const mutation of translationMutations) {
       if (mutation.target instanceof Element && mutation.target.closest('[data-wt-root]') !== null) {
         continue
       }

@@ -2852,12 +2852,16 @@ describe('Shadow 单元与排除', () => {
     expect(text.data).toBe('A new paragraph written by the page.')
   })
 
-  it('宿主只改标题时发现新开放 ShadowRoot，持续观察它且不重扫普通后代', async () => {
+  it.each(['title', 'data-component-state'])('宿主只改 %s 时发现新开放 ShadowRoot，持续观察嵌套根且不重扫旧内容', async (attribute) => {
     const host = document.body.appendChild(document.createElement('section'))
+    host.setAttribute('role', 'navigation')
     const excluded = document.body.appendChild(document.createElement('section'))
     excluded.setAttribute('data-sensitive', '')
+    const owned = document.body.appendChild(document.createElement('section'))
+    owned.setAttribute('data-wt-root', '')
+    const closed = document.body.appendChild(document.createElement('section'))
     const light = host.appendChild(document.createElement('p')).appendChild(document.createTextNode('Light DOM paragraph.'))
-    engine = makeEngine({ auto: true })
+    engine = makeEngine({ fixed: true, auto: true })
     engine.start()
     await settle(300)
     expect(batches[0]?.texts).toEqual(['Light DOM paragraph.'])
@@ -2869,11 +2873,13 @@ describe('Shadow 单元与排除', () => {
     readLight.mockClear()
 
     const shadow = host.attachShadow({ mode: 'open' })
+    const nested = shadow.appendChild(document.createElement('section'))
     const paragraph = shadow.appendChild(document.createElement('p'))
     paragraph.textContent = 'A newly mounted shadow paragraph.'
     excluded.attachShadow({ mode: 'open' }).innerHTML = '<p>Excluded shadow paragraph.</p>'
-    excluded.setAttribute('aria-label', 'Settings')
-    host.setAttribute('title', 'Settings')
+    owned.attachShadow({ mode: 'open' }).innerHTML = '<p>Extension-owned shadow paragraph.</p>'
+    closed.attachShadow({ mode: 'closed' }).innerHTML = '<p>Closed shadow paragraph.</p>'
+    for (const target of [excluded, owned, closed, host]) target.setAttribute(attribute, 'Settings')
     await settle(300)
     expect(batches[1]?.texts).toEqual(['A newly mounted shadow paragraph.'])
     batches[1]!.apply(['新挂载的段落。'])
@@ -2882,14 +2888,28 @@ describe('Shadow 单元与排除', () => {
     expect(readLight).not.toHaveBeenCalled()
 
     const readShadow = vi.spyOn(paragraph.firstChild!, 'nodeValue', 'get')
-    host.setAttribute('title', 'Close')
-    await settle()
+    const inner = nested.attachShadow({ mode: 'open' })
+    const line = inner.appendChild(document.createElement('p'))
+    line.textContent = 'Inside the newly mounted nested root.'
+    // 同批次中间的词库属性与最后的新根都应处理；重复状态更新不应重扫旧内容。
+    for (let i = 0; i < 220; i++) {
+      host.setAttribute('data-redraw', String(i))
+      light.parentElement!.setAttribute('data-redraw', String(i))
+      if (i === 110) host.setAttribute('title', 'Close')
+    }
+    nested.setAttribute(attribute, 'Ready')
+    await settle(300)
+    expect(host.title).toBe('关闭')
     expect(readShadow).not.toHaveBeenCalled()
     expect(readLight).not.toHaveBeenCalled()
-
-    paragraph.firstChild!.nodeValue = 'Updated inside the shadow tree.'
+    expect(batches[2]?.texts).toEqual(['Inside the newly mounted nested root.'])
+    batches[2]!.apply(['嵌套段落。'])
+    await settle()
+    expect(line.textContent).toBe('嵌套段落。')
+    line.firstChild!.nodeValue = 'Updated inside the nested shadow tree.'
     await settle(300)
-    expect(batches[2]?.texts).toEqual(['Updated inside the shadow tree.'])
+    expect(batches[3]?.texts).toEqual(['Updated inside the nested shadow tree.'])
+    expect(batches).toHaveLength(4)
   })
 
   function shadowPara(): { host: HTMLElement; getP: () => HTMLElement | null } {
