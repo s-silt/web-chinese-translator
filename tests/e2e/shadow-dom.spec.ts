@@ -244,5 +244,12 @@ test('已连接宿主仅改自定义属性时发现延迟的开放 Shadow DOM，
   })
   expect(perf.control.reads).toBeGreaterThan(0)
   expect(perf.control.observers).toBeGreaterThan(0)
+  // 后续阳性页面与嵌套根均已完成翻译，此时一并核对防抖后才送达的模型输入。
+  expect(requests.flatMap(request => request.texts).sort()).toEqual([
+    'Initial scan complete.', 'Positive read and request control.',
+    'Boundary control initialized.', 'Boundary control shadow text.',
+    'Delayed outer text.', 'Other custom attribute text.',
+    'Nested delayed text.', 'New character data.',
+  ].sort())
   for (const request of requests) expect(request.body).not.toContain('Private marker')
 })
