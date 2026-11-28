@@ -10,6 +10,8 @@ import {
 } from './input-translation'
 import type { LiveTranslationOptions } from './live-translation'
 import type { DocumentEditorRequest, DocumentEditorResult } from './document-editor'
+import { matchesHotkey } from './input-hotkey'
+import { DEFAULT_INPUT_TRIGGER_HOTKEY } from './preferences-extra'
 import { INPUT_AUTO_REPLACE_DELAY_DEFAULT, isInputAutoReplaceDelay } from './input-replace-mode'
 import { isCandidateDraft } from './target-language'
 import {
@@ -20,7 +22,8 @@ import {
   syncSurfaceVisibility,
 } from './ui-surface'
 
-export interface DocumentInputOptions extends LiveTranslationOptions, Pick<InputTranslationOptions, 'sourceLanguage' | 'targetLanguage'> {
+export interface DocumentInputOptions extends Omit<LiveTranslationOptions, 'translate'>,
+  Pick<InputTranslationOptions, 'translate' | 'sourceLanguage' | 'targetLanguage' | 'triggerMode' | 'triggerHotkey'> {
   readonly enabled: () => boolean
   readonly autoReplaceDelayMs?: () => number
   readonly editor: (request: DocumentEditorRequest) => Promise<DocumentEditorResult>
@@ -403,10 +406,11 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   function candidateRoot(): Element | undefined {
     if (!document.hasFocus()) return undefined
     const active = deepActiveElement()
-    if (!(active instanceof Element)) return undefined
+    if (!(active instanceof HTMLElement)) return undefined
     const root = composedClosest(active, EDITOR_ROOT_SELECTOR)
     if (root === null || !root.isConnected) return undefined
     if (!(root instanceof HTMLElement)) return undefined
+    if (active.matches('input,button,select') || isSensitiveField(active)) return undefined
     if (isHiddenOrDisabled(root) || isSensitiveField(root)) return undefined
     return root
   }
@@ -433,7 +437,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   function scheduleAutomatic(root: Element): void {
     if (autoTimer !== undefined) clearTimeout(autoTimer)
     autoTimer = undefined
-    if (disposed || !options.enabled() || document.hidden || composingRoot !== undefined) return
+    if (disposed || !options.enabled() || options.triggerMode?.() === 'manual' || document.hidden || composingRoot !== undefined) return
     const delay = options.autoReplaceDelayMs?.()
     autoTimer = setTimeout(() => {
       autoTimer = undefined
@@ -442,7 +446,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   }
 
   function onCompositionEnd(event: CompositionEvent): void {
-    if (disposed || composingRoot === undefined) return
+    if (!event.isTrusted || disposed || composingRoot === undefined) return
     const root = candidateRoot()
     if (root !== composingRoot) return
     const target = event.composedPath()[0] ?? event.target
@@ -454,6 +458,20 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
   function onEditorGesture(event: Event): void {
     if (!event.isTrusted || disposed) return
     if (event instanceof KeyboardEvent) {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.key === 'Process') return
+      const restore = insertedText !== undefined && matchesHotkey(event, 'Alt+Z')
+      const manual = options.triggerMode?.() === 'manual' && matchesHotkey(event, options.triggerHotkey?.() ?? DEFAULT_INPUT_TRIGGER_HOTKEY)
+      if (restore || manual) {
+        const root = candidateRoot()
+        if (!options.enabled() || document.hidden || composingRoot !== undefined || !root || !event.composedPath().includes(root)) return
+        if (busy || replacing || (restore && token?.root !== root)) return
+        if (!restore && token?.root === root && translationText !== '' && !statusFailed) return
+        event.preventDefault()
+        event.stopPropagation()
+        if (restore) void onReplace(true)
+        else void translate()
+        return
+      }
       if (event.key === 'Shift' || event.key === 'Control' || event.key === 'Alt' || event.key === 'Meta') return
       if (NAVIGATION_KEYS.has(event.key) && !event.ctrlKey && !event.altKey && !event.metaKey) return
       if (event.isComposing || event.ctrlKey || event.altKey || event.metaKey) return
@@ -640,6 +658,8 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
 
   async function translate(automatic = false): Promise<boolean> {
     if (disposed || !options.enabled() || composingRoot !== undefined || document.hidden) return false
+    const manual = options.triggerMode?.() === 'manual'
+    if (automatic && manual) return false
     if (replacing) return true
     if (token !== undefined && host !== undefined && document.activeElement === host) return true
     const root = candidateRoot()
@@ -677,7 +697,8 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
       snapshot = { status: 'failed' }
     }
     if (disposed || epoch !== sessionEpoch || token?.id !== id) return true
-    if (!options.enabled() || !root.isConnected) {
+    if (!options.enabled() || candidateRoot() !== root || document.hidden || composingRoot !== undefined ||
+      (automatic && options.triggerMode?.() === 'manual')) {
       closeSession()
       return true
     }
@@ -705,7 +726,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
       syncActions()
       return true
     }
-    if (automatic && !isCandidateDraft(snapshot.text, options.sourceLanguage?.() ?? 'auto', options.targetLanguage?.() ?? 'en')) {
+    if ((automatic || manual) && !isCandidateDraft(snapshot.text, options.sourceLanguage?.() ?? 'auto', options.targetLanguage?.() ?? 'en', manual)) {
       closeSession()
       return true
     }
@@ -722,7 +743,7 @@ export function createDocumentInputTranslation(options: DocumentInputOptions): D
     }
     let reply: Awaited<ReturnType<DocumentInputOptions['translate']>> | undefined
     try {
-      reply = await options.translate([snapshot.text], request)
+      reply = manual ? await options.translate([snapshot.text], request, true) : await options.translate([snapshot.text], request)
     } catch {
       reply = undefined
     }

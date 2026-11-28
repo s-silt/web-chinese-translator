@@ -20,8 +20,8 @@ import {
 } from './sites'
 import { inlineUnitFor, inlineUnitKey, isInlineUnitCurrent, parseInlineResult, type InlineUnit } from './inline-units'
 import type { PageTranslationProgress } from './messages'
-import { attachBilingualBlock, attachBilingualNode, inlineTranslationText, removeBilingualNode } from './bilingual'
-import type { TranslationDisplayMode } from './preferences-extra'
+import { attachBilingualBlock, attachBilingualNode, inlineTranslationText, removeBilingualNode, updateBilingualVariant } from './bilingual'
+import type { BilingualStyle, TranslationDisplayMode } from './preferences-extra'
 import type { SourceLanguage, TargetLanguage } from './target-language'
 
 export interface DomEngine {
@@ -31,6 +31,7 @@ export interface DomEngine {
   stop(): void
   restore(): void
   setDisplayMode(mode: TranslationDisplayMode): void
+  setBilingualStyle(style: BilingualStyle): void
   isModelTranslated(node: Text): boolean
   dispose(): void
   invalidate(): void
@@ -71,6 +72,7 @@ export interface DomEngineOptions {
   targetLanguage(): TargetLanguage
   sourceLanguage?: () => SourceLanguage
   displayMode?: () => TranslationDisplayMode
+  bilingualStyle?: () => BilingualStyle
   translateFixed?: (text: string) => string | undefined
   onAutoBatch(texts: string[], apply: AutoBatchApply): void
   onCapped?(): void
@@ -494,7 +496,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   function showBilingual(rendering: ModelRendering): boolean {
     const { block, changes, text } = rendering
     const anchor = changes[0]!.node
-    const line = block ? attachBilingualBlock(block, text) : attachBilingualNode(anchor, text)
+    const style = options.bilingualStyle?.()
+    const line = block ? attachBilingualBlock(block, text, style) : attachBilingualNode(anchor, text, style)
     if (!line) return false
     if (block) bilingualBlocks.set(block, anchor)
     const group = { line, members: changes.map(change => change.node) }
@@ -1943,6 +1946,9 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   return {
     syncPageIdentity,
     setDisplayMode,
+    setBilingualStyle(style) {
+      for (const group of new Set(bilingualNodes.values())) updateBilingualVariant(group.line, style)
+    },
     isModelTranslated(node) { return modelTexts.has(node) && !layoutHidden.has(node) && records.get(node)?.applied === node.data },
     start() {
       if (disposed || document.body === null) return

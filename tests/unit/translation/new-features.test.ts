@@ -1,11 +1,16 @@
+import { isSupportedChatUrl } from '../../../src/translation/chat-input-detect'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { attachBilingualBlock, attachBilingualNode, isBilingualElement, removeBilingualNode } from '../../../src/translation/bilingual'
+import { attachBilingualBlock, attachBilingualNode, BILINGUAL_VARIANT_ATTR, isBilingualElement, removeBilingualNode, updateBilingualVariant } from '../../../src/translation/bilingual'
 import { DEFAULT_TRANSLATION_CONFIG, sanitizeTranslationConfig } from '../../../src/translation/config'
 import { exportConfigBackup, parseConfigBackup } from '../../../src/translation/config-backup'
 import { createHoverTranslator } from '../../../src/translation/hover-translate'
 import {
   findMatchedGlossaryEntries,
   glossarySignature,
+  formatGlossaryBulkText,
+  MAX_GLOSSARY_TERM_LENGTH,
+  MAX_PROMPT_GLOSSARY,
+  parseGlossaryBulkText,
   sanitizePromptGlossary,
 } from '../../../src/translation/preferences-extra'
 import { glossaryPromptInstruction, translationStyleInstruction } from '../../../src/translation/translation-style'
@@ -259,5 +264,151 @@ describe('Anthropic native SSE & bilingual block micro-interaction', () => {
 
     removeBilingualNode(el)
     expect(p.querySelector('[data-wt-bilingual="1"]')).toBeNull()
+  })
+})
+
+describe('bilingualStyle variants & glossary bulk import/export', () => {
+  it('applies and live-updates bilingualStyle variants without re-translating', () => {
+    const p = document.createElement('p')
+    const text = document.createTextNode('Hello bilingual world')
+    p.appendChild(text)
+    document.body.appendChild(p)
+
+    const el = attachBilingualNode(text, '你好双语世界', 'highlight')
+    expect(el?.getAttribute(BILINGUAL_VARIANT_ATTR)).toBe('highlight')
+
+    updateBilingualVariant(el!, 'underline')
+    expect(el?.getAttribute(BILINGUAL_VARIANT_ATTR)).toBe('underline')
+
+    updateBilingualVariant(el!, 'subtle')
+    expect(el?.getAttribute(BILINGUAL_VARIANT_ATTR)).toBeNull()
+
+    removeBilingualNode(el)
+    p.remove()
+  })
+
+  it('parses multi-format bulk glossary text and formats it back cleanly', () => {
+    const raw = [
+      '# Domain glossary',
+      'Token = Token',
+      'Repository -> 仓库',
+      'Pull Request => 拉取请求',
+      'Agent\t智能体',
+      'Issue, 议题',
+      'token = 忽略重复',
+      '',
+    ].join('\n')
+    const parsed = parseGlossaryBulkText(raw)
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) throw new Error('Expected valid glossary')
+    expect(parsed.entries).toEqual([
+      { source: 'Token', target: 'Token' },
+      { source: 'Repository', target: '仓库' },
+      { source: 'Pull Request', target: '拉取请求' },
+      { source: 'Agent', target: '智能体' },
+      { source: 'Issue', target: '议题' },
+    ])
+    expect(formatGlossaryBulkText(parsed.entries)).toBe(
+      'Token = Token\nRepository = 仓库\nPull Request = 拉取请求\nAgent = 智能体\nIssue = 议题',
+    )
+  })
+
+  it('round-trips copied terms with literal delimiters, comments, JSON, quotes and embedded newlines', () => {
+    const entries = [
+      { source: '#include', target: '包含' },
+      { source: '# draft', target: 'at \\home' },
+      { source: 'a=b', target: '相等' },
+      { source: 'pipeline', target: 'A -> B\tC => D' },
+      { source: 'x, y', target: '一行\r\n换行' },
+      { source: '["test"]', target: '"quoted"' },
+      { source: 'Term\rTwo\tThree', target: '换行' },
+      { source: 'binary', target: 'A\u0000B' },
+    ]
+    expect(parseGlossaryBulkText(formatGlossaryBulkText(entries))).toEqual({ ok: true, entries })
+    expect(parseGlossaryBulkText('#include = 包含')).toEqual({ ok: true, entries: [entries[0]] })
+  })
+
+  it('preserves spreadsheet cells containing punctuation, JSON-looking sources and comment markers', () => {
+    const rows = ['Washington, D.C.\t华盛顿', ' a=b \t 相等 ', '# key\ttarget = value', '["x"]\t[x]']
+    expect(parseGlossaryBulkText(rows.join('\r\n'))).toEqual({ ok: true, entries: [
+      { source: 'Washington, D.C.', target: '华盛顿' }, { source: 'a=b', target: '相等' },
+      { source: '# key', target: 'target = value' }, { source: '["x"]', target: '[x]' },
+    ] })
+    for (const invalid of ['\ta=b', 'a=b\t', '\t# comment', '\t# comment\tx', 'a=b\tB\tC', 'A\tB\t']) {
+      expect(parseGlossaryBulkText('good = row\n' + invalid)).toEqual({ ok: false, reason: 'invalid', line: 2 })
+    }
+    const entries = [{ source: 'word', target: 'first\tsecond' }]
+    const copied = formatGlossaryBulkText(entries)
+    expect(copied).toBe(JSON.stringify(['word', 'first\tsecond']))
+    expect(parseGlossaryBulkText(copied)).toEqual({ ok: true, entries })
+  })
+
+  it('accepts tab-aligned text delimiters and skips blank lines and commented table headers', () => {
+    for (const delimiter of ['=', '->', '=>']) {
+      const lines = ['# release glossary', '  # 列名\t原文\t译文', ' \t\t ', `release ${delimiter}\t发行版`, 'a=b\t相等']
+      expect(parseGlossaryBulkText(lines.join('\n'))).toEqual({ ok: true, entries: [
+        { source: 'release', target: '发行版' }, { source: 'a=b', target: '相等' },
+      ] })
+      const literal = [{ source: `release ${delimiter}`, target: 'A\tB' }]
+      expect(parseGlossaryBulkText(formatGlossaryBulkText(literal))).toEqual({ ok: true, entries: literal })
+    }
+    expect(parseGlossaryBulkText(' \t \n# comment\ta\tb')).toEqual({ ok: false, reason: 'empty' })
+    expect(parseGlossaryBulkText('# header\ta\tb\nrelease =\t ')).toEqual({ ok: false, reason: 'invalid', line: 2 })
+  })
+
+  it('preserves source punctuation and operators in the translation when entering terms by hand', () => {
+    for (const [row, source, target] of [
+      ['Washington, D.C. = 华盛顿', 'Washington, D.C.', '华盛顿'],
+      ['a=b -> A = B', 'a=b', 'A = B'],
+      ['pipeline= 阶段 A -> 阶段 B', 'pipeline', '阶段 A -> 阶段 B'],
+      ['flow-> A => B', 'flow', 'A => B'],
+      ['rule=> A = B', 'rule', 'A = B'],
+      ['compact=紧凑', 'compact', '紧凑'],
+    ] as const) {
+      expect(parseGlossaryBulkText(row)).toEqual({ ok: true, entries: [{ source, target }] })
+    }
+  })
+
+  it('rejects invalid rows atomically and enforces the unique term limit without discarding excess input', () => {
+    for (const invalid of ['bad row', 'a = ', '["source", 3]', '["truncated', 'x = ' + 'y'.repeat(MAX_GLOSSARY_TERM_LENGTH + 1)]) {
+      expect(parseGlossaryBulkText('A = B\r\n# a comment\r\n' + invalid)).toEqual({ ok: false, reason: 'invalid', line: 3 })
+    }
+    expect(parseGlossaryBulkText('# a comment\n#comment\n\n')).toEqual({ ok: false, reason: 'empty' })
+    const full = Array.from({ length: MAX_PROMPT_GLOSSARY }, (_, i) => ({ source: 'Term ' + i, target: '目标' }))
+    const raw = formatGlossaryBulkText(full)
+    expect(parseGlossaryBulkText(raw + '\nTERM 1 = duplicate')).toEqual({ ok: true, entries: full })
+    expect(parseGlossaryBulkText(raw + '\nextra = 新增')).toEqual({ ok: false, reason: 'limit' })
+  })
+
+  it('sanitizes bilingualStyle with safe default fallback', () => {
+    expect(sanitizeTranslationConfig({ bilingualStyle: 'highlight' }).bilingualStyle).toBe('highlight')
+    expect(sanitizeTranslationConfig({ bilingualStyle: 'underline' }).bilingualStyle).toBe('underline')
+    expect(sanitizeTranslationConfig({ bilingualStyle: 'invalid' }).bilingualStyle).toBe('subtle')
+  })
+})
+
+describe('input replacement upgrades: trigger mode, hotkey, and expanded hosts', () => {
+  it('sanitizes inputTriggerMode and inputTriggerHotkey while keeping legacy inputReplaceMode untouched', () => {
+    const clean = sanitizeTranslationConfig({
+      inputTriggerMode: 'manual',
+      inputTriggerHotkey: 'ctrl+enter',
+    })
+    expect(clean.inputTriggerMode).toBe('manual')
+    expect(clean.inputTriggerHotkey).toBe('Ctrl+Enter')
+    expect(clean.inputReplaceMode).toBe('auto')
+
+    const fallback = sanitizeTranslationConfig({
+      inputTriggerMode: 'invalid',
+      inputTriggerHotkey: 'Escape',
+    })
+    expect(fallback.inputTriggerMode).toBe('auto')
+    expect(fallback.inputTriggerHotkey).toBe('Alt+Enter')
+  })
+
+  it('recognizes supported collaboration routes and keeps sensitive GitHub routes blocked', () => {
+    for (const url of ['https://app.slack.com/client/T1/C2', 'https://linear.app/demo', 'https://www.notion.so/page', 'https://notion.so/page', 'https://github.com/example/project/issues/1']) {
+      expect(isSupportedChatUrl(url)).toBe(true)
+    }
+    expect(isSupportedChatUrl('https://github.com/settings/tokens')).toBe(false)
   })
 })

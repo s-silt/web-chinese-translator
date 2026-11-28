@@ -48,6 +48,14 @@
           @update:model-value="updateSelectionProfile"
         />
       </div>
+      <UiSwitch
+        v-if="config.selectionProfileId"
+        id="wt-input-use-selection-profile"
+        :checked="config.inputUsesSelectionProfile"
+        :label="t('wtProfileInputOptIn')"
+        data-test="wt-input-use-selection-profile"
+        @change="updateInputProfile"
+      />
     </div>
 
     <div class="section">
@@ -61,6 +69,17 @@
           :options="displayModeOptions"
           data-test="wt-display-mode"
           @update:model-value="updateDisplayMode"
+        />
+      </div>
+
+      <div v-if="config.displayMode === 'bilingual'" class="wt-field-row">
+        <label class="wt-field-label" for="wt-bilingual-style">{{ t('wtBilingualStyleLabel') }}</label>
+        <UiSelect
+          id="wt-bilingual-style"
+          :model-value="config.bilingualStyle"
+          :options="bilingualStyleOptions"
+          data-test="wt-bilingual-style"
+          @update:model-value="updateBilingualStyle"
         />
       </div>
 
@@ -101,12 +120,51 @@
         />
         <UiButton
           size="sm"
-          :disabled="glossarySource.trim() === '' || glossaryTarget.trim() === ''"
+          :disabled="savingGlossary || glossarySource.trim() === '' || glossaryTarget.trim() === ''"
           data-test="wt-glossary-add"
           @click="addGlossaryTerm"
         >
           {{ t('wtGlossaryAdd') }}
         </UiButton>
+      </div>
+      <div class="wt-inline-row">
+        <UiButton
+          size="sm"
+          data-test="wt-glossary-bulk-toggle"
+          :aria-controls="bulkGlossaryOpen ? 'wt-glossary-import-panel' : undefined"
+          :aria-expanded="bulkGlossaryOpen"
+          @click="bulkGlossaryOpen = !bulkGlossaryOpen"
+        >
+          {{ t('wtGlossaryBulkToggle') }}
+        </UiButton>
+        <UiButton
+          v-if="config.promptGlossary.length > 0"
+          size="sm"
+          data-test="wt-glossary-copy"
+          @click="copyGlossary"
+        >
+          {{ t('wtGlossaryCopy') }}
+        </UiButton>
+      </div>
+      <div v-if="bulkGlossaryOpen" id="wt-glossary-import-panel" class="wt-bulk-box" data-test="wt-glossary-bulk-box">
+        <UiTextarea
+          v-model="bulkGlossaryText"
+          :rows="4"
+          :aria-label="t('wtGlossaryBulkToggle')"
+          :placeholder="t('wtGlossaryBulkPlaceholder')"
+          data-test="wt-glossary-bulk-input"
+        />
+        <div class="wt-inline-row">
+          <UiButton
+            size="sm"
+            variant="primary"
+            :disabled="savingGlossary || bulkGlossaryText.trim() === ''"
+            data-test="wt-glossary-bulk-import"
+            @click="importBulkGlossary"
+          >
+            {{ t('wtGlossaryBulkImport') }}
+          </UiButton>
+        </div>
       </div>
 
       <ul v-if="config.promptGlossary.length > 0" class="wt-compact-list" data-test="wt-glossary-list">
@@ -114,7 +172,7 @@
           <span class="wt-compact-main">
             <code>{{ entry.source }}</code> → <strong>{{ entry.target }}</strong>
           </span>
-          <UiButton size="sm" variant="danger" @click="removeGlossaryTerm(entry.source)">
+          <UiButton size="sm" variant="danger" :disabled="savingGlossary" @click="removeGlossaryTerm(entry.source)">
             {{ t('wtProfileDelete') }}
           </UiButton>
         </li>
@@ -190,7 +248,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, shallowRef } from 'vue'
 import { browser } from 'wxt/browser'
 import { downloadText } from '../../components/download'
 import { showToast } from '../../components/toast'
@@ -199,31 +257,40 @@ import UiButton from '../../components/ui/UiButton.vue'
 import UiInput from '../../components/ui/UiInput.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
 import UiSwitch from '../../components/ui/UiSwitch.vue'
+import UiTextarea from '../../components/ui/UiTextarea.vue'
+import { copySelectionText } from '../../translation/clipboard'
 import { sendTranslationMessage } from '../../translation/client'
 import type { TranslationConfigPatch } from '../../translation/messages'
 import {
   DEFAULT_TRANSLATION_CONFIG,
   hostPermissionPattern,
+  isBilingualStyle,
   isDisplayMode,
   isTranslationStyle,
   type ModelProfile,
   type TranslationConfig,
 } from '../../translation/config'
 import { backupPermissionOrigins, exportConfigBackup, MAX_CONFIG_BACKUP_BYTES, parseConfigBackup, planConfigBackupRestore } from '../../translation/config-backup'
-import { MAX_MODEL_PROFILES } from '../../translation/preferences-extra'
 import { createId } from '../../translation/id'
+import {
+  formatGlossaryBulkText, MAX_GLOSSARY_TERM_LENGTH, MAX_MODEL_PROFILES, MAX_PROMPT_GLOSSARY,
+  parseGlossaryBulkText, type PromptGlossaryEntry,
+} from '../../translation/preferences-extra'
 import type { PersistentCacheStats } from '../../translation/persistent-cache'
 import { emptyUsageStats, type UsageStatsSnapshot } from '../../translation/usage-stats'
 
 const { t } = useI18n()
 const emit = defineEmits<{ saved: []; configureProfile: [profile: ModelProfile] }>()
 
-const config = ref<TranslationConfig>(DEFAULT_TRANSLATION_CONFIG)
+const config = shallowRef<TranslationConfig>(DEFAULT_TRANSLATION_CONFIG)
 const usageStats = ref<UsageStatsSnapshot>(emptyUsageStats())
 const cacheStats = ref<PersistentCacheStats>({ entries: 0, approxBytes: 0, expired: 0, hosts: [] })
 const newProfileName = ref('')
 const glossarySource = ref('')
 const glossaryTarget = ref('')
+const bulkGlossaryOpen = ref(false)
+const bulkGlossaryText = ref('')
+const savingGlossary = ref(false)
 const importInput = ref<HTMLInputElement | null>(null)
 const pendingBackup = ref<{ config: TranslationConfig; missing: string[] }>()
 const restoringBackup = ref(false)
@@ -241,6 +308,12 @@ const canSaveProfile = computed(
 const displayModeOptions = computed(() => [
   { value: 'replace', label: t('wtDisplayModeReplace') },
   { value: 'bilingual', label: t('wtDisplayModeBilingual') },
+])
+
+const bilingualStyleOptions = computed(() => [
+  { value: 'subtle', label: t('wtBilingualStyleSubtle') },
+  { value: 'highlight', label: t('wtBilingualStyleHighlight') },
+  { value: 'underline', label: t('wtBilingualStyleUnderline') },
 ])
 
 const styleOptions = computed(() => [
@@ -278,10 +351,20 @@ async function refreshStats(): Promise<void> {
   if (failure) showToast('danger', 'wtToolsFailed', { error: failure.error })
 }
 
-async function patchConfig(patch: TranslationConfigPatch): Promise<boolean> {
-  const reply = await sendTranslationMessage({ type: 'wt:save-config', patch })
+async function patchConfig(patch: TranslationConfigPatch, expectedGlossary?: readonly PromptGlossaryEntry[], expectedInputProfile?: Pick<ModelProfile, 'id' | 'baseUrl'>): Promise<boolean> {
+  const reply = await sendTranslationMessage({ type: 'wt:save-config', patch, expectedGlossary, expectedInputProfile })
   if (!reply.ok) {
-    showToast('danger', 'wtToolsFailed', { error: reply.error })
+    if (reply.code === 'glossary-conflict') {
+      const latest = await sendTranslationMessage({ type: 'wt:get-config' })
+      if (latest.ok) {
+        config.value = latest.config
+        showToast('danger', 'wtGlossaryConflict')
+      } else {
+        showToast('danger', 'wtToolsFailed', { error: latest.error })
+      }
+    } else {
+      showToast('danger', 'wtToolsFailed', { error: reply.error })
+    }
     return false
   }
   config.value = reply.config
@@ -339,6 +422,12 @@ async function updateSelectionProfile(value: string): Promise<void> {
   await patchConfig({ selectionProfileId: value })
 }
 
+async function updateInputProfile(enabled: boolean): Promise<void> {
+  const profile = config.value.modelProfiles.find(item => item.id === config.value.selectionProfileId)
+  if (!profile || (enabled && !(await grantOrigins([hostPermissionPattern(profile.baseUrl)])))) return
+  await patchConfig({ inputUsesSelectionProfile: enabled }, undefined, enabled ? { id: profile.id, baseUrl: profile.baseUrl } : undefined)
+}
+
 async function grantOrigins(origins: string[]): Promise<boolean> {
   const granted = await browser.permissions.request({ origins }).catch(() => false)
   if (!granted) showToast('danger', 'wtPermissionDenied')
@@ -348,6 +437,11 @@ async function grantOrigins(origins: string[]): Promise<boolean> {
 async function updateDisplayMode(value: string): Promise<void> {
   if (!isDisplayMode(value)) return
   await patchConfig({ displayMode: value })
+}
+
+async function updateBilingualStyle(value: string): Promise<void> {
+  if (!isBilingualStyle(value)) return
+  await patchConfig({ bilingualStyle: value })
 }
 
 async function updateHoverTranslate(value: boolean): Promise<void> {
@@ -361,11 +455,17 @@ async function updateStyle(value: string): Promise<void> {
 }
 
 async function addGlossaryTerm(): Promise<void> {
-  const source = glossarySource.value.trim()
-  const target = glossaryTarget.value.trim()
+  const rawSource = glossarySource.value
+  const rawTarget = glossaryTarget.value
+  const source = rawSource.trim()
+  const target = rawTarget.trim()
   if (source === '' || target === '') return
+  if (source.length > MAX_GLOSSARY_TERM_LENGTH || target.length > MAX_GLOSSARY_TERM_LENGTH) {
+    showToast('danger', 'wtGlossaryTermTooLong', { max: MAX_GLOSSARY_TERM_LENGTH })
+    return
+  }
   const filtered = config.value.promptGlossary.filter((item) => item.source.toLowerCase() !== source.toLowerCase())
-  if (await patchConfig({ promptGlossary: [...filtered, { source, target }] })) {
+  if (await saveGlossary([...filtered, { source, target }]) && glossarySource.value === rawSource && glossaryTarget.value === rawTarget) {
     glossarySource.value = ''
     glossaryTarget.value = ''
   }
@@ -373,7 +473,48 @@ async function addGlossaryTerm(): Promise<void> {
 
 async function removeGlossaryTerm(source: string): Promise<void> {
   const next = config.value.promptGlossary.filter((item) => item.source !== source)
-  await patchConfig({ promptGlossary: next })
+  await saveGlossary(next)
+}
+
+async function saveGlossary(entries: PromptGlossaryEntry[]): Promise<boolean> {
+  if (savingGlossary.value) return false
+  if (entries.length > MAX_PROMPT_GLOSSARY) {
+    showToast('danger', 'wtGlossaryLimit', { max: MAX_PROMPT_GLOSSARY })
+    return false
+  }
+  savingGlossary.value = true
+  try {
+    return await patchConfig({ promptGlossary: entries }, config.value.promptGlossary)
+  } finally {
+    savingGlossary.value = false
+  }
+}
+
+async function importBulkGlossary(): Promise<void> {
+  const draft = bulkGlossaryText.value
+  const parsed = parseGlossaryBulkText(draft)
+  if (!parsed.ok) {
+    if (parsed.reason === 'invalid') showToast('danger', 'wtGlossaryInvalidLine', { line: parsed.line, max: MAX_GLOSSARY_TERM_LENGTH })
+    else if (parsed.reason === 'limit') showToast('danger', 'wtGlossaryLimit', { max: MAX_PROMPT_GLOSSARY })
+    else showToast('danger', 'wtGlossaryEmpty')
+    return
+  }
+  const merged = new Map(config.value.promptGlossary.map((item) => [item.source.toLowerCase(), item]))
+  for (const item of parsed.entries) merged.set(item.source.toLowerCase(), item)
+  if (await saveGlossary([...merged.values()])) {
+    if (bulkGlossaryText.value === draft) {
+      bulkGlossaryText.value = ''
+      bulkGlossaryOpen.value = false
+    }
+    showToast('success', 'wtGlossaryImported', { count: parsed.entries.length })
+  }
+}
+
+async function copyGlossary(): Promise<void> {
+  if (config.value.promptGlossary.length === 0) return
+  const ok = await copySelectionText(formatGlossaryBulkText(config.value.promptGlossary))
+  if (ok) showToast('success', 'wtGlossaryCopied')
+  else showToast('danger', 'wtToolbarCopyFailed')
 }
 
 async function clearSiteCache(host: string): Promise<void> {
@@ -544,5 +685,8 @@ onMounted(() => {
   display: flex;
   gap: 6px;
   flex-shrink: 0;
+}
+.wt-bulk-box {
+  margin-top: 8px;
 }
 </style>

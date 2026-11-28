@@ -1,8 +1,11 @@
 import { isGitHubPageState, type GitHubPageAction, type GitHubPageState } from '../shared/messages'
 import {
+  isBilingualStyle,
   isDisplayMode,
   isInputAutoReplaceDelay,
   isInputReplaceMode,
+  isInputTriggerMode,
+  normalizeInputTriggerHotkey,
   isModelList,
   isModelProfileList,
   isPageCharLimit,
@@ -66,6 +69,8 @@ export type TranslationMessage =
   | {
       type: 'wt:save-config'
       patch: TranslationConfigPatch
+      expectedGlossary?: TranslationConfig['promptGlossary']
+      expectedInputProfile?: { id: string; baseUrl: string }
       apiKey?: string
       customHeaders?: Readonly<Record<string, string>>
       expectedConnection?: { baseUrl: string; model: string; requestOptionsKey?: string }
@@ -90,6 +95,7 @@ export type TranslationMessage =
       pageSession?: string
       manualSelectionId?: string
       manualInput?: boolean
+      inputTargetLanguage?: TargetLanguage
     }
   | { type: 'wt:page-action'; action: PageAction; tabId?: number; url?: string }
   | { type: 'wt:current-site-auto'; enabled: boolean }
@@ -325,12 +331,16 @@ const PATCH_KEYS = new Set([
   'excludedHosts',
   'siteScopeMode',
   'displayMode',
+  'bilingualStyle',
   'translationStyle',
   'promptGlossary',
   'modelProfiles',
   'activeProfileId',
   'selectionProfileId',
+  'inputUsesSelectionProfile',
   'hoverTranslateEnabled',
+  'inputTriggerMode',
+  'inputTriggerHotkey',
 ])
 
 function isSaveConfig(value: unknown): boolean {
@@ -353,6 +363,9 @@ function isSaveConfig(value: unknown): boolean {
     if (key === 'temperature' && !isTemperature((patch as Record<string, unknown>)[key])) return false
     if (key === 'requestParams' && !isValidRequestParams((patch as Record<string, unknown>)[key])) return false
     if (key === 'displayMode' && !isDisplayMode((patch as Record<string, unknown>)[key])) return false
+    if (key === 'bilingualStyle' && !isBilingualStyle((patch as Record<string, unknown>)[key])) return false
+    if (key === 'inputTriggerMode' && !isInputTriggerMode((patch as Record<string, unknown>)[key])) return false
+    if (key === 'inputTriggerHotkey' && normalizeInputTriggerHotkey((patch as Record<string, unknown>)[key]) === undefined) return false
     if (key === 'translationStyle' && !isTranslationStyle((patch as Record<string, unknown>)[key])) return false
     if (key === 'promptGlossary' && !isPromptGlossaryList((patch as Record<string, unknown>)[key])) return false
     if (key === 'modelProfiles' && !isModelProfileList((patch as Record<string, unknown>)[key])) return false
@@ -361,10 +374,17 @@ function isSaveConfig(value: unknown): boolean {
   if (patch.model !== undefined && (typeof patch.model !== 'string' || patch.model.length > 200)) return false
   if (patch.activeProfileId !== undefined && (typeof patch.activeProfileId !== 'string' || patch.activeProfileId.length > 64)) return false
   if (patch.selectionProfileId !== undefined && (typeof patch.selectionProfileId !== 'string' || patch.selectionProfileId.length > 64)) return false
-  for (const key of ['selectionPopupEnabled', 'selectionToolbarEnabled', 'proactiveAssistEnabled', 'floatingButtonEnabled', 'autoInteractionEnabled', 'inputTranslationEnabled', 'hoverTranslateEnabled'] as const) {
+  for (const key of ['selectionPopupEnabled', 'selectionToolbarEnabled', 'proactiveAssistEnabled', 'floatingButtonEnabled', 'autoInteractionEnabled', 'inputTranslationEnabled', 'hoverTranslateEnabled', 'inputUsesSelectionProfile'] as const) {
     if (patch[key] !== undefined && typeof patch[key] !== 'boolean') return false
   }
   if (!isOptionalApiKey(value.apiKey)) return false
+  if (value.expectedGlossary !== undefined && (patch.promptGlossary === undefined || !isPromptGlossaryList(value.expectedGlossary))) return false
+  if (value.expectedInputProfile !== undefined) {
+    const profile = value.expectedInputProfile
+    if (patch.inputUsesSelectionProfile !== true || !isRecord(profile) ||
+      typeof profile.id !== 'string' || !profile.id || profile.id.length > 64 ||
+      typeof profile.baseUrl !== 'string' || !profile.baseUrl || profile.baseUrl.length > 2048) return false
+  }
   if (value.customHeaders !== undefined && !isValidCustomHeaders(value.customHeaders)) return false
   const expected = value.expectedConnection
   if (expected !== undefined) {
@@ -413,7 +433,7 @@ function isTranslateTexts(value: unknown): value is string[] {
   return true
 }
 
-const FEATURE_TRANSLATE_KEYS = new Set(['type', 'mode', 'texts', 'requestId', 'pageSession', 'manualInput'])
+const FEATURE_TRANSLATE_KEYS = new Set(['type', 'mode', 'texts', 'requestId', 'pageSession', 'manualInput', 'inputTargetLanguage'])
 const HOVER_TRANSLATE_KEYS = new Set(['type', 'mode', 'texts', 'requestId', 'pageSession', 'pageId'])
 
 function isInputTexts(value: unknown): value is string[] {
@@ -429,19 +449,19 @@ function isTranslateMessage(value: Record<string, unknown>): boolean {
       typeof value.texts[0] === 'string' && value.texts[0].trim() !== '' && value.texts[0].length <= 2000
   }
   if ('targetLanguage' in value || 'sourceLanguage' in value) return false
-  if (value.mode !== 'input' && 'manualInput' in value) return false
-  if ('manualInput' in value && typeof value.manualInput !== 'boolean') return false
   if (value.mode === 'input') {
     for (const key of Object.keys(value)) {
       if (!FEATURE_TRANSLATE_KEYS.has(key)) return false
     }
     if (!isRequestId(value.requestId)) return false
+    if ('manualInput' in value && typeof value.manualInput !== 'boolean') return false
+    if ('inputTargetLanguage' in value && !isTargetLanguage(value.inputTargetLanguage)) return false
     if (value.pageSession !== undefined && !isPageId(value.pageSession)) return false
     return isInputTexts(value.texts)
   }
   return (
     (value.mode === 'selection' || value.mode === 'auto') &&
-    !('manualInput' in value) &&
+    !('manualInput' in value || 'inputTargetLanguage' in value) &&
     isTranslateTexts(value.texts) &&
     (value.requestId === undefined || isRequestId(value.requestId)) &&
     (value.page === undefined || isPageContext(value.page)) &&
@@ -690,12 +710,16 @@ export function isConfigShape(value: unknown): value is TranslationConfig {
     isSiteScopeMode(value.siteScopeMode) &&
     isExcludedHosts(value.siteScopeHosts) &&
     (value.displayMode === undefined || isDisplayMode(value.displayMode)) &&
+    (value.bilingualStyle === undefined || isBilingualStyle(value.bilingualStyle)) &&
     (value.translationStyle === undefined || isTranslationStyle(value.translationStyle)) &&
     (value.promptGlossary === undefined || isPromptGlossaryList(value.promptGlossary)) &&
     (value.modelProfiles === undefined || isModelProfileList(value.modelProfiles)) &&
     (value.activeProfileId === undefined || typeof value.activeProfileId === 'string') &&
     (value.selectionProfileId === undefined || typeof value.selectionProfileId === 'string') &&
-    (value.hoverTranslateEnabled === undefined || typeof value.hoverTranslateEnabled === 'boolean')
+    (value.inputUsesSelectionProfile === undefined || typeof value.inputUsesSelectionProfile === 'boolean') &&
+    (value.hoverTranslateEnabled === undefined || typeof value.hoverTranslateEnabled === 'boolean') &&
+    (value.inputTriggerMode === undefined || isInputTriggerMode(value.inputTriggerMode)) &&
+    (value.inputTriggerHotkey === undefined || normalizeInputTriggerHotkey(value.inputTriggerHotkey) !== undefined)
   )
 }
 

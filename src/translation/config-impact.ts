@@ -3,6 +3,7 @@ import { isExcludedSite } from './page-policy'
 import { translationRequestOptionsKey } from './request-options'
 import { isSiteScopeAllowed } from './site-scope'
 import { glossarySignature } from './preferences-extra'
+import { sceneProfile } from './model-state'
 
 export type RequestKind = 'auto' | 'selection' | 'hover' | 'input' | 'assist' | 'selection-assist' | 'text' | 'test' | 'catalog'
 
@@ -44,9 +45,10 @@ export function readingPolicyChanged(previous: TranslationConfig, next: Translat
 
 /** 连接不变时，这次配置变更是否影响该请求所在站点的模式或它携带的语境。其他站点的规则不算。 */
 export function requestAffected(request: RequestScope, previous: TranslationConfig, next: TranslationConfig): boolean {
-  if (request.kind === 'selection' || request.kind === 'selection-assist' || request.kind === 'text' || request.kind === 'hover') {
-    const before = previous.modelProfiles.find((profile) => profile.id === previous.selectionProfileId) ?? previous
-    const after = next.modelProfiles.find((profile) => profile.id === next.selectionProfileId) ?? next
+  if (request.kind === 'selection' || request.kind === 'selection-assist' || request.kind === 'text' || request.kind === 'hover' || request.kind === 'input') {
+    const scene = request.kind === 'input' ? 'input' : 'selection'
+    const before = sceneProfile(previous, scene) ?? previous
+    const after = sceneProfile(next, scene) ?? next
     if (before.baseUrl !== after.baseUrl || before.model !== after.model || before.apiType !== after.apiType || before.temperature !== after.temperature) return true
   }
   if (request.kind === 'test' || request.kind === 'catalog' || request.kind === 'text') return false
@@ -55,8 +57,11 @@ export function requestAffected(request: RequestScope, previous: TranslationConf
   if (isSiteScopeAllowed(request.url, previous) !== isSiteScopeAllowed(request.url, next)) return true
   if (request.kind === 'input') {
     return previous.inputTranslationEnabled !== next.inputTranslationEnabled ||
+      previous.inputUsesSelectionProfile !== next.inputUsesSelectionProfile ||
       (previous.autoInteractionEnabled !== next.autoInteractionEnabled && next.inputReplaceMode !== 'auto') ||
       previous.inputReplaceMode !== next.inputReplaceMode ||
+      previous.inputTriggerMode !== next.inputTriggerMode ||
+      previous.inputTriggerHotkey !== next.inputTriggerHotkey ||
       previous.inputTargetLanguage !== next.inputTargetLanguage ||
       previous.inputSourceLanguage !== next.inputSourceLanguage
   }

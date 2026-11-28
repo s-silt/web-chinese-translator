@@ -22,6 +22,10 @@ test('翻译工具保存双语模式、风格与术语，并从实际导出的�
   await page.goto(`chrome-extension://${extensionId}/options.html#wt-tools-title`)
   await page.locator('#wt-display-mode').click()
   await page.getByRole('option', { name: 'Bilingual parallel' }).click()
+  const bilingualStyle = page.locator('#wt-bilingual-style')
+  const highlight = page.getByRole('option', { name: 'Tinted highlight block' })
+  await bilingualStyle.click()
+  await highlight.click()
   await page.locator('#wt-style-select').click()
   await page.getByRole('option', { name: /Technical docs/ }).click()
   await page.locator('[data-test="wt-glossary-source"]').fill('window handle')
@@ -31,19 +35,30 @@ test('翻译工具保存双语模式、风格与术语，并从实际导出的�
   await expect(entries).toContainText('窗口句柄')
   await page.reload()
   await expect(entries).toContainText('window handle')
+  await bilingualStyle.click()
+  await expect(highlight).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('Escape')
   const downloadEvent = page.waitForEvent('download')
   await page.locator('[data-test="wt-backup-export"]').click()
   const download = await downloadEvent
   const buffer = await readFile((await download.path())!)
   expect(JSON.parse(buffer.toString()).config).toMatchObject({
-    displayMode: 'bilingual', translationStyle: 'technical', promptGlossary: [{ source: 'window handle', target: '窗口句柄' }],
+    displayMode: 'bilingual', bilingualStyle: 'highlight', translationStyle: 'technical', promptGlossary: [{ source: 'window handle', target: '窗口句柄' }],
   })
+  await bilingualStyle.click()
+  await page.getByRole('option', { name: 'Dashed underline' }).click()
+  await bilingualStyle.click()
+  await expect(page.getByRole('option', { name: 'Dashed underline' })).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('Escape')
   await entries.getByRole('button').click()
   await expect(entries).toHaveCount(0)
   await page.locator('[data-test="wt-backup-file"]').setInputFiles({ name: 'settings.json', mimeType: 'application/json', buffer })
   await expect(entries).toHaveCount(0)
   await page.getByRole('button', { name: 'Restore backup', exact: true }).click()
   await expect(entries).toContainText('窗口句柄')
+  await bilingualStyle.click()
+  await expect(highlight).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('Escape')
   // 全新来源的实际主机授权只在用户确认时申请。先跳过，并验证连接未被修改。
   const backup = JSON.parse(buffer.toString())
   const endpoint = 'https://backup-model.fixture.test'
@@ -77,6 +92,57 @@ test('翻译工具保存双语模式、风格与术语，并从实际导出的�
     await expect(entries).toContainText('夹具')
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
+})
+
+test('术语表从设置页复制后可无损导回，混有无效行时保留草稿', async ({ page, extensionId, extension }) => {
+  const terms = [{ source: '#include', target: '包含' }, { source: 'a=b', target: 'A -> B' }]
+  await extension.setSettings({ uiLanguage: 'en' })
+  await extension.setTranslationConfig({ promptGlossary: terms })
+  await page.goto(`chrome-extension://${extensionId}/options.html#wt-tools-title`)
+  const sourceInput = page.locator('[data-test="wt-glossary-source"]')
+  const targetInput = page.locator('[data-test="wt-glossary-target"]')
+  const longTerm = 'x'.repeat(121)
+  await sourceInput.fill('existing term')
+  await targetInput.focus()
+  await page.keyboard.insertText(longTerm)
+  await page.locator('[data-test="wt-glossary-add"]').click()
+  await expect(page.getByText('The source and translation can each contain up to 120 characters.', { exact: true })).toBeVisible()
+  await expect(targetInput).toHaveValue(longTerm)
+  await expect(sourceInput).toHaveValue('existing term')
+  await expect(page.locator('[data-test="wt-glossary-list"] li')).toHaveCount(terms.length)
+  // 使用页面内的剪贴板保留实际用户的系统剪贴板内容。
+  await page.evaluate(() => {
+    let value = ''
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: async (text: string) => { value = text }, readText: async () => value },
+    })
+  })
+  await page.locator('[data-test="wt-glossary-copy"]').click()
+  const clipboard = () => page.evaluate(() => navigator.clipboard.readText())
+  await expect.poll(clipboard).not.toBe('')
+  const copied = await clipboard()
+  const rows = page.locator('[data-test="wt-glossary-list"] li')
+  for (let remaining = terms.length; remaining > 0; remaining--) {
+    await rows.first().getByRole('button').click()
+    await expect(rows).toHaveCount(remaining - 1)
+  }
+  await page.locator('[data-test="wt-glossary-bulk-toggle"]').click()
+  const draft = page.locator('[data-test="wt-glossary-bulk-input"]')
+  const submit = page.locator('[data-test="wt-glossary-bulk-import"]')
+  const malformed = 'valid = 有效\ninvalid syntax'
+  await draft.fill(malformed)
+  await submit.click()
+  await expect(draft).toHaveValue(malformed)
+  await expect(rows).toHaveCount(0)
+  await draft.fill(copied)
+  await submit.click()
+  await expect(draft).toBeHidden()
+  await page.reload()
+  await expect(rows).toHaveCount(terms.length)
+  for (const { source, target } of terms) {
+    const row = rows.filter({ has: page.getByText(source, { exact: true }) })
+    await expect(row.locator('strong')).toHaveText(target)
+  }
 })
 
 test('模型设置在各外观与宽窄视口下正常布局，保存按钮可滚动并点击', async ({ page, extensionId, extension }) => {

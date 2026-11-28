@@ -63,6 +63,7 @@ import {
   isInputReplaceMode,
   normalizeBaseUrl,
   normalizeOrigin,
+  normalizeInputTriggerHotkey,
   sanitizeTranslationConfig,
   translationConfigItem,
   watchTranslationConfig,
@@ -74,7 +75,7 @@ import {
   currentRevision,
   invalidateModelState,
   modelRequestConfig,
-  resolveSceneSnapshot,
+  sceneProfile,
   modelSnapshot,
   readConsistentModelState,
   serializeMutation,
@@ -358,6 +359,9 @@ async function assertDispatchAllowed(
     if (policy.feature === 'input' && !config.inputTranslationEnabled) {
       throw new TranslationError('未开启输入翻译')
     }
+    if (policy.feature === 'input' && config.inputTriggerMode === 'manual' && !policy.manualInput) {
+      throw new TranslationError('请使用输入翻译快捷键')
+    }
   }
   if (policy.auto === true && !manualPage && (policy.origin === undefined || !config.autoOrigins.includes(policy.origin))) {
     throw new TranslationError('该站点未开启自动翻译')
@@ -516,6 +520,7 @@ async function saveConfig(
   const apiKey = message.type === 'wt:save-config' ? message.apiKey : undefined
   const rawCustomHeaders = message.type === 'wt:save-config' ? message.customHeaders : undefined
   const expected = message.type === 'wt:save-config' ? message.expectedConnection : undefined
+  const expectedGlossary = message.type === 'wt:save-config' ? message.expectedGlossary : undefined
   if (patch.apiType !== undefined && !isApiType(patch.apiType)) {
     return { ok: false, error: '接口类型无效' }
   }
@@ -541,6 +546,12 @@ async function saveConfig(
   let reply: TranslationReply<ConfigMutationMessage['type']> = { ok: false, error: '保存失败' }
   await serializeMutation(async () => {
     const previous = await getTranslationConfig()
+    if (expectedGlossary && (previous.promptGlossary.length !== expectedGlossary.length ||
+      expectedGlossary.some(({ source, target }, i) =>
+        source !== previous.promptGlossary[i]?.source || target !== previous.promptGlossary[i]?.target))) {
+      reply = { ok: false, code: 'glossary-conflict', error: '术语表已在其他窗口更改，请确认最新内容后重试' }
+      return
+    }
     if (
       expected !== undefined &&
       (expected.baseUrl !== previous.baseUrl ||
@@ -729,6 +740,19 @@ async function saveConfig(
       reply = { ok: false, error: '所选模型档案不存在，请刷新后重试' }
       return
     }
+    const selectionProfile = profiles.find(profile => profile.id === selectionProfileId)
+    const previousSelection = sceneProfile(previous, 'selection')
+    const expectedInputProfile = message.type === 'wt:save-config' ? message.expectedInputProfile : undefined
+    if (expectedInputProfile && (selectionProfile?.id !== expectedInputProfile.id || selectionProfile.baseUrl !== expectedInputProfile.baseUrl)) {
+      reply = { ok: false, error: '模型档案已更改，请刷新后重试' }
+      return
+    }
+    const sameInputProfile = selectionProfile !== undefined && selectionProfile.id === previousSelection?.id &&
+      selectionProfile.baseUrl === previousSelection.baseUrl
+    if (patch.inputUsesSelectionProfile === true && (!selectionProfile || !(await endpointAllowed(selectionProfile.baseUrl)))) {
+      reply = { ok: false, error: '未授权访问该接口地址' }
+      return
+    }
     Object.assign(next, {
       baseUrl: nextBase,
       model: nextModel,
@@ -740,11 +764,13 @@ async function saveConfig(
       ...(patch.targetLanguage !== undefined ? { targetLanguage: patch.targetLanguage } : {}),
       ...(patch.sourceLanguage !== undefined ? { sourceLanguage: patch.sourceLanguage } : {}),
       displayMode: patch.displayMode ?? previous.displayMode,
+      bilingualStyle: patch.bilingualStyle ?? previous.bilingualStyle,
       translationStyle: patch.translationStyle ?? previous.translationStyle,
       promptGlossary: patch.promptGlossary ?? previous.promptGlossary,
       modelProfiles: profiles,
       activeProfileId,
       selectionProfileId,
+      inputUsesSelectionProfile: patch.inputUsesSelectionProfile ?? (sameInputProfile && previous.inputUsesSelectionProfile),
       hoverTranslateEnabled: patch.hoverTranslateEnabled ?? previous.hoverTranslateEnabled,
       selectionPopupEnabled: selectionOn,
       selectionToolbarEnabled: toolbarOn,
@@ -752,6 +778,8 @@ async function saveConfig(
       floatingButtonEnabled: patch.floatingButtonEnabled ?? previous.floatingButtonEnabled,
       autoInteractionEnabled: patch.autoInteractionEnabled ?? previous.autoInteractionEnabled,
       inputTranslationEnabled: patch.inputTranslationEnabled ?? previous.inputTranslationEnabled,
+      inputTriggerMode: patch.inputTriggerMode ?? previous.inputTriggerMode,
+      inputTriggerHotkey: normalizeInputTriggerHotkey(patch.inputTriggerHotkey) ?? previous.inputTriggerHotkey,
       inputTargetLanguage: patch.inputTargetLanguage ?? previous.inputTargetLanguage,
       inputSourceLanguage: patch.inputSourceLanguage ?? previous.inputSourceLanguage,
       inputReplaceMode:
@@ -966,9 +994,8 @@ async function handleTextTranslation(
   requests.set(key, controller)
   interactive.add(key)
   try {
-    const rawSnapshot = await modelSnapshot().catch(() => undefined)
-    if (rawSnapshot === undefined) return unavailableReply(rawSnapshot)
-    const snapshot = resolveSceneSnapshot(rawSnapshot, 'text')
+    const snapshot = await modelSnapshot('text').catch(() => undefined)
+    if (snapshot === undefined) return unavailableReply(snapshot)
     const texts = await scheduleModelTask(
       'interactive',
       async (signal) => {
@@ -1069,11 +1096,8 @@ async function handleTranslate(
     const settings = await getSettings()
     if (!settings.enabled) return { ok: false, error: '总开关已关闭' }
     const origin = normalizeOrigin(sourceUrl)
-    const rawSnapshot = await modelSnapshot().catch(() => undefined)
-    const snapshot =
-      rawSnapshot !== undefined && isInteractive
-        ? resolveSceneSnapshot(rawSnapshot, 'selection')
-        : rawSnapshot
+    const scene = feature === 'input' ? 'input' : isInteractive ? 'selection' : 'page'
+    const snapshot = await modelSnapshot(scene).catch(() => undefined)
     if (controller.signal.aborted) {
       return failed(new CompletionCancelledError())
     }
@@ -1174,7 +1198,7 @@ async function handleTranslate(
             config: {
               ...snapshot.config,
               sourceLanguage: snapshot.config.inputSourceLanguage,
-              targetLanguage: snapshot.config.inputTargetLanguage,
+              targetLanguage: message.inputTargetLanguage ?? snapshot.config.inputTargetLanguage,
             },
           }
     const queueMode = message.mode === 'auto' ? 'auto' : 'selection'
@@ -1261,11 +1285,10 @@ async function handleAssist(
     }
     const senderUrl = sender.url ?? ''
     await restoreAutomaticPause()
-    const baseSnapshot = await modelSnapshot().catch(() => undefined)
-    if (baseSnapshot === undefined || controller.signal.aborted) {
-      return unavailableReply(baseSnapshot)
+    const snapshot = await modelSnapshot(selection ? 'selection' : 'page').catch(() => undefined)
+    if (snapshot === undefined || controller.signal.aborted) {
+      return unavailableReply(snapshot)
     }
-    const snapshot = selection ? resolveSceneSnapshot(baseSnapshot, 'selection') : baseSnapshot
     const origin = normalizeOrigin(senderUrl)
     const host = origin === '' ? '' : new URL(origin).hostname
     if (host === '' || message.input.site !== host) return { ok: false, error: '站点不匹配' }
@@ -1523,7 +1546,7 @@ async function handleRichInputReplacement(
   }
   const allowed = message.type === 'wt:replace-discord-input' ? isDiscordChatUrl(pageUrl) : isSupportedChatUrl(pageUrl)
   if (!allowed) return { ok: false, error: '无权访问' }
-  const snapshot = await modelSnapshot().catch(() => undefined)
+  const snapshot = await modelSnapshot('input').catch(() => undefined)
   if (snapshot === undefined) return unavailableReply(snapshot)
   const signal = new AbortController().signal
   try {
@@ -1569,7 +1592,7 @@ async function handleDocumentInput(
   if (isFrame && !fromOurInputFrame(sender)) return { ok: false, error: '无权访问' }
   const effectiveUrl = isFrame ? inputFrameUrl(documentFormOfBrowserUrl(topUrl), sourceUrl) : sourceUrl
   if (effectiveUrl === undefined) return { ok: false, error: '无权访问' }
-  const snapshot = await modelSnapshot().catch(() => undefined)
+  const snapshot = await modelSnapshot('input').catch(() => undefined)
   if (snapshot === undefined) return unavailableReply(snapshot)
   const controller = new AbortController()
   try {
@@ -1615,7 +1638,7 @@ async function handleDocumentInput(
       return { ok: false, error: '编辑器不可用' }
     }
     if (message.action === 'read') {
-      const postSnapshot = await modelSnapshot().catch(() => undefined)
+      const postSnapshot = await modelSnapshot('input').catch(() => undefined)
       if (postSnapshot === undefined) return unavailableReply(postSnapshot)
       await assertDispatchAllowed(postSnapshot, controller.signal, {
         origin: effectiveUrl,
@@ -1630,6 +1653,12 @@ async function handleDocumentInput(
   } catch (error) {
     return failureReply(error)
   }
+}
+
+async function inputModelAllowed(config: TranslationConfig): Promise<boolean> {
+  if (!config.inputTranslationEnabled) return false
+  const model = sceneProfile(config, 'input') ?? config
+  return model.baseUrl !== '' && model.model !== '' && endpointAllowed(model.baseUrl)
 }
 
 function verifiedRouteSender(
@@ -1697,7 +1726,6 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
       if (fromOurInputFrame(sender)) {
         const [settings, config] = await Promise.all([getSettings(), getTranslationConfig()])
         const allowed = settings.enabled && (await inputFrameAllowed(sender, config))
-        const modelReady = config.baseUrl !== '' && config.model !== ''
         return {
           ok: true,
           modes: {
@@ -1707,7 +1735,7 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
             selection: false,
             smart: false,
             floating: false,
-            input: allowed && modelReady,
+            input: allowed && await inputModelAllowed(config),
           },
         } satisfies TranslationReply<'wt:page-modes'>
       }
@@ -1717,7 +1745,8 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
       if (origin === '') return { ok: false, error: '站点地址无效' }
       const scopeAllowed = isSiteScopeAllowed(sender.url ?? '', config)
       const manualPage = await manualPageAllowed(sender)
-      const allowed = settings.enabled && ((await originAllowed(origin)) || manualPage) && scopeAllowed
+      const siteAuthorized = settings.enabled && scopeAllowed && await originAllowed(origin)
+      const allowed = settings.enabled && (siteAuthorized || manualPage) && scopeAllowed
       const hostname = new URL(origin).hostname
       const disabled = new Set(config.disabledDictionaries)
       const custom = await getCustomDictionaries().catch(() => [])
@@ -1749,7 +1778,7 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
           smart: selection && !config.selectionToolbarEnabled && config.proactiveAssistEnabled,
           floating: interactiveAllowed && config.floatingButtonEnabled,
           ...(modelAllowed && config.hoverTranslateEnabled ? { hover: true } : {}),
-          input: modelAllowed && config.inputTranslationEnabled,
+          input: interactiveAllowed && siteAuthorized && await inputModelAllowed(config),
           ...(fixed ? { fixedEntries: merged } : {}),
         },
       } satisfies TranslationReply<'wt:page-modes'>

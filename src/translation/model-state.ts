@@ -61,27 +61,31 @@ export async function readConsistentModelState<T>(
   }
 }
 
-export function modelSnapshot(): Promise<ModelSnapshot> {
-  return readConsistentModelState(async (config, revision) => ({
-    config,
-    apiKey: config.baseUrl === '' ? '' : await readApiKey(config.baseUrl),
-    customHeaders:
-      config.baseUrl === '' || config.customHeadersRevision === ''
-        ? {}
-        : await readCustomHeaders(config.baseUrl, config.customHeadersRevision),
-    revision,
-  }))
+type ModelScene = 'page' | 'selection' | 'text' | 'input'
+
+export function sceneProfile(config: TranslationConfig, scene: ModelScene) {
+  if (scene === 'page' || (scene === 'input' && !config.inputUsesSelectionProfile)) return undefined
+  return config.modelProfiles.find((profile) => profile.id === config.selectionProfileId)
 }
 
-/** 划词和独立窗口使用选定的配置档；凭据仅在来源相同的接口间复用。 */
+export function modelSnapshot(scene: ModelScene = 'page'): Promise<ModelSnapshot> {
+  return readConsistentModelState(async (config, revision) => {
+    const snapshot = resolveSceneSnapshot({ config, revision, apiKey: '', customHeaders: {} }, scene)
+    if (config.baseUrl === '' || credentialOrigin(config.baseUrl) !== credentialOrigin(snapshot.config.baseUrl)) return snapshot
+    return {
+      ...snapshot,
+      apiKey: await readApiKey(config.baseUrl),
+      customHeaders: config.customHeadersRevision === '' ? {} : await readCustomHeaders(config.baseUrl, config.customHeadersRevision),
+    }
+  })
+}
+
+/** 输入草稿需单独选择使用划词档案。凭据仅在来源相同的接口间复用。 */
 export function resolveSceneSnapshot(
   snapshot: ModelSnapshot,
-  scene: 'page' | 'selection' | 'text',
+  scene: ModelScene,
 ): ModelSnapshot {
-  if (scene === 'page') return snapshot
-  const targetId = snapshot.config.selectionProfileId
-  if (targetId === '') return snapshot
-  const profile = snapshot.config.modelProfiles.find((item) => item.id === targetId)
+  const profile = sceneProfile(snapshot.config, scene)
   if (!profile) return snapshot
   const sameOrigin = credentialOrigin(profile.baseUrl) === credentialOrigin(snapshot.config.baseUrl)
   // 本机只保存一套来源绑定的凭据。其他来源的配置档可以使用匿名接口。

@@ -97,6 +97,7 @@ export function replaceChatDraftInMainWorld(request: ChatReplacementRequest): Ch
   function allowedHost(host: string): boolean {
     switch (host) {
       case 'chatgpt.com':
+      case 'github.com':
       case 'claude.ai':
       case 'web.telegram.org':
       case 'web.whatsapp.com':

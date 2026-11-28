@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_INPUT_REPLACE_KEY,
   formatHotkey,
@@ -188,6 +188,27 @@ describe('input-hotkey 解析与规范化', () => {
     expect(formatHotkey('Tab', true)).toBe('Tab')
     expect(formatHotkey('', false)).toBe('')
     expect(formatHotkey('invalid', false)).toBe('')
+  })
+
+  it('macOS Option 输出特殊字符时识别字母快捷键，保留布局、修饰键和输入法边界', () => {
+    vi.stubGlobal('navigator', { platform: 'MacIntel' })
+    try {
+      const event = { key: 'Ω', code: 'KeyZ', altKey: true, shiftKey: false, ctrlKey: false, metaKey: false }
+      expect(matchesHotkey(event, 'Alt+Z')).toBe(true)
+      expect(matchesHotkey({ ...event, key: 'ˇ', code: 'KeyT', shiftKey: true }, 'Alt+Shift+T')).toBe(true)
+      expect(matchesHotkey({ ...event, key: 'y' }, 'Alt+Z')).toBe(false)
+      expect(matchesHotkey({ ...event, key: 'z', code: 'KeyY' }, 'Alt+Z')).toBe(true)
+      expect(matchesHotkey({ ...event, keyCode: 89 }, 'Alt+Z')).toBe(false)
+      expect(matchesHotkey({ ...event, keyCode: 90, code: 'KeyY' }, 'Alt+Z')).toBe(true)
+      for (const change of [{ key: 'Dead' }, { key: 'Process' }, { keyCode: 229 }, { isComposing: true },
+        { repeat: true }, { ctrlKey: true }, { shiftKey: true }, { metaKey: true }, { code: '' }]) {
+        expect(matchesHotkey({ ...event, ...change }, 'Alt+Z')).toBe(false)
+      }
+      vi.stubGlobal('navigator', { platform: 'Win32' })
+      expect(matchesHotkey(event, 'Alt+Z')).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 

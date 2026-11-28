@@ -21,12 +21,13 @@ function request(kind: RequestScope['kind'], recentSites: readonly string[] = []
 }
 
 describe('配置变更影响判定', () => {
-  it('改划词模型只取消划词、悬停和独立窗口，整页预算与主动陪读保留', () => {
+  it('改交互模型只取消划词、输入、悬停和独立窗口，整页预算与主动陪读保留', () => {
     const profile = { id: 'custom', name: 'Custom', baseUrl: BASE.baseUrl, model: 'alt', apiType: 'chat-completions' as const, temperature: null }
     const next = { ...BASE, selectionProfileId: profile.id, modelProfiles: [profile] }
     expect(translationOutputChanged(BASE, next)).toBe(false)
     for (const kind of ['selection', 'hover', 'selection-assist', 'text'] as const) expect(requestAffected(request(kind), BASE, next)).toBe(true)
-    for (const kind of ['auto', 'input', 'assist', 'test', 'catalog'] as const) expect(requestAffected(request(kind), BASE, next)).toBe(false)
+    for (const kind of ['auto', 'assist', 'test', 'catalog', 'input'] as const) expect(requestAffected(request(kind), BASE, next)).toBe(false)
+    expect(requestAffected(request('input'), next, { ...next, inputUsesSelectionProfile: true })).toBe(true)
     expect(requestAffected(request('hover'), next, { ...next, hoverTranslateEnabled: !next.hoverTranslateEnabled })).toBe(true)
     expect(requestAffected(request('text'), next, { ...next, modelProfiles: [{ ...profile, name: 'Renamed' }] })).toBe(false)
   })
@@ -133,6 +134,9 @@ describe('配置变更影响判定', () => {
     expect(requestAffected(request('input'), subOn, { ...subOn, autoOrigins: [] })).toBe(false)
     expect(requestAffected(request('input'), subOn, { ...subOn, excludedHosts: ['a.example'] })).toBe(true)
     expect(requestAffected(request('input'), subOn, { ...subOn, inputTargetLanguage: 'es' })).toBe(true)
+    expect(requestAffected(request('input'), subOn, { ...subOn, inputTriggerMode: 'manual' })).toBe(true)
+    expect(requestAffected(request('input'), subOn, { ...subOn, inputTriggerHotkey: 'Ctrl+Enter' })).toBe(true)
+    expect(requestAffected(request('selection'), subOn, { ...subOn, inputTriggerMode: 'manual' })).toBe(false)
     expect(requestAffected(request('input'), subOn, { ...subOn, inputSourceLanguage: 'ja' })).toBe(true)
     expect(requestAffected(request('auto'), subOn, { ...subOn, inputTargetLanguage: 'fr' })).toBe(false)
     expect(translationOutputChanged(subOn, { ...subOn, inputTargetLanguage: 'de' })).toBe(false)

@@ -124,6 +124,86 @@ async function settle(ms = 600): Promise<void> {
   await Promise.resolve()
 }
 
+describe('双语对照外观', () => {
+  it('普通文本和嵌套开放根的富文本沿用当前外观，重绘只触及自有译文', async () => {
+    const config = { ...CONFIG, displayMode: 'bilingual' as const, bilingualStyle: 'highlight' as const }
+    await translationConfigItem.setValue(config)
+    const { sendTranslationMessage } = await import('../../../src/translation/client')
+    document.body.innerHTML = '<p id="plain">Plain sentence.</p><div id="host"></div><i data-wt-bilingual="1">网站元素</i>'
+    const outer = document.querySelector('#host')!.attachShadow({ mode: 'open' })
+    const inner = outer.appendChild(document.createElement('div')).attachShadow({ mode: 'open' })
+    inner.innerHTML = '<p>Read <a href="#guide">the guide</a>.</p>'
+    const batches: string[][] = []
+    vi.mocked(sendTranslationMessage).mockImplementation(async (message) => {
+      if (message.type === 'wt:translate') {
+        batches.push(message.texts)
+        return { ok: true, texts: message.texts.map(text => text.includes('<1>') ? '阅读<1>指南</1>。' : '普通译文。') }
+      }
+      return await defaultTransport(message) as never
+    })
+    await startPageTranslation()
+    await settle(1200)
+    const attribute = 'data-wt-bilingual-variant'
+    const lines = [document.querySelector('#plain [data-wt-bilingual]')!, inner.querySelector('p [data-wt-bilingual]')!]
+    expect(lines.map(line => line.getAttribute(attribute))).toEqual(['highlight', 'highlight'])
+    expect(lines.map(line => line.textContent)).toEqual(['普通译文。', '阅读指南。'])
+    const sent = batches.length
+    const before = await triggerMessage({ type: 'wt:status' })
+    expect(before).toMatchObject({ status: { progress: { spent: expect.any(Number) } } })
+    for (const style of ['underline', 'subtle'] as const) {
+      await translationConfigItem.setValue({ ...config, bilingualStyle: style })
+      await settle(500)
+      expect(lines.every(line => line.isConnected && line.getAttribute(attribute) === (style === 'subtle' ? null : style))).toBe(true)
+      expect(document.querySelector('i')!.hasAttribute(attribute)).toBe(false)
+      expect(batches).toHaveLength(sent)
+      expect(await triggerMessage({ type: 'wt:status' })).toEqual(before)
+    }
+    expect(inner.querySelector('a')!.textContent).toBe('the guide')
+  })
+
+  it('纯外观修改保留已显示和在途的悬停翻译，禁用时仍取消并丢弃迟到响应', async () => {
+    const config = { ...CONFIG, displayMode: 'bilingual' as const, bilingualStyle: 'highlight' as const, hoverTranslateEnabled: true }
+    await translationConfigItem.setValue(config)
+    document.body.innerHTML = '<p>First paragraph.</p><p>Second paragraph.</p><p>Third paragraph.</p>'
+    const { sendTranslationMessage } = await import('../../../src/translation/client')
+    const pending: ((reply: { ok: true; texts: string[] }) => void)[] = []
+    vi.mocked(sendTranslationMessage).mockImplementation(async message => {
+      if (message.type === 'wt:page-modes') return { ok: true, modes: { enabled: true, auto: false, fixed: false, selection: false, smart: false, hover: true } }
+      if (message.type === 'wt:translate') return new Promise(resolve => pending.push(resolve))
+      return { ok: true }
+    })
+    await startPageTranslation()
+    await settle()
+    const paragraphs = [...document.querySelectorAll('p')]
+    const hover = async (p: Element) => {
+      p.dispatchEvent(Object.assign(new MouseEvent('mousemove', { bubbles: true, altKey: true }), { isTrusted: true }))
+      await settle(250)
+    }
+    await hover(paragraphs[0]!)
+    pending[0]!({ ok: true, texts: ['第一段'] })
+    await settle()
+    const first = paragraphs[0]!.querySelector('[data-wt-bilingual]')!
+    expect(first.getAttribute('data-wt-bilingual-variant')).toBe('highlight')
+    await hover(paragraphs[1]!)
+    await translationConfigItem.setValue({ ...config, bilingualStyle: 'underline' })
+    await settle()
+    expect(first.isConnected).toBe(true)
+    expect(first.getAttribute('data-wt-bilingual-variant')).toBe('underline')
+    pending[1]!({ ok: true, texts: ['第二段'] })
+    await settle()
+    expect(paragraphs[1]!.querySelector('[data-wt-bilingual]')?.getAttribute('data-wt-bilingual-variant')).toBe('underline')
+    expect(vi.mocked(sendTranslationMessage).mock.calls.some(([m]) => m.type === 'wt:cancel-assist')).toBe(false)
+    await hover(paragraphs[2]!)
+    await translationConfigItem.setValue({ ...config, bilingualStyle: 'subtle', hoverTranslateEnabled: false })
+    await settle()
+    expect(vi.mocked(sendTranslationMessage).mock.calls.some(([m]) => m.type === 'wt:cancel-assist')).toBe(true)
+    pending[2]!({ ok: true, texts: ['迟到译文'] })
+    await settle()
+    expect(document.querySelectorAll('[data-wt-bilingual]')).toHaveLength(0)
+    expect(pending).toHaveLength(3)
+  })
+})
+
 describe('自动弹窗开关', () => {
   it('关闭自动划词和阅读监听，手动消息仍带票据显示结果', async () => {
     smartMode.enabled = true

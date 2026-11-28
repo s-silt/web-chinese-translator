@@ -19,14 +19,16 @@
 ![Translate after a typing pause and restore the original](docs/demos/en-US/01-input.gif)
 
 [View all demos and screenshots](docs/DEMOS.en.md)
-Input translation replaces drafts after a typing pause. Restore original uses an exact draft temporarily saved in local memory. Video subtitle translation has been removed.
+Input translation replaces drafts after a typing pause by default. Choose manual mode to translate only when you press the shortcut. After replacement, choose Restore original or press Alt+Z to recover the draft from local memory. Video subtitle translation has been removed.
 
 | Core Capability | Description |
 | --- | --- |
-| **Webpage translation** | Connect an OpenAI-compatible endpoint (DeepSeek, OpenAI, Claude, or a self-hosted relay) for full-page or per-site automatic translation as you scroll |
+| **Webpage translation** | Connect an OpenAI- or Anthropic-compatible endpoint for full-page or per-site automatic translation. Replace the original text or show a translation below it with a subtle border, highlight, or underline. Hold Alt and hover to translate one paragraph |
 | **Reading & input** | Selection translation and definitions, multilingual draft translation for chat input fields and web search boxes |
 | **Offline UI dictionaries** | Menus and buttons on 26 popular site groups (Cursor, Claude, Vercel, Linear, etc.) and GitHub are replaced locally without calling a model |
-| **Controllable** | Master switch, Exclude this site, per-page limit, and Where to run list; status and failure reasons are shown directly in the popup |
+| **Translation settings** | Exclude sites, choose where the extension runs, set a per-page character limit, and select model profiles and translation styles. Input drafts use the main endpoint by default. To send drafts to the selected profile, enable “Also use this profile for input translation” in Translation tools. Bulk-import or copy glossary terms, or export a settings backup without credentials |
+
+To import glossary terms, enter `source = target` or `source -> target` on each line, or paste two spreadsheet columns. When a tab aligns the translation, a trailing space-separated `=`, `->`, or `=>` marks the end of the source. Blank lines and headers with three or more columns starting with `# ` are skipped. For a literal trailing operator, use a pair such as `["release =", "发行版"]`. **Copy glossary** preserves these characters automatically.
 
 ```text
 Page text ──► Authorized site + Configured endpoint ──► Your model endpoint ──► In-place replacement    Sent on demand
@@ -49,7 +51,7 @@ Page text ──► Authorized site + Configured endpoint ──► Your model e
 | Always auto-translate a site | "Auto-translate this site" in the popup |
 | Never call a model on a site | "Exclude this site" in the popup (local dictionaries still work) |
 | Translate selected text | Select text and right-click "Translate selected text", or press `Alt+S` |
-| Translate drafts in input fields or search boxes | Enable Input translation and grant access; drafts are replaced after the configured typing pause. Restore original recovers the saved draft. No input shortcut or automatic message sending |
+| Translate drafts in input fields or search boxes | Enable Input translation and grant access. In manual mode, press Alt+Enter by default. In ordinary input fields, the result panel also lets you pick a different language for that draft. You decide when to send it |
 | Translate an online document editor | Enable Input translation and grant access; supported safe plain text is replaced after typing stops, while complex formatting offers preview and copy only |
 | Paste arbitrary text or Markdown | Use Text translation in the popup or webpage floating menu, up to 6000 characters per request; it reuses the existing model configuration and does not restore drafts after the window closes |
 | Long article stops translating midway | Raise "Per-page limit" in Settings, or click "Resume translation" |

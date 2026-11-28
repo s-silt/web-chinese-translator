@@ -50,8 +50,8 @@ import { fixedTranslationWith } from './dictionaries/index'
 import { isExcludedSite, isSensitivePage } from './page-policy'
 import { isSiteScopeAllowed, SITE_SCOPE_BLOCKED_ERROR } from './site-scope'
 import { DEFAULT_INPUT_REPLACE_KEY } from './input-hotkey'
-import { createInputTranslation, type InputTranslationWatcher } from './input-translation'
-import { createDocumentInputTranslation, type DocumentInputWatcher, type DocumentInputOptions } from './document-input'
+import { createInputTranslation, type InputTranslationOptions, type InputTranslationWatcher } from './input-translation'
+import { createDocumentInputTranslation, type DocumentInputWatcher } from './document-input'
 import type { DocumentEditorRequest, DocumentEditorResult } from './document-editor'
 import { currentInputFrameTopUrl, inputFrameUrl } from './input-frame'
 import { DEFAULT_SURFACE_PREFERENCES, type SurfacePreferences } from './ui-surface'
@@ -558,6 +558,18 @@ function createInstance(inputOnly = false): Instance {
 
   function ensureInputTranslation(): void {
     if (inputTranslation !== undefined) return
+    const triggers = {
+      triggerMode: () => config?.inputTriggerMode ?? DEFAULT_TRANSLATION_CONFIG.inputTriggerMode,
+      triggerHotkey: () => config?.inputTriggerHotkey ?? DEFAULT_TRANSLATION_CONFIG.inputTriggerHotkey,
+    }
+    const translate: InputTranslationOptions['translate'] = async (texts, requestId, manualInput, inputTargetLanguage) => {
+      if (!inputTranslationOn()) return { ok: false, error: t('wtInputUnavailable') }
+      return sendMessage({
+        type: 'wt:translate', mode: 'input', texts, requestId,
+        ...(manualInput ? { manualInput: true } : {}),
+        ...(inputTargetLanguage ? { inputTargetLanguage } : {}),
+      })
+    }
     inputTranslation = createInputTranslation({
       autoPreview: () => config?.autoInteractionEnabled !== false,
       sourceLanguage: () => config?.inputSourceLanguage ?? 'auto',
@@ -565,18 +577,8 @@ function createInstance(inputOnly = false): Instance {
       replaceKey: () => config?.inputReplaceKey ?? DEFAULT_INPUT_REPLACE_KEY,
       replaceMode: () => config?.inputReplaceMode ?? 'auto',
       autoReplaceDelayMs: () => config?.inputAutoReplaceDelayMs ?? INPUT_AUTO_REPLACE_DELAY_DEFAULT,
-      translate: async (texts, requestId, manualInput) => {
-        if (!inputTranslationOn()) {
-          return { ok: false, error: t('wtInputUnavailable') }
-        }
-        return sendMessage({
-          type: 'wt:translate',
-          mode: 'input',
-          texts,
-          requestId,
-          ...(manualInput === true ? { manualInput: true } : {}),
-        })
-      },
+      ...triggers,
+      translate,
       cancel: (requestId) => {
         void sendTranslationMessage({ type: 'wt:cancel-assist', requestId })
       },
@@ -600,8 +602,8 @@ function createInstance(inputOnly = false): Instance {
       documentInput = createDocumentInputTranslation({
         enabled: inputTranslationOn,
         autoReplaceDelayMs: () => config?.inputAutoReplaceDelayMs ?? INPUT_AUTO_REPLACE_DELAY_DEFAULT,
-        translate: (texts, requestId) =>
-          sendMessage({ type: 'wt:translate', mode: 'input', texts, requestId }),
+        ...triggers,
+        translate,
         cancel: (requestId) => {
           void sendTranslationMessage({ type: 'wt:cancel-assist', requestId })
         },
@@ -624,7 +626,7 @@ function createInstance(inputOnly = false): Instance {
         iconUrl: browser.runtime.getURL('/icon/48.png' as Parameters<typeof browser.runtime.getURL>[0]),
         sourceLanguage: () => config?.inputSourceLanguage ?? 'auto',
         targetLanguage: () => config?.inputTargetLanguage ?? 'en',
-      } as DocumentInputOptions & { readonly autoReplaceDelayMs: () => number })
+      })
     }
   }
 
@@ -652,6 +654,7 @@ function createInstance(inputOnly = false): Instance {
         isEnabled: hoverOn,
         isPageTranslated: node => engine?.isModelTranslated(node) === true,
         displayMode: () => config?.displayMode ?? 'replace',
+        bilingualStyle: () => config?.bilingualStyle ?? 'subtle',
         translateText: async (text, signal) => {
           const requestId = createId()
           const abort = () => { void sendTranslationMessage({ type: 'wt:cancel-assist', requestId }) }
@@ -697,6 +700,7 @@ function createInstance(inputOnly = false): Instance {
       autoEnabled: autoOn,
       targetLanguage: () => config?.targetLanguage ?? 'zh-CN',
       displayMode: () => config?.displayMode ?? 'replace',
+      bilingualStyle: () => config?.bilingualStyle ?? 'subtle',
       autoBudget: () => config?.pageCharLimit ?? DEFAULT_PAGE_CHAR_LIMIT,
       sourceLanguage: () => config?.sourceLanguage ?? 'auto',
       translateFixed: (text) =>
@@ -945,7 +949,6 @@ function createInstance(inputOnly = false): Instance {
         pageRestored = false
       }
       const connectionChanged = translationOutputChanged(previousConfig, nextConfig)
-      if (!connectionChanged && previousConfig.displayMode !== nextConfig.displayMode) engine?.setDisplayMode(nextConfig.displayMode)
       if (
         connectionChanged ||
         nextConfig.inputTranslationEnabled !== previousConfig.inputTranslationEnabled ||
@@ -954,6 +957,8 @@ function createInstance(inputOnly = false): Instance {
         nextConfig.inputReplaceKey !== previousConfig.inputReplaceKey ||
         nextConfig.inputReplaceMode !== previousConfig.inputReplaceMode ||
         nextConfig.inputAutoReplaceDelayMs !== previousConfig.inputAutoReplaceDelayMs ||
+        nextConfig.inputTriggerMode !== previousConfig.inputTriggerMode ||
+        nextConfig.inputTriggerHotkey !== previousConfig.inputTriggerHotkey ||
         nextConfig.autoInteractionEnabled !== previousConfig.autoInteractionEnabled ||
         nextModes.input !== modes.input
       ) {
@@ -971,6 +976,11 @@ function createInstance(inputOnly = false): Instance {
         : undefined
       config = nextConfig
       modes = nextModes
+      if (!connectionChanged && previousConfig.displayMode !== nextConfig.displayMode) engine?.setDisplayMode(nextConfig.displayMode)
+      if (previousConfig.bilingualStyle !== nextConfig.bilingualStyle) {
+        engine?.setBilingualStyle(nextConfig.bilingualStyle)
+        hoverTranslator?.setBilingualStyle(nextConfig.bilingualStyle)
+      }
       panel.setPreferences(surfacePreferences)
       // 词条表内容变化（词典开关/自定义词典编辑）后强制重扫：恢复旧替换再用新表写。
       if (nextModes.fixed && hadFixedEntries !== undefined && !sameFixedEntries(nextModes.fixedEntries, hadFixedEntries)) {
@@ -1142,9 +1152,12 @@ function createInstance(inputOnly = false): Instance {
     return isSiteScopeAllowed(url, config) && !isExcludedSite(url, config.excludedHosts) && !isSensitivePage(url)
   }
 
-  const unwatchConfig = watchTranslationConfig((next) => {
+  const unwatchConfig = watchTranslationConfig((next, previous) => {
+    // 纯外观变化保留悬停译文和在途请求；伴随的权限或连接变化仍立即撤销交互。
+    const styleOnly = previous.bilingualStyle !== next.bilingualStyle &&
+      JSON.stringify({ ...previous, bilingualStyle: next.bilingualStyle }) === JSON.stringify(next)
     const url = location.href
-    disposeLiveFeatures()
+    if (!styleOnly) disposeLiveFeatures()
     if (
       next.floatingButtonEnabled === false ||
       !isSiteScopeAllowed(url, next) ||

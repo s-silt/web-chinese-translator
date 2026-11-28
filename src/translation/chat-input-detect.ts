@@ -8,6 +8,7 @@ export interface ChatReplacementRequest {
 
 const EXACT_CHAT_HOSTS = new Set([
   'chatgpt.com',
+  'github.com',
   'claude.ai',
   'web.telegram.org',
   'web.whatsapp.com',
