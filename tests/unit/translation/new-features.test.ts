@@ -1,3 +1,4 @@
+import { isSupportedChatUrl } from '../../../src/translation/chat-input-detect'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { attachBilingualBlock, attachBilingualNode, BILINGUAL_VARIANT_ATTR, isBilingualElement, removeBilingualNode, updateBilingualVariant } from '../../../src/translation/bilingual'
 import { DEFAULT_TRANSLATION_CONFIG, sanitizeTranslationConfig } from '../../../src/translation/config'
@@ -327,13 +328,13 @@ describe('bilingualStyle variants & glossary bulk import/export', () => {
     expect(parseGlossaryBulkText('#include = 包含')).toEqual({ ok: true, entries: [entries[0]] })
   })
 
-  it('reads both spreadsheet cells verbatim before considering text delimiters or comments', () => {
+  it('preserves spreadsheet cells containing punctuation, JSON-looking sources and comment markers', () => {
     const rows = ['Washington, D.C.\t华盛顿', ' a=b \t 相等 ', '# key\ttarget = value', '["x"]\t[x]']
     expect(parseGlossaryBulkText(rows.join('\r\n'))).toEqual({ ok: true, entries: [
       { source: 'Washington, D.C.', target: '华盛顿' }, { source: 'a=b', target: '相等' },
       { source: '# key', target: 'target = value' }, { source: '["x"]', target: '[x]' },
     ] })
-    for (const invalid of ['\ta=b', 'a=b\t', '\t', '\t# comment', 'a=b\tB\tC', 'A\tB\t']) {
+    for (const invalid of ['\ta=b', 'a=b\t', '\t# comment', '\t# comment\tx', 'a=b\tB\tC', 'A\tB\t']) {
       expect(parseGlossaryBulkText('good = row\n' + invalid)).toEqual({ ok: false, reason: 'invalid', line: 2 })
     }
     const entries = [{ source: 'word', target: 'first\tsecond' }]
@@ -342,7 +343,23 @@ describe('bilingualStyle variants & glossary bulk import/export', () => {
     expect(parseGlossaryBulkText(copied)).toEqual({ ok: true, entries })
   })
 
+  it('accepts tab-aligned text delimiters and skips blank lines and commented table headers', () => {
+    for (const delimiter of ['=', '->', '=>']) {
+      const lines = ['# release glossary', '  # 列名\t原文\t译文', ' \t\t ', `release ${delimiter}\t发行版`, 'a=b\t相等']
+      expect(parseGlossaryBulkText(lines.join('\n'))).toEqual({ ok: true, entries: [
+        { source: 'release', target: '发行版' }, { source: 'a=b', target: '相等' },
+      ] })
+      const literal = [{ source: `release ${delimiter}`, target: 'A\tB' }]
+      expect(parseGlossaryBulkText(formatGlossaryBulkText(literal))).toEqual({ ok: true, entries: literal })
+    }
+    expect(parseGlossaryBulkText(' \t \n# comment\ta\tb')).toEqual({ ok: false, reason: 'empty' })
+    expect(parseGlossaryBulkText('# header\ta\tb\nrelease =\t ')).toEqual({ ok: false, reason: 'invalid', line: 2 })
+  })
+
   it('rejects invalid rows atomically and enforces the unique term limit without discarding excess input', () => {
+    expect(parseGlossaryBulkText('Washington, D.C. = 华盛顿\na=b -> A = B')).toEqual({ ok: true, entries: [
+      { source: 'Washington, D.C.', target: '华盛顿' }, { source: 'a=b', target: 'A = B' },
+    ] })
     for (const invalid of ['bad row', 'a = ', '["source", 3]', '["truncated', 'x = ' + 'y'.repeat(MAX_GLOSSARY_TERM_LENGTH + 1)]) {
       expect(parseGlossaryBulkText('A = B\r\n# a comment\r\n' + invalid)).toEqual({ ok: false, reason: 'invalid', line: 3 })
     }
@@ -357,5 +374,31 @@ describe('bilingualStyle variants & glossary bulk import/export', () => {
     expect(sanitizeTranslationConfig({ bilingualStyle: 'highlight' }).bilingualStyle).toBe('highlight')
     expect(sanitizeTranslationConfig({ bilingualStyle: 'underline' }).bilingualStyle).toBe('underline')
     expect(sanitizeTranslationConfig({ bilingualStyle: 'invalid' }).bilingualStyle).toBe('subtle')
+  })
+})
+
+describe('input replacement upgrades: trigger mode, hotkey, and expanded hosts', () => {
+  it('sanitizes inputTriggerMode and inputTriggerHotkey while keeping legacy inputReplaceMode untouched', () => {
+    const clean = sanitizeTranslationConfig({
+      inputTriggerMode: 'manual',
+      inputTriggerHotkey: 'ctrl+enter',
+    })
+    expect(clean.inputTriggerMode).toBe('manual')
+    expect(clean.inputTriggerHotkey).toBe('Ctrl+Enter')
+    expect(clean.inputReplaceMode).toBe('auto')
+
+    const fallback = sanitizeTranslationConfig({
+      inputTriggerMode: 'invalid',
+      inputTriggerHotkey: 'Escape',
+    })
+    expect(fallback.inputTriggerMode).toBe('auto')
+    expect(fallback.inputTriggerHotkey).toBe('Alt+Enter')
+  })
+
+  it('recognizes supported collaboration routes and keeps sensitive GitHub routes blocked', () => {
+    for (const url of ['https://app.slack.com/client/T1/C2', 'https://linear.app/demo', 'https://www.notion.so/page', 'https://notion.so/page', 'https://github.com/example/project/issues/1']) {
+      expect(isSupportedChatUrl(url)).toBe(true)
+    }
+    expect(isSupportedChatUrl('https://github.com/settings/tokens')).toBe(false)
   })
 })

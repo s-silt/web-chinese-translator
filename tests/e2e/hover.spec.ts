@@ -113,6 +113,8 @@ test('Alt 悬停保留链接及监听器，忽略隐藏正文、敏感路由、�
   const payloads: unknown[] = []
   let completeSlow!: () => void
   const slow = new Promise<void>(resolve => { completeSlow = resolve })
+  let completeWhileStyling!: () => void
+  const whileStyling = new Promise<void>(resolve => { completeWhileStyling = resolve })
   await context.route('https://**/*', async route => {
     const url = new URL(route.request().url())
     if (url.href === endpoint + '/v1/chat/completions') {
@@ -122,8 +124,10 @@ test('Alt 悬停保留链接及监听器，忽略隐藏正文、敏感路由、�
       const texts = Array.isArray(input) ? input : input.texts
       requests.push(...texts)
       if (texts.includes('Slow paragraph.')) await slow
+      if (texts.includes('Release the modifier.')) await whileStyling
       return route.fulfill({ json: { choices: [{ message: { content: JSON.stringify(texts.map(text =>
-        text.replace('Read ', '阅读').replace('the guide', '指南').replace(' today.', '。').replace('Slow paragraph.', '慢译文'),
+        text.replace('Read ', '阅读').replace('the guide', '指南').replace(' today.', '。')
+          .replace('Slow paragraph.', '慢译文').replace('Release the modifier.', '松开修饰键。'),
       )) } }] } })
     }
     if (url.origin === origin) return route.fulfill({ contentType: 'text/html', body:
@@ -210,6 +214,23 @@ test('Alt 悬停保留链接及监听器，忽略隐藏正文、敏感路由、�
     await rich.click({ modifiers: ['Alt'], position: { x: 3, y: 3 } })
     await expect(hoverLine).toHaveCount(0)
     expect(payloads).toHaveLength(hoverRequests)
+    const pending = page.locator('#cancel')
+    await page.keyboard.down('Alt')
+    await pending.hover()
+    await expect.poll(() => requests).toContain('Release the modifier.')
+    const saved = await extension.page.evaluate(async () => {
+      const { chrome } = globalThis as unknown as { chrome: typeof import('wxt/browser').browser }
+      return chrome.runtime.sendMessage({ type: 'wt:save-config', patch: { bilingualStyle: 'highlight' } })
+    })
+    expect(saved).toMatchObject({ ok: true, config: { bilingualStyle: 'highlight' } })
+    expect(await page.evaluate(() => document.hasFocus())).toBe(true)
+    await expect(pending).toHaveAttribute('data-wt-hover-loading', '1')
+    completeWhileStyling()
+    const pendingLine = pending.locator('[data-wt-bilingual]')
+    await expect(pendingLine).toHaveText('松开修饰键。')
+    await expect(pendingLine).toHaveAttribute('data-wt-bilingual-variant', 'highlight')
+    await page.keyboard.up('Alt')
+    expect(payloads).toHaveLength(hoverRequests + 1)
     const config = { ...hoverConfig, autoOrigins: [origin] }
     await extension.setTranslationConfig({ ...config, displayMode: 'bilingual' })
     await page.goto(origin + '/bilingual-article')
@@ -242,6 +263,7 @@ test('Alt 悬停保留链接及监听器，忽略隐藏正文、敏感路由、�
     expect(requests).toHaveLength(beforeRestore)
   } finally {
     completeSlow()
+    completeWhileStyling()
     await page.keyboard.up('Alt')
   }
 })

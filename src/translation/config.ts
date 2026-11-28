@@ -19,6 +19,10 @@ import {
 } from './input-replace-mode'
 import {
   DEFAULT_BILINGUAL_STYLE,
+  DEFAULT_INPUT_TRIGGER_HOTKEY,
+  DEFAULT_INPUT_TRIGGER_MODE,
+  INPUT_TRIGGER_HOTKEY_PRESETS,
+  isInputTriggerMode,
   DEFAULT_DISPLAY_MODE,
   isBilingualStyle,
   DEFAULT_TRANSLATION_STYLE,
@@ -29,6 +33,7 @@ import {
   type ModelProfile,
   type PromptGlossaryEntry,
   type BilingualStyle,
+  type InputTriggerMode,
   type TranslationDisplayMode,
   type TranslationStyle,
 } from './preferences-extra'
@@ -37,6 +42,10 @@ export {
   BILINGUAL_STYLES,
   DEFAULT_BILINGUAL_STYLE,
   DEFAULT_DISPLAY_MODE,
+  DEFAULT_INPUT_TRIGGER_HOTKEY,
+  DEFAULT_INPUT_TRIGGER_MODE,
+  INPUT_TRIGGER_HOTKEY_PRESETS,
+  isInputTriggerMode,
   DEFAULT_TRANSLATION_STYLE,
   DISPLAY_MODES,
   isBilingualStyle,
@@ -96,6 +105,14 @@ export interface TranslationConfig {
   readonly activeProfileId: string
   readonly selectionProfileId: string
   readonly hoverTranslateEnabled: boolean
+  readonly inputTriggerMode: InputTriggerMode
+  readonly inputTriggerHotkey: string
+}
+
+export function normalizeInputTriggerHotkey(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const normalized = normalizeHotkey(value)
+  return INPUT_TRIGGER_HOTKEY_PRESETS.find(key => key === normalized)
 }
 
 /** 单页字符上限的可选档位（0 为不限）。旧版固定 20000，长文常在中途停住 */
@@ -140,6 +157,8 @@ export const DEFAULT_TRANSLATION_CONFIG: TranslationConfig = {
   activeProfileId: '',
   selectionProfileId: '',
   hoverTranslateEnabled: false,
+  inputTriggerMode: DEFAULT_INPUT_TRIGGER_MODE,
+  inputTriggerHotkey: DEFAULT_INPUT_TRIGGER_HOTKEY,
 }
 
 export type CompletionConfig = Pick<TranslationConfig, 'baseUrl' | 'model'> & RequestOptions & {
@@ -336,6 +355,8 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
     activeProfileId: savedProfile(value.activeProfileId),
     selectionProfileId: savedProfile(value.selectionProfileId),
     hoverTranslateEnabled: value.hoverTranslateEnabled === true,
+    inputTriggerMode: isInputTriggerMode(value.inputTriggerMode) ? value.inputTriggerMode : DEFAULT_INPUT_TRIGGER_MODE,
+    inputTriggerHotkey: normalizeInputTriggerHotkey(value.inputTriggerHotkey) ?? DEFAULT_INPUT_TRIGGER_HOTKEY,
   }
 }
 

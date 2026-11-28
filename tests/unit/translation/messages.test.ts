@@ -362,6 +362,7 @@ describe('wt:open-options 固定分区', () => {
     expect(isTranslationMessage(validInput)).toBe(true)
     expect(isTranslationMessage({ ...validInput, manualInput: true })).toBe(true)
     expect(isTranslationMessage({ ...validInput, manualInput: false })).toBe(true)
+    expect(isTranslationMessage({ ...validInput, inputTargetLanguage: 'ja' })).toBe(true)
     expect(isTranslationMessage({ ...validInput, manualInput: 'true' })).toBe(false)
     expect(isTranslationMessage({ ...removedSubtitle, manualInput: true })).toBe(false)
     expect(isTranslationMessage({ type: 'wt:translate', mode: 'selection', texts: ['Hello'], manualInput: true })).toBe(false)
@@ -390,6 +391,10 @@ describe('wt:open-options 固定分区', () => {
       { ...validInput, pageId: 'page-1' },
       { ...validInput, manualSelectionId: 'ticket-1' },
       { ...validInput, targetLanguage: 'ja' },
+      { ...validInput, inputTargetLanguage: 'auto' },
+      { ...validInput, inputTargetLanguage: undefined },
+      { ...validInput, inputTargetLanguage: { value: 'ja' } },
+      ...['auto', 'selection', 'hover'].map((mode) => ({ ...validInput, pageId: 'page-1', mode, inputTargetLanguage: 'ja' })),
       { ...removedSubtitle, sourceLanguage: 'en' },
       { ...removedSubtitle, extraField: true },
       { type: 'wt:translate', mode: 'selection', texts: ['Hello'], targetLanguage: 'en' },

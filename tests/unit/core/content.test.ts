@@ -82,6 +82,8 @@ function scopeConfig(mode: SiteScopeMode, hosts: readonly string[]): Translation
     activeProfileId: '',
     selectionProfileId: '',
     hoverTranslateEnabled: false,
+    inputTriggerMode: 'auto',
+    inputTriggerHotkey: 'Alt+Enter',
     baseUrl: '',
     model: '',
     apiType: 'chat-completions',

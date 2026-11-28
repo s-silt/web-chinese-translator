@@ -25,11 +25,14 @@ import {
   planNativeVideoChatDraft,
   readNativeVideoChatDraft,
 } from './video-chat-input'
-import { formatHotkey } from './input-hotkey'
+import { formatHotkey, matchesHotkey } from './input-hotkey'
+import { DEFAULT_INPUT_TRIGGER_HOTKEY, type InputTriggerMode } from './preferences-extra'
 import type { TranslationReply } from './messages'
 import { closestComposed } from './sites'
 import {
   isCandidateDraft,
+  isTargetLanguage,
+  TARGET_LANGUAGES,
   TARGET_LANGUAGE_NATIVE_LABEL,
   type SourceLanguage,
   type TargetLanguage,
@@ -54,6 +57,7 @@ export interface InputTranslationOptions extends Omit<LiveTranslationOptions, 't
     texts: string[],
     requestId: string,
     manualInput?: boolean,
+    inputTargetLanguage?: TargetLanguage,
   ) => Promise<TranslationReply<'wt:translate'>>
   readonly autoPreview?: () => boolean
   readonly sourceLanguage?: () => SourceLanguage
@@ -61,6 +65,8 @@ export interface InputTranslationOptions extends Omit<LiveTranslationOptions, 't
   readonly replaceKey?: () => string
   readonly replaceMode?: () => InputReplaceMode
   readonly autoReplaceDelayMs?: () => number
+  readonly triggerMode?: () => InputTriggerMode
+  readonly triggerHotkey?: () => string
   replaceDiscordInput?: (request: DiscordReplacementRequest) => Promise<DiscordReplacementStatus>
   replaceChatInput?: (request: ChatReplacementRequest) => Promise<ChatReplacementStatus>
 }
@@ -91,6 +97,8 @@ export const INPUT_POPOVER_CSS = `${SURFACE_CSS}
 .actions:empty { display: none; }
 .actions button { box-sizing: border-box; max-width: 100%; min-width: 0; min-height: var(--gcn-control-md); padding: 4px 12px; font: inherit; font-size: 12px; color: var(--gcn-btn-fg); background: var(--gcn-btn-bg); border: 1px solid var(--gcn-btn-border); border-radius: var(--gcn-radius); cursor: pointer; overflow-wrap: anywhere; }
 .actions button:hover:not(:disabled) { background: var(--gcn-btn-hover-bg); }
+.lang-select { box-sizing: border-box; max-width: 100%; min-height: var(--gcn-control-md); font: inherit; color: var(--gcn-btn-fg); background: var(--gcn-btn-bg); border: 1px solid var(--gcn-btn-border); border-radius: var(--gcn-radius); }
+.lang-select:focus-visible { outline: 2px solid var(--gcn-focus); outline-offset: 2px; }
 .actions button[data-action='replace'] { color: var(--gcn-primary-fg); background: var(--gcn-primary-bg); border-color: var(--gcn-primary-border); font-weight: 600; }
 .actions button[data-action='replace']:hover:not(:disabled) { background: var(--gcn-primary-hover-bg); }
 .actions button:disabled { color: var(--gcn-fg-disabled); background: var(--gcn-bg-disabled); cursor: default; }
@@ -513,6 +521,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
         readonly field: EditableElement
         readonly original: string
         readonly inserted: string
+        readonly language: TargetLanguage
       }
     | undefined
   let copyTimer: ReturnType<typeof setTimeout> | undefined
@@ -582,6 +591,25 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   restoreButton.type = 'button'
   restoreButton.dataset.action = 'restore'
 
+  const langSelect = document.createElement('select')
+  langSelect.className = 'lang-select'
+  langSelect.dataset.action = 'target-lang'
+  for (const lang of TARGET_LANGUAGES) {
+    const opt = document.createElement('option')
+    opt.value = lang
+    opt.textContent = TARGET_LANGUAGE_NATIVE_LABEL[lang]
+    langSelect.append(opt)
+  }
+  langSelect.addEventListener('change', (event) => {
+    if (disposed || !event.isTrusted || replacementBusy || !backupState || !activeField) return
+    const next = langSelect.value
+    if (!isTargetLanguage(next) || next === backupState.language || backupState.field !== activeField) return
+    activeField.focus({ preventScroll: true })
+    if (focusedField() !== activeField || !isCurrentEditable(activeField) || readFieldValue(activeField) !== backupState.inserted) return
+    if (next === options.sourceLanguage?.()) restoreOriginal()
+    else startTranslationForField(activeField, true, next)
+  })
+
   const autoHintNode = document.createElement('span')
   autoHintNode.className = 'auto-hint'
   autoHintNode.dataset.action = 'auto-hint'
@@ -611,7 +639,9 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
 
   function syncLabels(): void {
     applySurfacePreferences(host, options.appearance?.() ?? DEFAULT_SURFACE_PREFERENCES)
-    title.textContent = inputTranslationTitle(options)
+    title.textContent = inputTranslationTitle({ ...options, targetLanguage: () => backupState?.language ?? options.targetLanguage?.() ?? 'en' })
+    langSelect.setAttribute('aria-label', options.t('wtInputLocalTarget'))
+    langSelect.title = options.t('wtInputLocalTarget')
     closeButton.setAttribute('aria-label', options.t('wtPanelClose'))
     replaceButton.textContent = options.t('wtInputReplace')
     const replaceKey = currentReplaceKey()
@@ -629,6 +659,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     if (copyTimer === undefined) copyButton.textContent = options.t('wtToolbarCopy')
     if (copyOriginalTimer === undefined) copyOriginalButton.textContent = options.t('wtInputCopyOriginal')
     restoreButton.textContent = options.t('wtInputRestore')
+    restoreButton.setAttribute('aria-keyshortcuts', 'Alt+Z')
   }
 
   function clearDebounce(): void {
@@ -827,6 +858,8 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     statusNode.textContent = options.t('wtInputRestoreHint')
     actions.textContent = ''
     actions.append(restoreButton)
+    if (backupState) langSelect.value = backupState.language
+    actions.append(langSelect)
     showPopover()
   }
 
@@ -836,6 +869,10 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     statusNode.className = 'status is-error'
     statusNode.textContent = message
     actions.textContent = ''
+    if (backupState && activeField === backupState.field && readFieldValue(activeField) === backupState.inserted) {
+      langSelect.value = backupState.language
+      actions.append(restoreButton, langSelect)
+    }
     if (previewTranslation !== '') {
       actions.append(copyButton)
     }
@@ -885,7 +922,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     }, remaining)
   }
 
-  function startTranslationForField(field: EditableElement, manualInput = false): void {
+  function startTranslationForField(field: EditableElement, manualInput = false, language?: TargetLanguage): void {
     if (disposed || composingField === field || focusedField() !== field || document.hidden) return
     if (!isCurrentEditable(field)) {
       clearAllState(true)
@@ -895,10 +932,12 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     if (suppressedSnapshot !== undefined && suppressedSnapshot.field === field && suppressedSnapshot.value === liveValue) {
       return
     }
-    if (backupState !== undefined && backupState.field === field && liveValue === backupState.inserted) {
-      return
-    }
-    if (!isDraftCandidate(liveValue, manualInput)) {
+    const existing = backupState?.field === field && liveValue === backupState.inserted ? backupState : undefined
+    if (existing && language === undefined) return
+    if (language !== undefined && !existing) return
+    if (!existing) backupState = undefined
+    const source = existing?.original ?? liveValue
+    if (!isCandidateDraft(source, options.sourceLanguage?.(), language ?? options.targetLanguage?.(), manualInput)) {
       clearAllState(true)
       return
     }
@@ -914,8 +953,10 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     inFlightId = requestId
     renderLoading()
 
-    void options
-      .translate([liveValue], requestId, manualInput ? true : undefined)
+    const request = language === undefined
+      ? options.translate([source], requestId, manualInput ? true : undefined)
+      : options.translate([source], requestId, true, language)
+    void request
       .then((reply) => {
         if (disposed || requestEpoch !== epoch || activeField !== field) {
           return
@@ -933,7 +974,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
           directReplaceRequestId = undefined
           if (shouldReplace) {
             renderPreview(reply.texts[0])
-            if (focusedField() === field) replacePreview()
+            if (focusedField() === field) replacePreview(language)
             return
           }
           if (currentReplaceMode() === 'auto') {
@@ -990,6 +1031,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     cancelInFlight()
     hidePopover(false)
     if (composingField === field) return
+    if ((options.triggerMode?.() ?? 'auto') === 'manual') return
     if (!isDraftCandidate(liveValue)) {
       backupState = undefined
       return
@@ -1142,6 +1184,24 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     if (event.isComposing) return
     if (event.key === 'Process' || event.keyCode === 229) return
     if (isEventInsidePopover(event)) return
+    const field = focusedField()
+    if (field && field === resolveEditableField(eventTarget(event)) && composingField === undefined &&
+      backupState?.field === field && !replacementBusy && isCurrentEditable(field) &&
+      matchesHotkey(event, 'Alt+Z') && readFieldValue(field) === backupState.inserted) {
+      event.preventDefault()
+      event.stopPropagation()
+      restoreOriginal()
+      return
+    }
+    if (
+      (options.triggerMode?.() ?? 'auto') === 'manual' &&
+      matchesHotkey(event, options.triggerHotkey?.() ?? DEFAULT_INPUT_TRIGGER_HOTKEY) &&
+      !event.defaultPrevented && field && field === resolveEditableField(eventTarget(event)) && translateAndReplace()
+    ) {
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
     if (composingField !== undefined) {
       // 原生 compositionend 被站点吞掉且未重发时的兜底：浏览器给出的可信 keydown 已不处于合成，
       // 且不是输入法开始合成时的 Process 键，就结束同一输入框的合成状态并重新取样。
@@ -1254,14 +1314,14 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
 
   popover.addEventListener('pointerdown', (event) => {
     holdPointerInsidePopover()
-    if (!(event.target instanceof Element && event.target.closest('button') !== null)) {
+    if (!(event.target instanceof Element && event.target.closest('button,select') !== null)) {
       event.preventDefault()
     }
   })
 
   popover.addEventListener('mousedown', (event) => {
     holdPointerInsidePopover()
-    if (!(event.target instanceof Element && event.target.closest('button') !== null)) {
+    if (!(event.target instanceof Element && event.target.closest('button,select') !== null)) {
       event.preventDefault()
     }
   })
@@ -1325,6 +1385,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     next: string,
     requestEpoch: number,
     mode: 'replace' | 'restore',
+    language?: TargetLanguage,
   ): Promise<void> {
     if (!isManagedPlainEditor(field)) {
       renderError(options.t('wtInputEditorUnsupported'))
@@ -1340,7 +1401,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
         renderError(options.t('wtInputTextChanged'))
         return
       }
-      const originalText = (mode === 'replace' ? expected : next).replace(/\r\n?/g, '\n')
+      const originalText = (mode === 'replace' ? backupState?.original ?? expected : next).replace(/\r\n?/g, '\n')
       const failWith = (key: 'wtInputEditorUnsupported' | 'wtInputReplaceFailed'): void => {
         // 桥可能已写入一部分再报错；草稿不再等于写入前的内容时，给出复制原文。
         if (readFieldValue(field) !== expected.replace(/\r\n?/g, '\n')) {
@@ -1374,7 +1435,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       const normalizedNext = next.replace(/\r\n?/g, '\n')
       recoveryOriginalText = undefined
       if (mode === 'replace') {
-        backupState = { field, original: expected.replace(/\r\n?/g, '\n'), inserted: normalizedNext }
+        backupState = { field, original: originalText, inserted: normalizedNext, language: language ?? options.targetLanguage?.() ?? 'en' }
         snapshotText = normalizedNext
         renderReplaced(normalizedNext)
         return
@@ -1400,7 +1461,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
     }
   }
 
-  function replacePreview(): void {
+  function replacePreview(language?: TargetLanguage): void {
     clearAutoReplace()
     if (disposed || replacementBusy || activeField === undefined || previewTranslation === '') return
     const field = activeField
@@ -1417,18 +1478,18 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       const requestEpoch = epoch
       const expected = snapshotText
       const targetText = previewTranslation.replace(/\r\n?/g, '\n')
-      void commitManagedDraft(field, expected, targetText, requestEpoch, 'replace')
+      void commitManagedDraft(field, expected, targetText, requestEpoch, 'replace', language)
       return
     }
     if (composingField === field || !isCurrentEditable(field)) {
       renderError(options.t('wtInputReplaceFailed'))
       return
     }
-    const original = snapshotText.replace(/\r\n?/g, '\n')
+    const original = (backupState?.original ?? snapshotText).replace(/\r\n?/g, '\n')
     const targetText = previewTranslation.replace(/\r\n?/g, '\n')
     const outcome = commitPlainDraft(field, snapshotText, targetText)
     if (outcome === 'ok') {
-      backupState = { field, original, inserted: targetText }
+      backupState = { field, original, inserted: targetText, language: language ?? options.targetLanguage?.() ?? 'en' }
       snapshotText = targetText
       renderReplaced(targetText)
       return
@@ -1474,7 +1535,13 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
   }
 
   restoreButton.addEventListener('click', (event) => {
-    if (disposed || !event.isTrusted || replacementBusy || backupState === undefined) return
+    if (event.isTrusted) restoreOriginal()
+  })
+
+  function restoreOriginal(): void {
+    if (disposed || replacementBusy || backupState === undefined) return
+    epoch += 1
+    cancelInFlight()
     const { field, original, inserted } = backupState
     recoveryOriginalText = undefined
     if (activeField !== field || composingField === field) {
@@ -1520,7 +1587,7 @@ export function createInputTranslation(options: InputTranslationOptions): InputT
       return
     }
     renderError(outcome === 'changed' ? options.t('wtInputTextChanged') : options.t('wtInputReplaceFailed'))
-  })
+  }
 
   copyButton.addEventListener('click', (event) => {
     if (disposed || !event.isTrusted || previewTranslation === '') return

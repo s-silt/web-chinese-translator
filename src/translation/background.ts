@@ -63,6 +63,7 @@ import {
   isInputReplaceMode,
   normalizeBaseUrl,
   normalizeOrigin,
+  normalizeInputTriggerHotkey,
   sanitizeTranslationConfig,
   translationConfigItem,
   watchTranslationConfig,
@@ -74,7 +75,7 @@ import {
   currentRevision,
   invalidateModelState,
   modelRequestConfig,
-  resolveSceneSnapshot,
+  sceneProfile,
   modelSnapshot,
   readConsistentModelState,
   serializeMutation,
@@ -357,6 +358,9 @@ async function assertDispatchAllowed(
     }
     if (policy.feature === 'input' && !config.inputTranslationEnabled) {
       throw new TranslationError('未开启输入翻译')
+    }
+    if (policy.feature === 'input' && config.inputTriggerMode === 'manual' && !policy.manualInput) {
+      throw new TranslationError('请使用输入翻译快捷键')
     }
   }
   if (policy.auto === true && !manualPage && (policy.origin === undefined || !config.autoOrigins.includes(policy.origin))) {
@@ -760,6 +764,8 @@ async function saveConfig(
       floatingButtonEnabled: patch.floatingButtonEnabled ?? previous.floatingButtonEnabled,
       autoInteractionEnabled: patch.autoInteractionEnabled ?? previous.autoInteractionEnabled,
       inputTranslationEnabled: patch.inputTranslationEnabled ?? previous.inputTranslationEnabled,
+      inputTriggerMode: patch.inputTriggerMode ?? previous.inputTriggerMode,
+      inputTriggerHotkey: normalizeInputTriggerHotkey(patch.inputTriggerHotkey) ?? previous.inputTriggerHotkey,
       inputTargetLanguage: patch.inputTargetLanguage ?? previous.inputTargetLanguage,
       inputSourceLanguage: patch.inputSourceLanguage ?? previous.inputSourceLanguage,
       inputReplaceMode:
@@ -974,9 +980,8 @@ async function handleTextTranslation(
   requests.set(key, controller)
   interactive.add(key)
   try {
-    const rawSnapshot = await modelSnapshot().catch(() => undefined)
-    if (rawSnapshot === undefined) return unavailableReply(rawSnapshot)
-    const snapshot = resolveSceneSnapshot(rawSnapshot, 'text')
+    const snapshot = await modelSnapshot('text').catch(() => undefined)
+    if (snapshot === undefined) return unavailableReply(snapshot)
     const texts = await scheduleModelTask(
       'interactive',
       async (signal) => {
@@ -1077,11 +1082,8 @@ async function handleTranslate(
     const settings = await getSettings()
     if (!settings.enabled) return { ok: false, error: '总开关已关闭' }
     const origin = normalizeOrigin(sourceUrl)
-    const rawSnapshot = await modelSnapshot().catch(() => undefined)
-    const snapshot =
-      rawSnapshot !== undefined && isInteractive
-        ? resolveSceneSnapshot(rawSnapshot, 'selection')
-        : rawSnapshot
+    const scene = feature === 'input' ? 'input' : isInteractive ? 'selection' : 'page'
+    const snapshot = await modelSnapshot(scene).catch(() => undefined)
     if (controller.signal.aborted) {
       return failed(new CompletionCancelledError())
     }
@@ -1182,7 +1184,7 @@ async function handleTranslate(
             config: {
               ...snapshot.config,
               sourceLanguage: snapshot.config.inputSourceLanguage,
-              targetLanguage: snapshot.config.inputTargetLanguage,
+              targetLanguage: message.inputTargetLanguage ?? snapshot.config.inputTargetLanguage,
             },
           }
     const queueMode = message.mode === 'auto' ? 'auto' : 'selection'
@@ -1269,11 +1271,10 @@ async function handleAssist(
     }
     const senderUrl = sender.url ?? ''
     await restoreAutomaticPause()
-    const baseSnapshot = await modelSnapshot().catch(() => undefined)
-    if (baseSnapshot === undefined || controller.signal.aborted) {
-      return unavailableReply(baseSnapshot)
+    const snapshot = await modelSnapshot(selection ? 'selection' : 'page').catch(() => undefined)
+    if (snapshot === undefined || controller.signal.aborted) {
+      return unavailableReply(snapshot)
     }
-    const snapshot = selection ? resolveSceneSnapshot(baseSnapshot, 'selection') : baseSnapshot
     const origin = normalizeOrigin(senderUrl)
     const host = origin === '' ? '' : new URL(origin).hostname
     if (host === '' || message.input.site !== host) return { ok: false, error: '站点不匹配' }
@@ -1531,7 +1532,7 @@ async function handleRichInputReplacement(
   }
   const allowed = message.type === 'wt:replace-discord-input' ? isDiscordChatUrl(pageUrl) : isSupportedChatUrl(pageUrl)
   if (!allowed) return { ok: false, error: '无权访问' }
-  const snapshot = await modelSnapshot().catch(() => undefined)
+  const snapshot = await modelSnapshot('input').catch(() => undefined)
   if (snapshot === undefined) return unavailableReply(snapshot)
   const signal = new AbortController().signal
   try {
@@ -1577,7 +1578,7 @@ async function handleDocumentInput(
   if (isFrame && !fromOurInputFrame(sender)) return { ok: false, error: '无权访问' }
   const effectiveUrl = isFrame ? inputFrameUrl(documentFormOfBrowserUrl(topUrl), sourceUrl) : sourceUrl
   if (effectiveUrl === undefined) return { ok: false, error: '无权访问' }
-  const snapshot = await modelSnapshot().catch(() => undefined)
+  const snapshot = await modelSnapshot('input').catch(() => undefined)
   if (snapshot === undefined) return unavailableReply(snapshot)
   const controller = new AbortController()
   try {
@@ -1623,7 +1624,7 @@ async function handleDocumentInput(
       return { ok: false, error: '编辑器不可用' }
     }
     if (message.action === 'read') {
-      const postSnapshot = await modelSnapshot().catch(() => undefined)
+      const postSnapshot = await modelSnapshot('input').catch(() => undefined)
       if (postSnapshot === undefined) return unavailableReply(postSnapshot)
       await assertDispatchAllowed(postSnapshot, controller.signal, {
         origin: effectiveUrl,
@@ -1638,6 +1639,12 @@ async function handleDocumentInput(
   } catch (error) {
     return failureReply(error)
   }
+}
+
+async function inputModelAllowed(config: TranslationConfig): Promise<boolean> {
+  if (!config.inputTranslationEnabled) return false
+  const model = sceneProfile(config, 'input') ?? config
+  return model.baseUrl !== '' && model.model !== '' && endpointAllowed(model.baseUrl)
 }
 
 function verifiedRouteSender(
@@ -1705,7 +1712,6 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
       if (fromOurInputFrame(sender)) {
         const [settings, config] = await Promise.all([getSettings(), getTranslationConfig()])
         const allowed = settings.enabled && (await inputFrameAllowed(sender, config))
-        const modelReady = config.baseUrl !== '' && config.model !== ''
         return {
           ok: true,
           modes: {
@@ -1715,7 +1721,7 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
             selection: false,
             smart: false,
             floating: false,
-            input: allowed && modelReady,
+            input: allowed && await inputModelAllowed(config),
           },
         } satisfies TranslationReply<'wt:page-modes'>
       }
@@ -1725,7 +1731,8 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
       if (origin === '') return { ok: false, error: '站点地址无效' }
       const scopeAllowed = isSiteScopeAllowed(sender.url ?? '', config)
       const manualPage = await manualPageAllowed(sender)
-      const allowed = settings.enabled && ((await originAllowed(origin)) || manualPage) && scopeAllowed
+      const siteAuthorized = settings.enabled && scopeAllowed && await originAllowed(origin)
+      const allowed = settings.enabled && (siteAuthorized || manualPage) && scopeAllowed
       const hostname = new URL(origin).hostname
       const disabled = new Set(config.disabledDictionaries)
       const custom = await getCustomDictionaries().catch(() => [])
@@ -1757,7 +1764,7 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
           smart: selection && !config.selectionToolbarEnabled && config.proactiveAssistEnabled,
           floating: interactiveAllowed && config.floatingButtonEnabled,
           ...(modelAllowed && config.hoverTranslateEnabled ? { hover: true } : {}),
-          input: modelAllowed && config.inputTranslationEnabled,
+          input: interactiveAllowed && siteAuthorized && await inputModelAllowed(config),
           ...(fixed ? { fixedEntries: merged } : {}),
         },
       } satisfies TranslationReply<'wt:page-modes'>

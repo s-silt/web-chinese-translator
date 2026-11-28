@@ -4456,6 +4456,76 @@ describe('悬浮模型设置入口', () => {
 })
 
 describe('输入翻译自动处理边界与字幕移除', () => {
+  const profile = { id: 'input-local', name: 'Input', baseUrl: 'https://input.example/v1', model: 'input-model', apiType: 'chat-completions' as const, temperature: null }
+
+  it('仅扩展页保存输入触发设置，手动模式拒绝自动请求并保留页面权限检查', async () => {
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true })
+    const save = { type: 'wt:save-config', patch: { inputTriggerMode: 'manual', inputTriggerHotkey: 'ctrl+enter' } }
+    expect(await trigger(save, contentSender)).toMatchObject({ ok: false })
+    expect(await trigger(save, extSender)).toMatchObject({ ok: true })
+    expect(await translationConfigItem.getValue()).toMatchObject({ inputTriggerMode: 'manual', inputTriggerHotkey: 'Ctrl+Enter' })
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completionReply(['Hello']))
+    const message = { type: 'wt:translate', mode: 'input', texts: ['草稿'], requestId: 'manual-input' }
+    expect(await trigger(message, contentSender)).toMatchObject({ ok: false })
+    expect(await trigger({ ...message, manualInput: true }, { ...contentSender, url: 'https://app.devin.ai/settings/tokens' })).toMatchObject({ ok: false })
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(await trigger({ ...message, manualInput: true }, contentSender)).toMatchObject({ ok: true })
+    vi.mocked(fakeBrowser.permissions.contains).mockImplementation(async (permission) => !permission.origins?.includes('https://app.devin.ai/*'))
+    expect(await trigger({ ...message, manualInput: true }, contentSender)).toMatchObject({ ok: false })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('输入实际端点授权后只接收本次语言，不继承跨源凭据或附加参数', async () => {
+    const revision = '11111111-1111-4111-8111-111111111111'
+    customHeadersStore = { origin: 'https://api.example.com', revision, headers: { 'X-Synthetic': 'fixture-only' } }
+    await translationConfigItem.setValue({ ...VALID_CONFIG, customHeadersRevision: revision, requestParams: { seed: 42 },
+      inputTranslationEnabled: true, modelProfiles: [profile], selectionProfileId: profile.id })
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completionReply(['訳文']))
+    const message = { type: 'wt:translate', mode: 'input', texts: ['输入草稿'], requestId: 'input-profile' }
+    const permission = vi.mocked(fakeBrowser.permissions.contains)
+    permission.mockImplementation(async (query) => !query.origins?.includes('https://input.example/*'))
+    expect(await trigger({ type: 'wt:page-modes' }, contentSender)).toMatchObject({ modes: { input: false } })
+    expect(await trigger(message, contentSender)).toMatchObject({ ok: false })
+    expect(fetcher).not.toHaveBeenCalled()
+    permission.mockImplementation(async (query) => !query.origins?.includes('https://api.example.com/*'))
+    expect(await trigger({ type: 'wt:page-modes' }, contentSender)).toMatchObject({ modes: { input: true } })
+    expect(await trigger({ ...message, inputTargetLanguage: 'ja' }, contentSender)).toMatchObject({ ok: true })
+    expect(await trigger(message, contentSender)).toMatchObject({ ok: true })
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    const prompts = fetcher.mock.calls.map(([url, init]) => {
+      expect(String(url)).toBe('https://input.example/v1/chat/completions')
+      const headers = new Headers(init?.headers)
+      expect(headers.has('authorization')).toBe(false)
+      expect(headers.has('x-synthetic')).toBe(false)
+      const body = JSON.parse(String(init?.body))
+      expect(body.model).toBe(profile.model)
+      expect(body.seed).toBeUndefined()
+      return body.messages[0].content
+    })
+    expect(prompts[0]).toContain('into natural, accurate Japanese')
+    expect(prompts[1]).toContain('into natural, accurate English')
+    expect((await translationConfigItem.getValue()).inputTargetLanguage).toBe('en')
+  })
+
+  it.each(['mode', 'hotkey', 'profile', 'permission'])('输入在途时 %s 改变会立即取消', async (change) => {
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true, modelProfiles: [profile], selectionProfileId: profile.id })
+    let signal: AbortSignal | undefined
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      signal = init?.signal as AbortSignal
+      return new Promise<Response>((_resolve, reject) => signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))))
+    })
+    const pending = trigger({ type: 'wt:translate', mode: 'input', requestId: 'input-change', texts: ['等待处理'] }, contentSender)
+    await vi.waitFor(() => expect(signal).toBeDefined())
+    if (change === 'permission') {
+      for (const listener of removedListeners) listener({ origins: ['https://input.example/*'] })
+    } else {
+      const patch = change === 'mode' ? { inputTriggerMode: 'manual' } : change === 'hotkey' ? { inputTriggerHotkey: 'Ctrl+Enter' } : { selectionProfileId: '' }
+      expect(await trigger({ type: 'wt:save-config', patch }, extSender)).toMatchObject({ ok: true })
+    }
+    expect(signal?.aborted).toBe(true)
+    expect(await pending).toMatchObject({ ok: false, code: 'cancelled' })
+  })
+
   it('仅保留 input 模式，自动弹窗关闭不阻断明确开启的自动输入', async () => {
     await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true, autoOrigins: [], autoInteractionEnabled: false })
     const reply = await trigger({ type: 'wt:page-modes' }, contentSender)

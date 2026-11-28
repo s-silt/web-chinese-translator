@@ -20,11 +20,12 @@ function trustedInput(target: Element): void {
   target.dispatchEvent(event)
 }
 
-function trustedKeydown(target: EventTarget, init: KeyboardEventInit = {}, composing = false): void {
+function trustedKeydown(target: EventTarget, init: KeyboardEventInit = {}, composing = false): KeyboardEvent {
   const event = new KeyboardEvent('keydown', { bubbles: true, composed: true, cancelable: true, ...init })
   Object.defineProperty(event, 'isTrusted', { value: true, configurable: true })
   if (composing) Object.defineProperty(event, 'isComposing', { value: true, configurable: true })
   target.dispatchEvent(event)
+  return event
 }
 
 function trustedEvent(target: EventTarget, type: string): void {
@@ -74,6 +75,7 @@ interface Harness {
   watcher: ReturnType<typeof createDocumentInputTranslation>
   editorCalls: DocumentEditorRequest[]
   translateCalls: string[][]
+  manualRequests: (boolean | undefined)[]
   cancelCalls: string[]
   setRead: (result: DocumentEditorResult | (() => DocumentEditorResult | Promise<DocumentEditorResult>)) => void
   setReplace: (result: DocumentEditorResult | (() => DocumentEditorResult | Promise<DocumentEditorResult>)) => void
@@ -88,10 +90,13 @@ function setup(
     iconUrl?: string
     sourceLanguage?: () => SourceLanguage
     targetLanguage?: () => TargetLanguage
+    triggerMode?: () => 'manual' | 'auto'
+    triggerHotkey?: () => string
   } = {},
 ): Harness {
   const editorCalls: DocumentEditorRequest[] = []
   const translateCalls: string[][] = []
+  const manualRequests: (boolean | undefined)[] = []
   const cancelCalls: string[] = []
   let readResult: DocumentEditorResult | (() => DocumentEditorResult | Promise<DocumentEditorResult>) = {
     status: 'ok',
@@ -109,8 +114,9 @@ function setup(
   }
   const watcher = createDocumentInputTranslation({
     enabled: () => options.enabled !== false,
-    translate: async (texts) => {
+    translate: async (texts, _request, manual) => {
       translateCalls.push([...texts])
+      manualRequests.push(manual)
       return typeof translateReply === 'function' ? translateReply() : translateReply
     },
     cancel: (id) => {
@@ -126,12 +132,15 @@ function setup(
     ...(options.iconUrl !== undefined ? { iconUrl: options.iconUrl } : {}),
     ...(options.sourceLanguage !== undefined ? { sourceLanguage: options.sourceLanguage } : {}),
     ...(options.targetLanguage !== undefined ? { targetLanguage: options.targetLanguage } : {}),
+    triggerMode: options.triggerMode,
+    triggerHotkey: options.triggerHotkey,
   })
   activeWatchers.push(watcher)
   return {
     watcher,
     editorCalls,
     translateCalls,
+    manualRequests,
     cancelCalls,
     setRead: (result) => { readResult = result },
     setReplace: (result) => { replaceResult = result },
@@ -168,6 +177,65 @@ afterEach(() => {
 })
 
 describe('createDocumentInputTranslation', () => {
+  it('手动模式仅匹配可信热键：停输与合成不发请求、在途按键不重复、Alt+Z 仅还原本编辑器', async () => {
+    vi.useFakeTimers()
+    try {
+      const { editable } = makeEditorRoot()
+      const f = setup({ triggerMode: () => 'manual', triggerHotkey: () => 'Ctrl+Enter' })
+      const trigger = { key: 'Enter', ctrlKey: true }
+      const restore = { key: 'z', altKey: true }
+      trustedInput(editable)
+      trustedKeydown(editable, { key: 'a' })
+      await vi.advanceTimersByTimeAsync(1200)
+      editable.dispatchEvent(new KeyboardEvent('keydown', { ...trigger, bubbles: true }))
+      expect(trustedKeydown(editable, { key: 'Enter', altKey: true }).defaultPrevented).toBe(false)
+      expect(trustedKeydown(editable, restore).defaultPrevented).toBe(false)
+      trustedEvent(editable, 'compositionstart')
+      editable.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+      expect(trustedKeydown(editable, trigger).defaultPrevented).toBe(false)
+      trustedEvent(editable, 'compositionend')
+      expect(trustedKeydown(editable, trigger, true).defaultPrevented).toBe(false)
+      await vi.advanceTimersByTimeAsync(1200)
+      expect(f.editorCalls).toHaveLength(0)
+      expect(f.translateCalls).toHaveLength(0)
+
+      const read = deferred<DocumentEditorResult>()
+      f.setRead(() => read.promise)
+      expect(trustedKeydown(editable, trigger).defaultPrevented).toBe(true)
+      trustedKeydown(editable, { ...trigger, repeat: true })
+      trustedKeydown(editable, trigger)
+      expect(f.editorCalls.map(call => call.action)).toEqual(['read'])
+      read.resolve({ status: 'ok', text: '手动草稿', canReplace: true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(f.translateCalls).toEqual([['手动草稿']])
+      expect(f.manualRequests).toEqual([true])
+      expect(f.editorCalls.at(-1)).toMatchObject({ action: 'replace', expectedText: '手动草稿', text: '译文' })
+      expect(trustedKeydown(document.body, restore).defaultPrevented).toBe(false)
+      expect(trustedKeydown(editable, restore).defaultPrevented).toBe(true)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(f.editorCalls.at(-1)).toMatchObject({ action: 'replace', expectedText: '译文', text: '手动草稿' })
+      expect(trustedKeydown(editable, restore).defaultPrevented).toBe(false)
+      expect(f.translateCalls).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('手动读取尚未完成时失去焦点，不发送草稿或写入文档', async () => {
+    const { editable } = makeEditorRoot()
+    const f = setup({ triggerMode: () => 'manual' })
+    const read = deferred<DocumentEditorResult>()
+    f.setRead(() => read.promise)
+    trustedKeydown(editable, { key: 'Enter', altKey: true })
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    outside.focus()
+    read.resolve({ status: 'ok', text: '旧的草稿', canReplace: true })
+    await vi.waitFor(() => expect(isPopoverOpen()).toBe(false))
+    expect(f.editorCalls.map(call => call.action)).toEqual(['read'])
+    expect(f.translateCalls).toHaveLength(0)
+  })
+
   it('译文换行归一化后写回，还原仍匹配实际写入内容', async () => {
     makeEditorRoot()
     const { watcher, editorCalls, setTranslate, setReplace } = setup()

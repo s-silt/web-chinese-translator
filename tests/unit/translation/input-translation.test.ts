@@ -110,6 +110,64 @@ function isPopoverOpen(): boolean {
 }
 
 describe('输入翻译触发、防抖、IME 与过滤规则', () => {
+  it('手动模式只响应受支持输入框的可信热键，临时改语言发送最初原稿，Alt+Z 本地恢复', async () => {
+    const field = document.body.appendChild(document.createElement('textarea'))
+    const password = document.body.appendChild(document.createElement('input'))
+    password.type = 'password'
+    const translate = vi.fn(async (_texts: string[], _id: string, _manual?: boolean, language?: string) => ({
+      ok: true as const, texts: [language === 'ja' ? '日本語結果' : 'English output'],
+    }))
+    createInputTranslation({ translate, cancel: vi.fn(), t: key => key, triggerMode: () => 'manual', triggerHotkey: () => 'Ctrl+Enter' })
+    const press = (target: Element, key: string, init: KeyboardEventInit, trusted = true) => {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init })
+      Object.defineProperty(event, 'isTrusted', { value: trusted })
+      target.dispatchEvent(event)
+      return event.defaultPrevented
+    }
+    trustedInput(password, '保密测试字段')
+    expect(press(password, 'Enter', { ctrlKey: true })).toBe(false)
+    trustedInput(field, '原始测试草稿')
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(press(field, 'Enter', { altKey: true })).toBe(false)
+    expect(press(field, 'Enter', { ctrlKey: true, isComposing: true })).toBe(false)
+    expect(press(field, 'Enter', { ctrlKey: true }, false)).toBe(false)
+    expect(translate).not.toHaveBeenCalled()
+    expect(press(field, 'Enter', { ctrlKey: true })).toBe(true)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(field.value).toBe('English output')
+    const select = popoverShadow()!.querySelector<HTMLSelectElement>('select[data-action="target-lang"]')!
+    select.value = 'ja'
+    select.dispatchEvent(new Event('change'))
+    expect(translate).toHaveBeenCalledTimes(1)
+    const change = new Event('change', { bubbles: true })
+    Object.defineProperty(change, 'isTrusted', { value: true })
+    select.dispatchEvent(change)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(translate.mock.calls[1]).toEqual([['原始测试草稿'], expect.any(String), true, 'ja'])
+    expect(field.value).toBe('日本語結果')
+    expect(press(field, 'z', { altKey: true })).toBe(true)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(field.value).toBe('原始测试草稿')
+    expect(translate).toHaveBeenCalledTimes(2)
+    expect(press(field, 'z', { altKey: true })).toBe(false)
+  })
+
+  it('手动翻译在用户继续编辑后取消；迟到的成功结果保留最新草稿', async () => {
+    const field = document.body.appendChild(document.createElement('textarea'))
+    let complete!: (reply: { ok: true; texts: string[] }) => void
+    const translate = vi.fn(() => new Promise<{ ok: true; texts: string[] }>(resolve => { complete = resolve }))
+    const cancel = vi.fn()
+    const watcher = createInputTranslation({ translate, cancel, t: key => key, triggerMode: () => 'manual' })
+    trustedInput(field, '翻译初稿')
+    expect(watcher.translateAndReplace()).toBe(true)
+    trustedInput(field, '用户新输入的草稿')
+    complete({ ok: true, texts: ['Stale output'] })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(translate).toHaveBeenCalledTimes(1)
+    expect(field.value).toBe('用户新输入的草稿')
+  })
+
   it('初始草稿与仅聚焦不触发，非可信合成事件不触发，英文忽略，IME 结束后按默认 1000ms 空闲间隔只发最新值', async () => {
     const input = document.createElement('input')
     input.type = 'text'
@@ -1584,8 +1642,8 @@ describe('ChatGPT Claude Telegram 纯文本草稿', () => {
     expect(disposed.getAttribute('data-wt-chat-input')).toBeNull()
   })
 
-  it('序列化后的主世界函数只用绑定的 EditorView，按模型换行且不读 pmViewDesc', () => {
-    setPageUrl('https://chatgpt.com/c/1')
+  it.each(['https://chatgpt.com/c/1', 'https://github.com/example/project/issues/1'])('序列化后的主世界函数只用绑定的 EditorView，按模型换行且不读 pmViewDesc：%s', (url) => {
+    setPageUrl(url)
     const source = replaceChatDraftInMainWorld.toString()
     expect(source.includes('isSupportedChatUrl')).toBe(false)
     expect(source.includes('CHAT_HOSTS')).toBe(false)
@@ -2794,7 +2852,7 @@ describe('输入不再提供替换快捷键', () => {
     await vi.advanceTimersByTimeAsync(1000)
     await Promise.resolve()
 
-    expect(popoverShadow()?.querySelector('[aria-keyshortcuts]')).toBeNull()
+    expect(popoverShadow()?.querySelector('[aria-keyshortcuts]:not([data-action="restore"])')).toBeNull()
 
     const bubbleSpy = vi.fn()
     textarea.addEventListener('keydown', bubbleSpy)
@@ -2917,7 +2975,7 @@ describe('输入不再提供替换快捷键', () => {
       expect(textarea.value).toBe(`旧配置草稿${key}`)
       await vi.advanceTimersByTimeAsync(500)
       expect(textarea.value).toBe(`Translated: 旧配置草稿${key}`)
-      expect(popoverShadow()?.querySelector('[aria-keyshortcuts]')).toBeNull()
+      expect(popoverShadow()?.querySelector('[aria-keyshortcuts]:not([data-action="restore"])')).toBeNull()
       expect(popoverShadow()?.querySelector('button[data-action="replace"]')).toBeNull()
     }
     expect(translate).toHaveBeenCalledTimes(2)

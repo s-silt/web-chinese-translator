@@ -6,6 +6,15 @@ export type BilingualStyle = 'subtle' | 'highlight' | 'underline'
 export const DEFAULT_BILINGUAL_STYLE: BilingualStyle = 'subtle'
 export const BILINGUAL_STYLES: readonly BilingualStyle[] = ['subtle', 'highlight', 'underline'] as const
 
+export type InputTriggerMode = 'auto' | 'manual'
+export const DEFAULT_INPUT_TRIGGER_MODE: InputTriggerMode = 'auto'
+export const DEFAULT_INPUT_TRIGGER_HOTKEY = 'Alt+Enter'
+export const INPUT_TRIGGER_HOTKEY_PRESETS = ['Alt+Enter', 'Ctrl+Enter', 'Alt+Shift+T', 'Ctrl+Shift+Y'] as const
+
+export function isInputTriggerMode(value: unknown): value is InputTriggerMode {
+  return value === 'auto' || value === 'manual'
+}
+
 export function isBilingualStyle(value: unknown): value is BilingualStyle {
   return value === 'subtle' || value === 'highlight' || value === 'underline'
 }
@@ -186,7 +195,8 @@ function parseGlossaryLine(line: string): PromptGlossaryEntry | undefined {
     } catch { /* Invalid JSON is reported with the original line number. */ }
     return undefined
   }
-  const match = glossarySeparator.exec(line)
+  // A spaced operator marks the field boundary even when the source contains punctuation.
+  const match = /\s+(?:=>|->|=)\s+/.exec(line) ?? glossarySeparator.exec(line)
   if (!match) return undefined
   return { source: line.slice(0, match.index).trim(), target: line.slice(match.index + match[0].length).trim() }
 }
@@ -195,15 +205,19 @@ function parseGlossaryLine(line: string): PromptGlossaryEntry | undefined {
 export function parseGlossaryBulkText(raw: string): GlossaryImport {
   const entries = new Map<string, PromptGlossaryEntry>()
   for (const [index, line] of raw.split(/\r\n?|\n/).entries()) {
+    if (!line.trim()) continue
     // Spreadsheet rows have exactly two cells. Split before trimming so a missing cell stays visible.
     const cells = line.split('\t')
+    const first = cells[0]!.trim()
     let entry: PromptGlossaryEntry | undefined
     if (cells.length === 2) {
-      entry = { source: cells[0]!.trim(), target: cells[1]!.trim() }
+      // A spaced operator before the tab is an explicit separator, as in "release =<tab>发行版".
+      entry = { source: first.replace(/\s+(?:=>|->|=)$/, ''), target: cells[1]!.trim() }
+    } else if (/^#(?:\s|$)/.test(first)) {
+      continue
     } else if (cells.length === 1) {
-      const trimmed = line.trim()
-      if (!trimmed || (trimmed.startsWith('#') && (/^#\s/.test(trimmed) || !glossarySeparator.test(trimmed)))) continue
-      entry = parseGlossaryLine(trimmed)
+      if (first.startsWith('#') && !glossarySeparator.test(first)) continue
+      entry = parseGlossaryLine(first)
     }
     if (!entry || !entry.source || !entry.target ||
       entry.source.length > MAX_GLOSSARY_TERM_LENGTH || entry.target.length > MAX_GLOSSARY_TERM_LENGTH) {

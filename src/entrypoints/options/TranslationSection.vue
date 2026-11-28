@@ -277,7 +277,23 @@
               data-test="wt-input-same-language-hint"
             >{{ t('wtInputSameLanguageHint') }}</p>
             <div class="wt-language-pair">
-              <div class="wt-field">
+              <label class="wt-field">
+                <span id="wt-input-trigger-mode-label" class="ui-label">{{ t('wtInputTriggerLabel') }}</span>
+                <UiSelect
+                  :model-value="inputTriggerMode" :disabled="!ready || saving" :options="inputTriggerModes"
+                  aria-labelledby="wt-input-trigger-mode-label" data-test="wt-input-trigger-mode"
+                  @update:model-value="changeInputTrigger({ inputTriggerMode: $event as TranslationConfig['inputTriggerMode'] })"
+                />
+              </label>
+              <label v-if="inputTriggerMode === 'manual'" class="wt-field">
+                <span id="wt-input-trigger-hotkey-label" class="ui-label">{{ t('wtInputTriggerHotkeyLabel') }}</span>
+                <UiSelect
+                  :model-value="inputTriggerHotkey" :disabled="!ready || saving" :options="inputTriggerKeys"
+                  aria-labelledby="wt-input-trigger-hotkey-label" data-test="wt-input-trigger-hotkey"
+                  @update:model-value="changeInputTrigger({ inputTriggerHotkey: $event })"
+                />
+              </label>
+              <div v-else class="wt-field">
                 <span id="wt-input-auto-delay-label" class="ui-label">{{ t('wtInputAutoReplaceDelay') }}</span>
                 <div class="wt-delay-row" :class="{ 'has-custom': autoReplaceDelaySelectValue === 'custom' }">
                   <UiSelect
@@ -487,6 +503,7 @@ import {
   hostPermissionPattern,
   INPUT_AUTO_REPLACE_DELAY_DEFAULT,
   INPUT_AUTO_REPLACE_DELAY_PRESETS,
+  INPUT_TRIGGER_HOTKEY_PRESETS,
   isInputAutoReplaceDelay,
   isPageCharLimit,
   normalizeBaseUrl,
@@ -585,6 +602,8 @@ const autoInteractionEnabled = ref(true)
 const inputTranslationEnabled = ref(false)
 const inputSourceLanguage = ref<SourceLanguage>('auto')
 const inputTargetLanguage = ref<TargetLanguage>('en')
+const inputTriggerMode = ref(DEFAULT_TRANSLATION_CONFIG.inputTriggerMode)
+const inputTriggerHotkey = ref(DEFAULT_TRANSLATION_CONFIG.inputTriggerHotkey)
 const inputAutoReplaceDelayMs = ref<number>(INPUT_AUTO_REPLACE_DELAY_DEFAULT)
 const customDelaySelected = ref(false)
 const customDelaySecondsDraft = ref(String(INPUT_AUTO_REPLACE_DELAY_DEFAULT / 1000))
@@ -703,6 +722,10 @@ const autoReplaceDelayOptions = computed(() => [
   })),
   { value: 'custom', label: t('wtInputAutoReplaceDelayCustom') },
 ])
+const inputTriggerModes = computed(() => [
+  { value: 'auto', label: t('wtInputTriggerAuto') }, { value: 'manual', label: t('wtInputTriggerManual') },
+])
+const inputTriggerKeys = INPUT_TRIGGER_HOTKEY_PRESETS.map(value => ({ value, label: value }))
 const autoReplaceDelaySelectValue = computed(() =>
   customDelaySelected.value || !(INPUT_AUTO_REPLACE_DELAY_PRESETS as readonly number[]).includes(inputAutoReplaceDelayMs.value)
     ? 'custom'
@@ -831,6 +854,8 @@ function applyConfig(
   inputTranslationEnabled.value = config.inputTranslationEnabled
   inputSourceLanguage.value = config.inputSourceLanguage
   inputTargetLanguage.value = config.inputTargetLanguage
+  inputTriggerMode.value = config.inputTriggerMode ?? DEFAULT_TRANSLATION_CONFIG.inputTriggerMode
+  inputTriggerHotkey.value = config.inputTriggerHotkey ?? DEFAULT_TRANSLATION_CONFIG.inputTriggerHotkey
   inputAutoReplaceDelayMs.value = config.inputAutoReplaceDelayMs
   if (!(INPUT_AUTO_REPLACE_DELAY_PRESETS as readonly number[]).includes(config.inputAutoReplaceDelayMs)) {
     customDelaySelected.value = true
@@ -1307,6 +1332,17 @@ async function changeInputTargetLanguage(value: TargetLanguage): Promise<void> {
   setStatus('', false)
   try {
     await savePatch({ inputTargetLanguage: value })
+  } finally {
+    saving.value = false
+  }
+}
+
+async function changeInputTrigger(patch: Pick<TranslationConfigPatch, 'inputTriggerMode' | 'inputTriggerHotkey'>): Promise<void> {
+  if (!ready.value || saving.value) return
+  saving.value = true
+  setStatus('', false)
+  try {
+    await savePatch(patch)
   } finally {
     saving.value = false
   }

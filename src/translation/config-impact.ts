@@ -44,7 +44,7 @@ export function readingPolicyChanged(previous: TranslationConfig, next: Translat
 
 /** 连接不变时，这次配置变更是否影响该请求所在站点的模式或它携带的语境。其他站点的规则不算。 */
 export function requestAffected(request: RequestScope, previous: TranslationConfig, next: TranslationConfig): boolean {
-  if (request.kind === 'selection' || request.kind === 'selection-assist' || request.kind === 'text' || request.kind === 'hover') {
+  if (request.kind === 'selection' || request.kind === 'selection-assist' || request.kind === 'text' || request.kind === 'hover' || request.kind === 'input') {
     const before = previous.modelProfiles.find((profile) => profile.id === previous.selectionProfileId) ?? previous
     const after = next.modelProfiles.find((profile) => profile.id === next.selectionProfileId) ?? next
     if (before.baseUrl !== after.baseUrl || before.model !== after.model || before.apiType !== after.apiType || before.temperature !== after.temperature) return true
@@ -57,6 +57,8 @@ export function requestAffected(request: RequestScope, previous: TranslationConf
     return previous.inputTranslationEnabled !== next.inputTranslationEnabled ||
       (previous.autoInteractionEnabled !== next.autoInteractionEnabled && next.inputReplaceMode !== 'auto') ||
       previous.inputReplaceMode !== next.inputReplaceMode ||
+      previous.inputTriggerMode !== next.inputTriggerMode ||
+      previous.inputTriggerHotkey !== next.inputTriggerHotkey ||
       previous.inputTargetLanguage !== next.inputTargetLanguage ||
       previous.inputSourceLanguage !== next.inputSourceLanguage
   }
