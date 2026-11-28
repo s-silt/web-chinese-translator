@@ -350,11 +350,9 @@ export async function requestCompletionStream(
       Accept: 'text/event-stream, application/json',
     }
     if (apiKey !== '') headers.Authorization = 'Bearer ' + apiKey
-    const payload = {
-      ...completionBody(config, systemPrompt, userContent),
-      stream: true,
-      ...(config.apiType === 'responses' ? {} : { stream_options: { include_usage: true } }),
-    }
+    const payload = completionBody(config, systemPrompt, userContent, {
+      includeUsageByDefault: new URL(url).origin === 'https://api.openai.com',
+    })
     requestBody = JSON.stringify(payload)
   } catch {
     throw new TranslationError('模型请求设置无效，请检查高级设置')

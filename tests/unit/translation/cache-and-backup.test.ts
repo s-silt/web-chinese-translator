@@ -12,6 +12,8 @@ import { clearTranslationCache, clearTranslationCacheForHost, requestTranslation
 import { requestOptionsCacheKey } from '../../../src/translation/request-options'
 import { translationOptionsCacheKey } from '../../../src/translation/preferences-extra'
 import { emptyUsageStats, getUsageStats, resetUsageStats } from '../../../src/translation/usage-stats'
+import { resolveSceneSnapshot } from '../../../src/translation/model-state'
+import { MAX_MODEL_PROFILES } from '../../../src/translation/preferences-extra'
 
 const settings = { ...DEFAULT_TRANSLATION_CONFIG, baseUrl: 'https://model.example', model: 'fixture' }
 const context = (site: string) => ({ currentPage: { title: '', heading: '', site }, recentPages: [] })
@@ -121,6 +123,48 @@ describe('按站点缓存', () => {
 })
 
 describe('可移植配置', () => {
+  const profile = (id: string, site: string) => ({
+    id, name: site, baseUrl: `https://${site}.fixture.test/v1`, model: site, apiType: 'responses' as const, temperature: null,
+  })
+  const local = profile('shared', 'local')
+  const remote = profile('shared', 'remote')
+  const denied = profile('denied', 'denied')
+  const filler = Array.from({ length: MAX_MODEL_PROFILES - 2 }, (_, i) => profile(`imported-${i + 1}`, `extra-${i}`))
+
+  it.each([true, false])('部分恢复保留未授权场景的本机端点（拒绝专用模型=%s），同 ID 和满档案表也不串用', denySelection => {
+    const current = {
+      ...settings, baseUrl: local.baseUrl, model: local.model, apiType: local.apiType, modelProfiles: [local],
+      activeProfileId: local.id, selectionProfileId: local.id,
+    }
+    const primary = denySelection ? remote : denied
+    const dedicated = denySelection ? denied : remote
+    const imported = {
+      ...settings, baseUrl: primary.baseUrl, model: primary.model, apiType: primary.apiType, activeProfileId: primary.id,
+      selectionProfileId: dedicated.id, modelProfiles: [...filler, denied, remote],
+    }
+    const restored = { ...current, ...configBackupPatch(imported, current, ['https://denied.fixture.test/*']) }
+    expect(restored.modelProfiles).toHaveLength(MAX_MODEL_PROFILES)
+    expect(new Set(restored.modelProfiles.map(p => p.id)).size).toBe(MAX_MODEL_PROFILES)
+    expect(restored.modelProfiles.find(p => p.id === local.id)).toEqual(local)
+    expect(denySelection ? restored.selectionProfileId : restored.activeProfileId).toBe(local.id)
+    const snapshot = { config: restored, revision: 0, apiKey: '' }
+    const main = resolveSceneSnapshot(snapshot, 'page').config
+    expect(main.baseUrl).toBe(denySelection ? remote.baseUrl : local.baseUrl)
+    expect(restored.modelProfiles.find(p => p.id === restored.activeProfileId)?.baseUrl).toBe(main.baseUrl)
+    for (const scene of ['selection', 'text'] as const) {
+      const effective = resolveSceneSnapshot(snapshot, scene).config
+      expect([effective.baseUrl, effective.model]).toEqual(denySelection ? [local.baseUrl, local.model] : [remote.baseUrl, remote.model])
+    }
+  })
+
+  it('备份明确选择跟随主模型时才清空先前的专用选择', () => {
+    const current = { ...settings, modelProfiles: [local], selectionProfileId: local.id }
+    const patch = configBackupPatch({ ...settings, baseUrl: denied.baseUrl, selectionProfileId: '' }, current, ['https://denied.fixture.test/*'])
+    expect(patch.selectionProfileId).toBe('')
+    const effective = resolveSceneSnapshot({ config: { ...current, ...patch }, revision: 0, apiKey: '' }, 'text').config
+    expect(effective.baseUrl).toBe(current.baseUrl)
+  })
+
   it('导出后可保存，保留本机授权和快捷键，不传递任意请求参数里的凭据', () => {
     const config = {
       ...settings, displayMode: 'bilingual' as const, requestParams: { metadata: { opaque: 'fixture-private' } },

@@ -22,7 +22,7 @@ const RESERVED_PARAMS = new Set([
   'background', 'previous_response_id', 'conversation', 'tools', 'tool_choice',
   'parallel_tool_calls', 'headers', 'api_key', 'apiKey', 'authorization',
   'functions', 'function_call', 'prompt', 'web_search_options', 'modalities',
-  'audio', 'n', 'stream_options',
+  'audio', 'n',
 ])
 const RESERVED_HEADERS = new Set([
   'content-type', 'authorization', 'accept-charset', 'accept-encoding',
@@ -68,6 +68,10 @@ export function normalizeRequestParams(value: unknown): JsonObject {
       const pairs: [string, JsonValue][] = []
       for (const key of Object.keys(item).sort()) {
         if (UNSAFE_KEYS.has(key) || (depth === 0 && RESERVED_PARAMS.has(key))) throw invalid()
+        if (depth === 0 && key === 'stream_options') {
+          const option = item[key]
+          if (!plainObject(option) || Object.keys(option).length !== 1 || typeof option.include_usage !== 'boolean') throw invalid()
+        }
         pairs.push([key, visit(item[key], depth + 1)])
       }
       return Object.fromEntries(pairs)
@@ -129,11 +133,12 @@ export function completionBody(
   config: RequestOptions & { readonly model: string },
   systemPrompt: string,
   userContent: string,
+  stream?: { readonly includeUsageByDefault: boolean },
 ): JsonObject {
   const temperature = config.temperature ?? null
   if (!isTemperature(temperature)) throw new Error('温度须为空或 0–2 之间的数值')
   if (config.apiType !== undefined && !isApiType(config.apiType)) throw new Error('接口类型无效')
-  const params = normalizeRequestParams(config.requestParams ?? {})
+  const { stream_options: streamOptions, ...params } = normalizeRequestParams(config.requestParams ?? {})
   const sampling: JsonObject = temperature === null ? {} : { temperature }
   if (config.apiType === 'responses') {
     return {
@@ -141,7 +146,7 @@ export function completionBody(
       model: config.model,
       instructions: systemPrompt,
       input: [{ role: 'user', content: [{ type: 'input_text', text: userContent }] }],
-      stream: false,
+      stream: stream !== undefined,
       store: false,
       ...sampling,
     }
@@ -153,7 +158,9 @@ export function completionBody(
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userContent },
     ],
-    stream: false,
+    stream: stream !== undefined,
+    ...(stream && (plainObject(streamOptions) ? streamOptions.include_usage : stream.includeUsageByDefault)
+      ? { stream_options: { include_usage: true } } : {}),
     ...sampling,
   }
 }

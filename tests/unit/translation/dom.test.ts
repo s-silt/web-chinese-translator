@@ -2536,6 +2536,37 @@ it('review5 失败记录和已译记录共享上限，移除节点释放容量',
 })
 
 describe('行内单元翻译', () => {
+  it.each([
+    { html: '<a href="#">Read the guide today.</a>', input: 'Read the guide today.', output: '阅读指南。', members: 1 },
+    { html: '<p>Read <a href="#">the guide</a> today.</p>', input: 'Read <1>the guide</1> today.', output: '阅读<1>指南</1>。', members: 3 },
+  ])('双语切换为替换时若容器放不下译文，保留原文并跳过重发（$members 个节点）', async ({ html, input, output, members }) => {
+    document.body.innerHTML = html
+    const link = document.querySelector('a')!
+    const label = link.firstChild as Text
+    const settings: { auto: boolean; displayMode: 'bilingual' | 'replace' } = { auto: true, displayMode: 'bilingual' }
+    engine = makeEngine(settings)
+    engine.start()
+    await settle()
+    expect(batches[0]?.texts).toEqual([input])
+    batches[0]!.apply([output])
+    await settle()
+    expect(document.querySelectorAll('[data-wt-bilingual]')).toHaveLength(1)
+    expect(engine.isModelTranslated(label)).toBe(true)
+    const used = engine.progress().spent
+    Object.defineProperty(link, 'clientWidth', { get: () => 10 })
+    Object.defineProperty(link, 'scrollWidth', { get: () => label.data.includes('指南') ? 999 : 10 })
+    settings.displayMode = 'replace'
+    engine.setDisplayMode(settings.displayMode)
+    engine.start()
+    await settle(400)
+    expect(document.body.innerHTML).toBe(html)
+    expect(engine.isModelTranslated(label)).toBe(false)
+    expect(engine.progress()).toMatchObject({ translated: 0, layoutSkipped: members, spent: used })
+    link.className = 'site-rerender'
+    await settle(500)
+    expect(batches).toHaveLength(1)
+  })
+
   it('双语行保留链接，网站改写内部链接文字后更新整行，移除段落后也能完整恢复', async () => {
     document.body.innerHTML = '<p>Read <a href="/guide">the guide</a> today.</p>'
     const paragraph = document.querySelector('p')!

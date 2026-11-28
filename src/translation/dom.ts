@@ -523,9 +523,13 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
         else for (const change of current) showBilingual({ changes: [change], text: change.translated })
       } else if (bilingual && current.length === changes.length) {
         const replacements = changes.map(change => ({ ...change, source: records.get(change.node)!.original }))
-        if (!tryReplaceTextUnit(replacements)) continue
         removeBilingualNode(bilingual.line)
         if (block) bilingualBlocks.delete(block)
+        if (!tryReplaceTextUnit(replacements)) {
+          noteLayoutSkips(replacements)
+          forgetNode(anchor)
+          continue
+        }
         for (const change of replacements) {
           bilingualNodes.delete(change.node)
           rememberWrite(change)

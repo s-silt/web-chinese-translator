@@ -1,5 +1,6 @@
 import { DEFAULT_TRANSLATION_CONFIG, hostPermissionPattern, normalizeBaseUrl, sanitizeTranslationConfig, type TranslationConfig } from './config'
 import { isConfigShape, type TranslationConfigPatch } from './messages'
+import { MAX_MODEL_PROFILES } from './preferences-extra'
 
 export const CONFIG_BACKUP_VERSION = 1
 export const MAX_CONFIG_BACKUP_BYTES = 1024 * 1024
@@ -30,6 +31,41 @@ export function backupPermissionOrigins(imported: TranslationConfig): string[] {
   return [...origins]
 }
 
+function restoreProfiles(imported: TranslationConfig, current: TranslationConfig, restoreMain: boolean, restoreSelection: boolean) {
+  const activeProfileId = restoreMain ? imported.activeProfileId : current.activeProfileId
+  const selectionProfileId = restoreSelection ? imported.selectionProfileId : current.selectionProfileId
+  // 未授权的场景继续引用本机档案。同名 ID 的导入记录不得改变该场景的实际端点。
+  const pinned = current.modelProfiles.filter(p =>
+    (!restoreMain && p.id === activeProfileId) || (!restoreSelection && p.id === selectionProfileId))
+  if (!pinned.length) return { activeProfileId, selectionProfileId, modelProfiles: imported.modelProfiles }
+
+  const modelProfiles = [...pinned]
+  const chosen = new Set([restoreMain ? activeProfileId : '', restoreSelection ? selectionProfileId : ''])
+  const incoming = [...imported.modelProfiles].sort((a, b) => Number(chosen.has(b.id)) - Number(chosen.has(a.id)))
+  const reserved = new Set([...pinned, ...incoming].map(profile => profile.id))
+  const renamed = new Map<string, string>()
+  let sequence = 0
+  for (const profile of incoming) {
+    const existing = pinned.find(p => p.id === profile.id)
+    if (existing && existing.baseUrl === profile.baseUrl && existing.model === profile.model &&
+      existing.apiType === profile.apiType && existing.temperature === profile.temperature) continue
+    if (modelProfiles.length >= MAX_MODEL_PROFILES) break
+    if (existing) {
+      let id: string
+      do { id = `imported-${++sequence}` } while (reserved.has(id))
+      renamed.set(profile.id, id)
+      modelProfiles.push({ ...profile, id })
+    } else {
+      modelProfiles.push(profile)
+    }
+  }
+  return {
+    modelProfiles,
+    activeProfileId: restoreMain ? renamed.get(activeProfileId) ?? activeProfileId : activeProfileId,
+    selectionProfileId: restoreSelection ? renamed.get(selectionProfileId) ?? selectionProfileId : selectionProfileId,
+  }
+}
+
 export function configBackupPatch(
   imported: TranslationConfig, current: TranslationConfig, missingOrigins: readonly string[] = [],
 ): TranslationConfigPatch {
@@ -39,17 +75,17 @@ export function configBackupPatch(
   const connectionAllowed = !settings.baseUrl || !missingOrigins.includes(hostPermissionPattern(settings.baseUrl))
   const siteAccess = !ALL_SITE_ORIGINS.some(origin => missingOrigins.includes(origin))
   const {
-    baseUrl, model, apiType, temperature, activeProfileId, selectionProfileId,
+    baseUrl, model, apiType, temperature,
     selectionPopupEnabled, selectionToolbarEnabled, proactiveAssistEnabled, hoverTranslateEnabled,
     inputTranslationEnabled, autoInteractionEnabled, ...other
   } = settings
   const selection = selectionProfileOrigin(imported)
+  const restoreSelection = imported.selectionProfileId === '' || (selection !== undefined && !missingOrigins.includes(selection))
   return {
     ...other,
     ...(connectionAllowed ? { baseUrl, model, apiType, temperature } : {}),
     ...(connectionAllowed && previousOrigin !== nextOrigin ? { requestParams: {} } : {}),
-    activeProfileId: connectionAllowed ? activeProfileId : '',
-    selectionProfileId: selection && !missingOrigins.includes(selection) ? selectionProfileId : '',
+    ...restoreProfiles(imported, current, connectionAllowed, restoreSelection),
     // 避免将导入的主动功能指向另一份仍在使用的本机连接。
     ...(connectionAllowed && siteAccess ? {
       selectionPopupEnabled, selectionToolbarEnabled, proactiveAssistEnabled, hoverTranslateEnabled,

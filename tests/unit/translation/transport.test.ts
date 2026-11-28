@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { requestCompletionStream, unwrapFence } from '../../../src/translation/transport'
+import type { JsonObject } from '../../../src/translation/request-options'
+import { requestCompletion, requestCompletionStream, setCompletionUsageObserver, unwrapFence } from '../../../src/translation/transport'
 
 describe('unwrapFence', () => {
   it('剥掉 ``` 与 ```json 围栏，返回内部 JSON', () => {
@@ -92,7 +93,59 @@ describe('流式译文收尾', () => {
       const pending = requestCompletionStream({ ...config, apiType: 'chat-completions' }, 'sys', 'sample', '', vi.fn(), undefined, fetcher)
       if (finished) await expect(pending).resolves.toBe('译文')
       else await expect(pending).rejects.toMatchObject({ code: 'bad_output' })
-      expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ stream_options: { include_usage: true } })
     }
+  })
+
+  it.each([
+    ['https://api.openai.com/v1', undefined, true],
+    ['https://api.deepseek.com', undefined, false],
+    ['https://api.anthropic.com/v1', undefined, false],
+    ['https://generativelanguage.googleapis.com/v1beta/openai', undefined, false],
+    ['http://localhost:11434/v1', undefined, false],
+    ['http://localhost:1234/v1', undefined, false],
+    ['https://gateway.example/v1', undefined, false],
+    ['https://gateway.example/v1', true, true],
+    ['https://api.openai.com/v1', false, false],
+  ] as const)('Chat 流式用量按实际接口与显式选项发送一次 %s / %s', async (baseUrl, configured, expected) => {
+    const observer = vi.fn()
+    setCompletionUsageObserver(observer)
+    const options: JsonObject = configured === undefined ? {} : { stream_options: { include_usage: configured } }
+    const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { stream_options?: { include_usage: boolean } }
+      if (!expected && 'stream_options' in body) return new Response(null, { status: 400 })
+      expect(body.stream_options?.include_usage === true).toBe(expected)
+      return stream(['data: {"choices":[{"delta":{"content":"译文"},"finish_reason":"stop"}]}\n',
+        expected ? 'data: {"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":3}}\n' : '',
+        'data: [DONE]\n'])
+    })
+    try {
+      await expect(requestCompletionStream({ ...config, apiType: 'chat-completions', baseUrl, requestParams: options }, 'sys', 'text', '', vi.fn(), undefined, fetcher)).resolves.toBe('译文')
+      expect(fetcher).toHaveBeenCalledTimes(1)
+      expect(observer).toHaveBeenCalledExactlyOnceWith(expected ? { inputTokens: 9, outputTokens: 3, totalTokens: 12 } : undefined, 4)
+    } finally {
+      setCompletionUsageObserver(undefined)
+    }
+  })
+
+  it('显式流式用量参数不进入普通连接测试或 Responses 请求', async () => {
+    const requestParams = { stream_options: { include_usage: true } }
+    const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { stream_options?: unknown; stream: boolean }
+      expect(body).not.toHaveProperty('stream_options')
+      return body.stream
+        ? stream(['data: {"type":"response.output_text.delta","delta":"译文"}\ndata: {"type":"response.completed"}\n'])
+        : Response.json({ choices: [{ message: { content: '译文' } }] })
+    })
+    await expect(requestCompletion({ ...config, apiType: 'chat-completions', requestParams }, 'sys', 'text', '', undefined, fetcher)).resolves.toBe('译文')
+    await expect(requestCompletionStream({ ...config, requestParams }, 'sys', 'text', '', vi.fn(), undefined, fetcher)).resolves.toBe('译文')
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it.each<JsonObject>([{ include_usage: 'yes' }, { include_usage: true, other: true }])('拒绝非布尔或额外流式选项 %#', async (streamOptions) => {
+    const fetcher = vi.fn<typeof fetch>()
+    const requestParams = { stream_options: streamOptions }
+    await expect(requestCompletionStream({ ...config, requestParams }, 'sys', 'text', '', vi.fn(), undefined, fetcher))
+      .rejects.toThrow('模型请求设置无效')
+    expect(fetcher).not.toHaveBeenCalled()
   })
 })
