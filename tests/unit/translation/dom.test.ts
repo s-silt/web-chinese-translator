@@ -2543,6 +2543,7 @@ describe('行内单元翻译', () => {
     document.body.innerHTML = html
     const link = document.querySelector('a')!
     const label = link.firstChild as Text
+    const originalLabel = label.data
     const settings: { auto: boolean; displayMode: 'bilingual' | 'replace' } = { auto: true, displayMode: 'bilingual' }
     engine = makeEngine(settings)
     engine.start()
@@ -2581,7 +2582,14 @@ describe('行内单元翻译', () => {
       expect(batches).toHaveLength(1)
     }
     tooNarrow = false
+    link.style.display = 'none'
     window.dispatchEvent(new Event('resize'))
+    await settle(650)
+    expect(label.data).toBe(originalLabel)
+    expect(document.querySelector('[data-wt-bilingual]')).toBeNull()
+    expect(engine.progress()).toMatchObject({ translated: 0, spent: used })
+    expect(batches).toHaveLength(1)
+    link.style.display = ''
     await settle(650)
     expect(label.data).toContain('指南')
     expect(engine.progress()).toMatchObject({ translated: members, spent: used })

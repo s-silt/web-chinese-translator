@@ -532,7 +532,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     } else if (bilingual && current.length === changes.length) {
       const replacements = changes.map(change => ({ ...change, source: records.get(change.node)!.original }))
       removeBilingualNode(bilingual.line)
-      if (!tryReplaceTextUnit(replacements)) {
+      const measurable = current.every(({ node }) => node.parentElement !== null && isVisible(node.parentElement))
+      if (!measurable || !tryReplaceTextUnit(replacements)) {
         noteLayoutSkips(replacements)
         for (const { node } of replacements) layoutHidden.set(node, node.parentElement)
         return
