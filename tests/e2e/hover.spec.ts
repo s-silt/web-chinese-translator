@@ -2,6 +2,83 @@ import { expect, test, waitForSiteContentReady, waitForSiteScriptRegistration } 
 
 test.use({ headless: false })
 
+test('封顶后 display:contents 的可见文字和原生弹层重开都能用现有译文替换', async ({ context, extension }) => {
+  const origin = 'https://app.devin.ai'
+  const endpoint = 'https://fixture-metrics.devin.ai'
+  const calls: string[][] = []
+  await context.route('https://**/*', async route => {
+    const url = new URL(route.request().url())
+    if (url.href === endpoint + '/v1/chat/completions') {
+      const data = route.request().postDataJSON() as { messages: { content: string }[] }
+      const body = JSON.parse(data.messages[1]!.content) as { texts: string[] }
+      calls.push(body.texts)
+      const translations = body.texts.map(text => text.includes('<1>') ? '阅读<1>指南</1>。' : '实测译文')
+      return route.fulfill({ json: { choices: [{ message: { content: JSON.stringify(translations) } }] } })
+    }
+    if (url.origin !== origin) return route.abort()
+    return route.fulfill({ contentType: 'text/html', body: `<!doctype html><meta charset="utf-8">
+      <style>@media (max-width: 1000px) { #contents { display: contents } #none { display: none } }</style>
+      <p id="rich-line">Read <span id="contents">the guide</span> today.</p>
+      <p><span id="none">Read this hidden sentence.</span></p>
+      <div id="panel" popover="manual"><p id="inside">Read this native popover.</p></div>
+      <div id="quota" style="font:2px/4px monospace"></div><script>document.querySelector('#panel').showPopover()</script>` })
+  })
+  const config = { baseUrl: endpoint + '/v1', model: 'fixture', autoOrigins: [origin], pageCharLimit: 20_000 }
+  await extension.setTranslationConfig({ ...config, displayMode: 'bilingual' })
+  const url = origin + '/native-layout'
+  await waitForSiteScriptRegistration(extension.page, { url })
+  const page = await context.newPage()
+  await page.goto(url)
+  const id = await waitForSiteContentReady(extension.page, page, { auto: true })
+  const status = () => extension.page.evaluate(async id => {
+    const { chrome } = globalThis as unknown as { chrome: typeof import('wxt/browser').browser }
+    const reply = await chrome.tabs.sendMessage(id, { type: 'wt:status' }) as { status: { budgetCapped: boolean; progress: { spent: number } } }
+    return reply.status
+  }, id)
+  await expect(page.locator('#inside [data-wt-bilingual]')).toHaveText('实测译文')
+  await expect(page.locator('#rich-line [data-wt-bilingual]')).toHaveText('阅读指南。')
+  await expect(page.locator('#none [data-wt-bilingual]')).toHaveText('实测译文')
+  await page.locator('#quota').evaluate(el => {
+    for (let i = 0; i < 16; i++) {
+      const row = document.createElement('p')
+      row.textContent = `Quota fixture paragraph number ${i} for a local layout test. `.repeat(30).slice(0, 1390)
+      el.append(row)
+    }
+  })
+  await expect.poll(async () => (await status()).budgetCapped, { timeout: 30_000 }).toBe(true)
+  const spent = (await status()).progress.spent
+  const sent = calls.length
+  await page.locator('#panel').evaluate(el => (el as HTMLElement).hidePopover())
+  await page.setViewportSize({ width: 900, height: 900 })
+  const bounds = await page.evaluate(() => {
+    const contents = document.querySelector<HTMLElement>('#contents')!
+    const none = document.querySelector<HTMLElement>('#none')!
+    const panel = document.querySelector<HTMLElement>('#panel')!
+    const textWidth = (element: Element) => {
+      const range = document.createRange()
+      range.selectNodeContents(element.firstChild!)
+      return range.getBoundingClientRect().width
+    }
+    return { contents: textWidth(contents), parentBoxes: contents.getClientRects().length, none: textWidth(none), panel: textWidth(panel.querySelector('p')!) }
+  })
+  expect(bounds.contents).toBeGreaterThan(0)
+  expect(bounds).toMatchObject({ parentBoxes: 0, none: 0, panel: 0 })
+  await extension.setTranslationConfig({ ...config, displayMode: 'replace' })
+  await expect.soft(page.locator('#contents')).toHaveText('指南', { timeout: 3500 })
+  await expect(page.locator('#none')).toHaveText('Read this hidden sentence.')
+  await expect(page.locator('#inside')).toHaveText('Read this native popover.')
+  await page.locator('#panel').evaluate(el => (el as HTMLElement).showPopover())
+  await expect(page.locator('#inside')).toHaveText('实测译文')
+  await expect(page.locator('#none')).toHaveText('Read this hidden sentence.')
+  const final = await status()
+  expect(final).toMatchObject({ budgetCapped: true, progress: { spent } })
+  expect(calls).toHaveLength(sent)
+  await test.info().attach('native-layout.json', {
+    contentType: 'application/json',
+    body: JSON.stringify({ bounds, spentBefore: spent, spentAfter: final.progress.spent, callsBefore: sent, callsAfter: calls.length }),
+  })
+})
+
 test('Alt 悬停保留链接及监听器，忽略隐藏正文、敏感路由、过期响应与已松开的手势', async ({ context, extension }) => {
   const origin = 'https://app.devin.ai'
   const endpoint = 'https://fixture-hover.devin.ai'

@@ -532,7 +532,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     } else if (bilingual && current.length === changes.length) {
       const replacements = changes.map(change => ({ ...change, source: records.get(change.node)!.original }))
       removeBilingualNode(bilingual.line)
-      const measurable = current.every(({ node }) => node.parentElement !== null && isVisible(node.parentElement))
+      const measurable = current.every(({ node }) => node.parentElement !== null && isVisible(node.parentElement, node))
       if (!measurable || !tryReplaceTextUnit(replacements)) {
         noteLayoutSkips(replacements)
         for (const { node } of replacements) layoutHidden.set(node, node.parentElement)
@@ -1802,7 +1802,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   function revealTarget(target: EventTarget | null, force = false): void {
     if (!(target instanceof Element)) return
     // 原生弹层打开时可能没有可观察的属性变化；模型暂停或封顶仍允许本地回贴。
-    const canReplay = force && !disposed && !suspended && replay.size > 0 && options.autoEnabled()
+    const canReplay = force && !disposed && !suspended && (replay.size > 0 || layoutHidden.size > 0) && options.autoEnabled()
     if (!autoActive() && !canReplay) return
     if (target.closest('[data-wt-root]') !== null || isExcludedElement(target)) return
     if (force || observationOverflow) {
