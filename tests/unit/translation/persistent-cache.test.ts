@@ -284,6 +284,88 @@ describe('淘汰', () => {
     await (await restartWorker()).writePersistentTranslations(scope, [['next', '下一条']])
     expect((await rawRecords()).keys).toHaveLength(2)
   })
+
+  it('临近过期时命中刷新 usedAt 的条目，超过绝对 TTL 后仍会在扫描中被清除', async () => {
+    const before = await restartWorker()
+    await before.writePersistentTranslations(scope, [['touched', '已访问']])
+    now = NOW + 29 * DAY_MS
+    expect((await before.readPersistentTranslations(scope, ['touched'])).size).toBe(1)
+    await vi.waitFor(async () => {
+      const { values } = await rawRecords()
+      expect(values.some((value) => value.usedAt === now)).toBe(true)
+    })
+    now = NOW + 31 * DAY_MS
+    await (await restartWorker()).writePersistentTranslations(scope, [['fresh', '新条目']])
+    const { values } = await rawRecords()
+    expect(values.map((value) => value.translation)).toEqual(['新条目'])
+  })
+
+  it('从 v1 数据库升级到 v2 时补建 createdAt 索引并保留有效条目', async () => {
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.open(DB, 1)
+      req.onupgradeneeded = () => {
+        req.result.createObjectStore(STORE).createIndex('lru', ['usedAt', 'bytes'])
+      }
+      req.onsuccess = () => {
+        const db = req.result
+        const tx = db.transaction(STORE, 'readwrite')
+        tx.objectStore(STORE).put({ translation: '过期旧条目', createdAt: NOW, usedAt: NOW + 29 * DAY_MS, bytes: 300 }, 'v1-expired')
+        tx.objectStore(STORE).put({ translation: '有效旧条目', createdAt: NOW + 20 * DAY_MS, usedAt: NOW + 20 * DAY_MS, bytes: 300 }, 'v1-live')
+        tx.oncomplete = () => {
+          db.close()
+          resolve()
+        }
+        tx.onerror = () => reject(tx.error)
+      }
+      req.onerror = () => reject(req.error)
+    })
+    now = NOW + 31 * DAY_MS
+    await (await restartWorker()).writePersistentTranslations(scope, [['after-upgrade', '升级后']])
+    const { values } = await rawRecords()
+    expect(values.map((value) => value.translation).sort()).toEqual(['升级后', '有效旧条目'])
+  })
+
+  it('v1 连接阻塞升级时先降级，随后关闭迟到的 v2 连接，保留数据并允许再次升级', async () => {
+    const legacy = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(DB, 1)
+      request.onupgradeneeded = () => {
+        const store = request.result.createObjectStore(STORE)
+        store.createIndex('lru', ['usedAt', 'bytes'])
+        store.put({ translation: '保留的译文', createdAt: NOW, usedAt: NOW, bytes: 300 }, 'legacy')
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const open = vi.spyOn(indexedDB, 'open')
+    let lateDb: IDBDatabase | undefined
+    try {
+      const cache = await restartWorker()
+      expect((await cache.readPersistentTranslations(scope, ['Hello'])).size).toBe(0)
+      const upgrade = open.mock.results[0]!.value as IDBOpenDBRequest
+      const lateSuccess = new Promise<IDBDatabase>((resolve, reject) => {
+        upgrade.addEventListener('success', () => resolve(upgrade.result), { once: true })
+        upgrade.addEventListener('error', () => reject(upgrade.error), { once: true })
+      })
+      legacy.close()
+      lateDb = await lateSuccess
+      const nextUpgrade = new Promise<boolean>((resolve, reject) => {
+        const request = indexedDB.open(DB, 3)
+        request.onblocked = () => resolve(false)
+        request.onerror = () => reject(request.error)
+        request.onsuccess = () => {
+          request.result.close()
+          resolve(true)
+        }
+      })
+      expect(() => lateDb!.transaction(STORE)).toThrow(expect.objectContaining({ name: 'InvalidStateError' }))
+      expect(await nextUpgrade).toBe(true)
+      expect(await withRawStore('readonly', store => store.get('legacy'))).toMatchObject({ translation: '保留的译文' })
+    } finally {
+      legacy.close()
+      lateDb?.close()
+      open.mockRestore()
+    }
+  })
 })
 
 describe('不可用时回退到仅内存', () => {

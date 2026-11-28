@@ -28,8 +28,12 @@
       :disabled-reason="testDisabledReason !== '' ? t(testDisabledReason) : undefined"
       :can-grant-endpoint="persistedBase !== '' && !connectionDirty"
       :granting-endpoint="grantingEndpoint"
+      :saving="saving"
+      :dirty="connectionDirty"
+      :can-discard="persistedBase !== '' || persistedModel !== ''"
       @test="testConnection"
       @grant-endpoint="grantEndpointAccess"
+      @discard-draft="discardDraft"
     />
 
     <label v-show="props.view === 'all' || props.view === 'model'" class="wt-field">
@@ -67,7 +71,7 @@
           type="password"
           autocomplete="off"
           :disabled="!ready || saving || testing"
-          :placeholder="t('wtApiKeyKeep')"
+          :placeholder="keyState === 'none' ? t('wtApiKeyEnter') : t('wtApiKeyKeep')"
           aria-labelledby="wt-api-key-label"
           aria-describedby="wt-api-key-hint"
         />
@@ -556,6 +560,7 @@ const baseUrl = ref('')
 const model = ref('')
 const apiType = ref<ApiType>('chat-completions')
 const temperatureDraft = ref('')
+const temperatureBadInput = ref(false)
 const requestParamsDraft = ref('')
 const customHeadersDraft = ref('')
 const apiKey = ref('')
@@ -630,7 +635,7 @@ const connectionDirty = computed(() => {
     apiType.value !== persistedApiType ||
     apiKey.value !== '' ||
     customHeadersDraft.value.trim() !== '' ||
-    temperatureDraft.value !== persistedTemperature ||
+    temperatureBadInput.value || temperatureDraft.value !== persistedTemperature ||
     requestParamsDraft.value !== persistedParams
   )
 })
@@ -739,7 +744,20 @@ function keepFocusedFieldVisible(event: FocusEvent): void {
   })
 }
 
+function temperatureField(): HTMLInputElement | undefined {
+  return advancedDetails.value?.querySelector<HTMLInputElement>('[data-test="wt-temperature"]') ?? undefined
+}
+
+function resetTemperatureDraft(): void {
+  const field = temperatureField()
+  // 单独的负号在原生编辑器中可见，但 value 已是空串；仅重设 Vue 值不会清除它。
+  if (field?.validity.badInput) field.value = persistedTemperature
+  temperatureBadInput.value = false
+  temperatureDraft.value = persistedTemperature
+}
+
 function onTemperatureInput(value: string | number): void {
+  temperatureBadInput.value = temperatureField()?.validity.badInput === true
   temperatureDraft.value = typeof value === 'number' ? String(value) : value
   clearInvalid('temperature')
 }
@@ -771,7 +789,7 @@ function applyConfig(
     baseUrl.value = config.baseUrl
     model.value = config.model
     apiType.value = config.apiType
-    temperatureDraft.value = persistedTemperature
+    resetTemperatureDraft()
     requestParamsDraft.value = persistedParams
     customHeadersDraft.value = ''
     invalidField.value = null
@@ -1070,6 +1088,19 @@ function applyConnectionReply(reply: TranslationReply<'wt:test'>, ms: number): v
   connection.value = { kind, error: reply.error }
 }
 
+function discardDraft(): void {
+  if (saving.value || testing.value || grantingEndpoint.value) return
+  baseUrl.value = persistedBase
+  model.value = persistedModel
+  apiType.value = persistedApiType
+  apiKey.value = ''
+  customHeadersDraft.value = ''
+  resetTemperatureDraft()
+  requestParamsDraft.value = persistedParams
+  invalidField.value = null
+  setStatus('', false)
+}
+
 function applyPreset(url: string): void {
   if (!ready.value || saving.value || testing.value) return
   baseUrl.value = url
@@ -1110,8 +1141,7 @@ async function saveAndConnect(): Promise<void> {
     setStatus(t('wtKeyInvalid'), true)
     return
   }
-  const temperatureInput = advancedDetails.value?.querySelector<HTMLInputElement>('[data-test="wt-temperature"]')
-  if (temperatureInput?.validity.badInput) {
+  if (temperatureField()?.validity.badInput) {
     openAdvanced()
     invalidField.value = 'temperature'
     setStatus(t('wtTemperatureInvalid'), true)
@@ -1619,6 +1649,12 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.wt-onboarding :deep(.ui-notice) {
+  padding: 8px 10px;
+  font-size: 12px;
+  gap: 4px;
+}
+
 .wt-onboarding {
   display: grid;
   gap: 8px;

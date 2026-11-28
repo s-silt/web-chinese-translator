@@ -105,5 +105,27 @@ test('英文长文案、200% 缩放与窄窗明暗主题下区分未填模型、
     await expect(page.locator('input[type="password"]')).toHaveValue(secret)
     await expect(page.locator('[data-test="wt-model-input"]')).toHaveValue('draft-model-keep')
     expect(await page.locator('body').innerText()).not.toContain(secret)
+
+    const discard = page.locator('[data-test="wt-discard-draft"]')
+    const badge = page.locator('[data-test="wt-draft-badge"]')
+    await discard.click()
+    await expect(page.locator('[data-test="wt-model-input"]')).toHaveValue('gpt-4o-mini')
+    await expect(page.locator('input[type="password"]')).toHaveValue('')
+    await expect(page.locator('.wt-status-error')).toHaveCount(0)
+    await expect(badge).toHaveCount(0)
+
+    // 原生数字输入单独键入负号时，界面仍有未完成输入，value 却与已保存的空值相同。
+    await page.locator('[data-test="wt-advanced"] summary').click()
+    const temperature = page.locator('[data-test="wt-temperature"]')
+    await temperature.pressSequentially('-')
+    expect(await temperature.evaluate((el: HTMLInputElement) => el.validity.badInput)).toBe(true)
+    await expect(badge).toBeVisible()
+    await save.click()
+    await expect(temperature).toHaveAttribute('aria-invalid', 'true')
+    await discard.click()
+    expect(await temperature.evaluate((el: HTMLInputElement) => el.validity.badInput)).toBe(false)
+    await expect(temperature).toHaveValue('')
+    await expect(badge).toHaveCount(0)
+    await expect(page.locator('.wt-status-error')).toHaveCount(0)
   }
 })

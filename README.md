@@ -39,7 +39,7 @@
 ## 快速开始
 
 1. 推荐在 Chrome 中从 [Chrome 应用商店](https://chromewebstore.google.com/detail/gbjmhoaejahffdnefecjfgkoifggpdhe) 安装，商店版自动更新。
-2. [Releases](https://github.com/s-silt/web-chinese-translator/releases/latest) 仅提供 `web-chinese-translator-<版本>-chrome.crx` 与 `SHA256SUMS.txt` 校验和文件；CRX 仅适用于允许自行分发安装的环境（如企业策略、Linux 或开发调试环境，普通 Windows / macOS 正式版 Chrome 通常限制直接侧载 CRX），普通用户请通过 Chrome 应用商店安装。
+2. [Releases](https://github.com/s-silt/web-chinese-translator/releases/latest) 仅提供 `web-chinese-translator-<版本>-chrome.crx` 与 `SHA256SUMS.txt` 校验和文件；CRX 仅适用于允许自行分发安装的环境（如企业策略、Linux 或开发调试环境，普通 Windows / macOS 正式版 Chrome 通常限制直接侧载 CRX），普通用户请通过 Chrome 应用商店安装。Firefox 版本目前仅包含 GitHub 本地汉化且未随 Releases 发布签名 XPI，需本地执行 `bun run build:firefox` 构建。
 3. 点弹出页「配置模型」或「模型设置」：选服务商预设，填 API Key 和模型名，点「保存并连接」。连接徽章显示延迟，失败时写明原因。
 4. 打开支持的英文网页，点弹出页「翻译本页」。常去的网站可开启「本站自动翻译」。
 

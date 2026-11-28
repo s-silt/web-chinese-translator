@@ -769,11 +769,46 @@ describe('选项页真实挂载', () => {
         expect((wrapper.get('[data-test="wt-temperature"]').element as HTMLInputElement).value).toBe(tempVal)
         expect((wrapper.get('[data-test="wt-request-params"]').element as HTMLTextAreaElement).value).toBe(paramsVal)
         expect((wrapper.get('[data-test="wt-custom-headers"]').element as HTMLTextAreaElement).value).toBe(headersVal)
+        await wrapper.get('[data-test="wt-discard-draft"]').trigger('click')
+        expect(wrapper.find('.wt-status-error').exists()).toBe(false)
+        expect(wrapper.get(targetSelector).attributes('aria-invalid')).toBeUndefined()
+        expect(wrapper.find('[data-test="wt-draft-badge"]').exists()).toBe(false)
       } finally {
         wrapper.unmount()
       }
     },
   )
+
+  it('保存等待接口授权时禁用放弃草稿，发送用户提交的完整连接配置', async () => {
+    const save = vi.fn(() => ({ ok: true, config: CONFIG, keyState: 'ready' }))
+    replies({
+      'wt:get-config': () => ({ ok: true, config: CONFIG, keyState: 'ready' }),
+      'wt:save-config': save,
+      'wt:test': () => ({ ok: true }),
+    })
+    let release!: (granted: boolean) => void
+    vi.spyOn(fakeBrowser.permissions, 'request').mockImplementation(() => new Promise(resolve => { release = resolve }))
+    const wrapper = mount(TranslationSection)
+    try {
+      await flushPromises()
+      const baseUrl = 'https://draft.fixture.test/v1'
+      await wrapper.get('input[aria-labelledby="wt-base-url-label"]').setValue(baseUrl)
+      await wrapper.get('[data-test="wt-model-input"]').setValue('draft-model')
+      await wrapper.get('input[type="password"]').setValue('fixture-key')
+      await wrapper.get('[data-test="wt-save"]').trigger('click')
+      const discard = wrapper.get('[data-test="wt-discard-draft"]')
+      expect.soft(discard.attributes('disabled')).toBeDefined()
+      await discard.trigger('click')
+      release(true)
+      await flushPromises()
+      expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        patch: expect.objectContaining({ baseUrl, model: 'draft-model' }),
+        apiKey: 'fixture-key',
+      }))
+    } finally {
+      wrapper.unmount()
+    }
+  })
 
   it('温度输入框 validity.badInput 为 true 时不按空值静默保存', async () => {
     const saves: unknown[] = []

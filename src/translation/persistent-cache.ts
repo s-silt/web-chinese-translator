@@ -3,7 +3,8 @@ import type { TranslationContext } from './reading-context'
 const CACHE_DB = 'web-translator-cache'
 const CACHE_STORE = 'translations'
 const LRU_INDEX = 'lru'
-const DB_VERSION = 1
+const CREATED_INDEX = 'createdAt'
+const DB_VERSION = 2
 /** 协议和高级请求设置加入键布局；旧缓存按原有 TTL/LRU 规则淘汰。 */
 const KEY_VERSION = 3
 
@@ -74,19 +75,36 @@ function markFailed(): void {
 function openCache(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(CACHE_DB, DB_VERSION)
+    let abandoned = false
     request.onupgradeneeded = () => {
       const db = request.result
-      if (db.objectStoreNames.contains(CACHE_STORE)) return
+      const store = db.objectStoreNames.contains(CACHE_STORE)
+        ? request.transaction!.objectStore(CACHE_STORE)
+        : db.createObjectStore(CACHE_STORE)
       // 索引键带上大小：淘汰扫描用 key cursor 即可算总量，不必把全部译文读进内存。
-      db.createObjectStore(CACHE_STORE).createIndex(LRU_INDEX, ['usedAt', 'bytes'])
+      if (!store.indexNames.contains(LRU_INDEX)) {
+        store.createIndex(LRU_INDEX, ['usedAt', 'bytes'])
+      }
+      // 绝对 TTL 索引：清理时按 createdAt 精准淘汰过期项，避免命中刷新 usedAt 的条目滞留。
+      if (!store.indexNames.contains(CREATED_INDEX)) {
+        store.createIndex(CREATED_INDEX, 'createdAt')
+      }
     }
     request.onsuccess = () => {
-      resolve(request.result)
+      const db = request.result
+      // blocked 不会取消 open；旧连接释放后仍可能返回一个已无人等待的句柄。
+      if (abandoned) {
+        db.close()
+        return
+      }
+      db.onversionchange = () => db.close()
+      resolve(db)
     }
     request.onerror = () => {
       reject(request.error ?? unavailable())
     }
     request.onblocked = () => {
+      abandoned = true
       reject(unavailable())
     }
   })
@@ -188,6 +206,37 @@ async function touch(
   }
 }
 
+async function purgeExpired(
+  entries: readonly (readonly [string, number])[],
+  generation: number,
+): Promise<void> {
+  try {
+    await serializeCacheMutation(() =>
+      withStore<void>('readwrite', (store) => {
+        if (generation !== clearGeneration) return () => undefined
+        for (const [key, createdAt] of entries) {
+          const request = store.get(key) as IDBRequest<unknown>
+          request.onsuccess = () => {
+            const current = request.result
+            if (
+              generation !== clearGeneration ||
+              !validRecord(current) ||
+              current.createdAt !== createdAt ||
+              Date.now() < current.createdAt + CACHE_TTL_MS
+            ) {
+              return
+            }
+            store.delete(key)
+          }
+        }
+        return () => undefined
+      }),
+    )
+  } catch {
+    markFailed()
+  }
+}
+
 async function lookup(scope: PersistentCacheScope, texts: readonly string[]): Promise<Map<string, TranslationCacheEntry>> {
   const generation = clearGeneration
   const keys = await Promise.all(texts.map((text) => entryKey(scope, text)))
@@ -198,15 +247,20 @@ async function lookup(scope: PersistentCacheScope, texts: readonly string[]): Pr
   const now = Date.now()
   const found = new Map<string, TranslationCacheEntry>()
   const stale: [string, CacheRecord][] = []
+  const expired: [string, number][] = []
   values.forEach((value, index) => {
     const text = texts[index]
     const key = keys[index]
     if (text === undefined || key === undefined || !validRecord(value)) return
     const expiresAt = value.createdAt + CACHE_TTL_MS
-    if (now >= expiresAt) return
+    if (now >= expiresAt) {
+      expired.push([key, value.createdAt])
+      return
+    }
     found.set(text, { translation: value.translation, expiresAt })
     if (now - value.usedAt > TOUCH_INTERVAL_MS) stale.push([key, value])
   })
+  if (expired.length > 0) void purgeExpired(expired, generation)
   if (stale.length > 0) void touch(stale, now, generation)
   return found
 }
@@ -233,37 +287,58 @@ export async function readPersistentTranslations(
   }
 }
 
-/** 从最近使用的条目往回扫描：过期的总是删除；总量超限时再删掉目标水位之外最久未用的条目。 */
+/** 按绝对 TTL 清理过期条目，再从最近使用的条目往回扫描：总量超限时删掉目标水位之外最久未用的条目。 */
 async function sweepOnce(limits: CacheLimits, generation: number): Promise<void> {
   const cutoff = Date.now() - CACHE_TTL_MS
   const targetEntries = Math.floor(limits.maxEntries * EVICT_TARGET_RATIO)
   const targetBytes = Math.floor(limits.maxBytes * EVICT_TARGET_RATIO)
   const expired: IDBValidKey[] = []
+  const expiredKeys = new Set<IDBValidKey>()
   const overflow: IDBValidKey[] = []
   const total = { entries: 0, bytes: 0 }
   const kept = { entries: 0, bytes: 0 }
   await withStore<void>('readonly', (store) => {
     if (generation !== clearGeneration) return () => undefined
-    let overTarget = false
-    const request = store.index(LRU_INDEX).openKeyCursor(null, 'prev')
-    request.onsuccess = () => {
-      const cursor = request.result
-      if (cursor === null) return
-      const [usedAt, bytes] = cursor.key as [number, number]
-      if (usedAt < cutoff) {
-        expired.push(cursor.primaryKey)
-      } else {
-        total.entries += 1
-        total.bytes += bytes
-        overTarget ||= kept.entries >= targetEntries || kept.bytes + bytes > targetBytes
-        if (overTarget) {
-          overflow.push(cursor.primaryKey)
-        } else {
-          kept.entries += 1
-          kept.bytes += bytes
+    const scanLru = (): void => {
+      let overTarget = false
+      const request = store.index(LRU_INDEX).openKeyCursor(null, 'prev')
+      request.onsuccess = () => {
+        const cursor = request.result
+        if (cursor === null) return
+        if (!expiredKeys.has(cursor.primaryKey)) {
+          const [usedAt, bytes] = cursor.key as [number, number]
+          if (usedAt < cutoff) {
+            expiredKeys.add(cursor.primaryKey)
+            expired.push(cursor.primaryKey)
+          } else {
+            total.entries += 1
+            total.bytes += bytes
+            overTarget ||= kept.entries >= targetEntries || kept.bytes + bytes > targetBytes
+            if (overTarget) {
+              overflow.push(cursor.primaryKey)
+            } else {
+              kept.entries += 1
+              kept.bytes += bytes
+            }
+          }
         }
+        cursor.continue()
       }
-      cursor.continue()
+    }
+    if (store.indexNames.contains(CREATED_INDEX)) {
+      const createdRequest = store.index(CREATED_INDEX).openKeyCursor(IDBKeyRange.upperBound(cutoff))
+      createdRequest.onsuccess = () => {
+        const cursor = createdRequest.result
+        if (cursor === null) {
+          scanLru()
+          return
+        }
+        expiredKeys.add(cursor.primaryKey)
+        expired.push(cursor.primaryKey)
+        cursor.continue()
+      }
+    } else {
+      scanLru()
     }
     return () => undefined
   })

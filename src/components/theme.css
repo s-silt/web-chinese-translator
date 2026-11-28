@@ -150,7 +150,11 @@ body,
 .popup-card,
 .popup-header,
 .popup-footer,
-.section {
+.section,
+.ui-panel,
+.ui-row,
+.options-side,
+.connection-status {
   transition:
     background-color var(--gcn-duration-theme) var(--gcn-ease),
     color var(--gcn-duration-theme) var(--gcn-ease),
@@ -163,7 +167,11 @@ body,
   .popup-card,
   .popup-header,
   .popup-footer,
-  .section {
+  .section,
+  .ui-panel,
+  .ui-row,
+  .options-side,
+  .connection-status {
     transition: none;
   }
 }

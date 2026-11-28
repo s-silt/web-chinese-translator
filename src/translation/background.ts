@@ -1,4 +1,46 @@
-import { browser, type Browser } from 'wxt/browser'
+import { browser } from 'wxt/browser'
+import { reportBackgroundError } from './background-error'
+import {
+  abortTabRequests,
+  assistScope,
+  installPageSessions,
+  interactive,
+  pageSessionEnded,
+  pageSessionKey,
+  requests,
+  TrackedRequest,
+} from './background-sessions'
+import {
+  activeGrantForTicket,
+  clearManualGrants,
+  MANUAL_GRANT_MAX,
+  MANUAL_GRANT_MS,
+  manualGrants,
+  parseInjectionSnapshots,
+  pruneManualGrants,
+  readDocumentHref,
+  verifyManualTicket,
+  verifySelectionDocuments,
+  type ManualGrant,
+  type SelectionDocument,
+} from './background-grants'
+import {
+  checkCurrent,
+  customHeadersStateFor,
+  endpointAllowed,
+  failureReply,
+  fromExtensionPage,
+  fromOurContent,
+  fromOurInputFrame,
+  fromTextWindow,
+  inputFrameAllowed,
+  keyStateFor,
+  originAllowed,
+  patternAllowed,
+  SNAPSHOT_ERROR,
+  unavailableReply,
+  type MessageSender,
+} from './background-sender'
 import {
   clearManualPages,
   expireNavigatedManualPage,
@@ -16,8 +58,6 @@ import { isGitHubPageReply } from '../shared/messages'
 import { getSettings, watchSettings } from '../shared/settings'
 import { sendToTabMessage } from '../shared/tab-messages'
 import {
-  completionUrl,
-  hostPermissionPattern,
   getTranslationConfig,
   isInputAutoReplaceDelay,
   isInputReplaceMode,
@@ -40,7 +80,7 @@ import {
   type ModelSnapshot,
 } from './model-state'
 import { clearPageContexts, installContextExpiry, recentPageContexts, recordPageContext } from './context-memory'
-import { isPageId, type PageContext, type TranslationContext } from './reading-context'
+import type { PageContext, TranslationContext } from './reading-context'
 import {
   isApiType,
   isTemperature,
@@ -49,18 +89,15 @@ import {
   requestOptionsKey,
   type JsonObject,
 } from './request-options'
-import { readManualSelection, type ManualSelectionSnapshot } from './selection'
+import { readManualSelection } from './selection'
 import {
   isContentTranslationReply,
   isTranslationMessage,
   NO_SELECTION_ERROR,
   NOTHING_TO_TOGGLE_ERROR,
-  PAGE_PORT_PREFIX,
   SENSITIVE_FRAME_ERROR,
   TRANSLATION_CONFIG_CHANGED_ERROR,
   TRANSLATION_PERMISSION_REMOVED_ERROR,
-  type CustomHeadersState,
-  type KeyState,
   type ContentTranslationMessage,
   type TranslationConfigPatch,
   type TranslationFailure,
@@ -86,7 +123,6 @@ import { clearTranslationCache, requestTranslation } from './queue'
 import {
   cancelModelTasks,
   clearAutomaticPause,
-  describeFailure,
   modelSchedulerGeneration,
   restoreAutomaticPause,
   scheduleModelTask,
@@ -99,11 +135,7 @@ import {
   syncSiteScript,
   syncSiteTabs,
 } from './registration'
-import {
-  inputFrameUrl,
-  parseInputFrameDocument,
-  readInputFrameSnapshot,
-} from './input-frame'
+import { inputFrameUrl } from './input-frame'
 import { documentEditorInMainWorld, isDocumentEditorResult } from './document-editor'
 import { openTextTranslationWindow } from './text-window'
 import { EXCLUDED_LIMIT_ERROR, isExcludedSite, isSensitivePage, MAX_EXCLUDED_HOSTS, normalizeExcludedHost, pageModelPolicy, sanitizeExcludedHosts } from './page-policy'
@@ -124,11 +156,8 @@ import {
   readingPolicyChanged,
   requestAffected,
   sameList,
-  type RequestKind,
-  type RequestScope,
 } from './config-impact'
 
-type MessageSender = Browser.runtime.MessageSender
 
 const MENU_ID = 'wt-selection'
 const PAGE_MENU_ID = 'wt-page'
@@ -152,181 +181,8 @@ const AUTO_MAX_ITEMS = 20
 const AUTO_MAX_TOTAL = 4000
 const AUTO_MAX_TEXT = 1500
 
-function reportError(_error: unknown): void {
-  console.error('[网页汉化助手] 后台任务失败')
-}
-
-function fromExtensionPage(sender: MessageSender): boolean {
-  return (
-    sender.id === browser.runtime.id &&
-    typeof sender.url === 'string' &&
-    sender.url.startsWith(browser.runtime.getURL('/'))
-  )
-}
-
-function fromTextWindow(sender: MessageSender): boolean {
-  if (!fromExtensionPage(sender)) return false
-  try {
-    return new URL(sender.url!).pathname === '/translate.html'
-  } catch {
-    return false
-  }
-}
-
-function fromOurContent(sender: MessageSender): boolean {
-  return (
-    sender.id === browser.runtime.id &&
-    typeof sender.tab?.id === 'number' &&
-    sender.frameId === 0 &&
-    typeof sender.url === 'string' &&
-    /^https?:/.test(sender.url)
-  )
-}
-
-function fromOurInputFrame(sender: MessageSender): boolean {
-  if (
-    sender.id !== browser.runtime.id ||
-    typeof sender.tab?.id !== 'number' ||
-    !Number.isSafeInteger(sender.tab.id) ||
-    sender.tab.id < 0 ||
-    sender.tab.incognito === true ||
-    typeof sender.frameId !== 'number' ||
-    !Number.isSafeInteger(sender.frameId) ||
-    sender.frameId <= 0 ||
-    typeof sender.documentId !== 'string' ||
-    sender.documentId === '' ||
-    sender.documentId.length > 256 ||
-    typeof sender.url !== 'string' ||
-    typeof sender.tab.url !== 'string' ||
-    typeof sender.origin !== 'string'
-  ) {
-    return false
-  }
-  const tabDocUrl = documentFormOfBrowserUrl(sender.tab.url)
-  const effective = inputFrameUrl(tabDocUrl, sender.url)
-  if (effective === undefined) return false
-  const expectedOrigin = normalizeOrigin(effective)
-  return expectedOrigin !== '' && sender.origin === expectedOrigin
-}
-
-async function inputFrameAllowed(sender: MessageSender, config: TranslationConfig): Promise<boolean> {
-  if (!fromOurInputFrame(sender) || !config.inputTranslationEnabled) return false
-  const tabId = sender.tab!.id!
-  const frameId = sender.frameId!
-  const documentId = sender.documentId!
-  const sourceUrl = sender.url!
-  const tabs = browser.tabs
-  const scripting = browser.scripting
-  if (typeof tabs?.get !== 'function' || typeof scripting?.executeScript !== 'function') return false
-  try {
-    const currentTab = await tabs.get(tabId)
-    if (currentTab.incognito === true || typeof currentTab.url !== 'string') return false
-    const browserTopUrl = currentTab.url
-    const candidateTopUrl = documentFormOfBrowserUrl(browserTopUrl)
-    const candidateEffectiveUrl = inputFrameUrl(candidateTopUrl, sourceUrl)
-    if (candidateEffectiveUrl === undefined) return false
-    if (!isSiteScopeAllowed(candidateTopUrl, config) || !isSiteScopeAllowed(candidateEffectiveUrl, config)) return false
-    if (
-      isExcludedSite(candidateTopUrl, config.excludedHosts) ||
-      isExcludedSite(candidateEffectiveUrl, config.excludedHosts)
-    ) {
-      return false
-    }
-    if (isSensitivePage(candidateTopUrl) || isSensitivePage(candidateEffectiveUrl)) return false
-    const origin = normalizeOrigin(candidateTopUrl)
-    if (origin === '' || !(await originAllowed(origin))) return false
-    const results: unknown = await scripting.executeScript({
-      target: { tabId, documentIds: [documentId] },
-      func: readInputFrameSnapshot,
-    })
-    if (!Array.isArray(results) || results.length !== 1) return false
-    const parsed = parseInputFrameDocument(results[0])
-    if (parsed === undefined) return false
-    if (
-      parsed.frameId !== frameId ||
-      parsed.documentId !== documentId ||
-      !matchesBrowserUrl(parsed.snapshot.topUrl, browserTopUrl)
-    ) {
-      return false
-    }
-    const topUrl = parsed.snapshot.topUrl
-    const effectiveUrl = inputFrameUrl(topUrl, parsed.snapshot.url)
-    if (effectiveUrl === undefined || inputFrameUrl(topUrl, sourceUrl) !== effectiveUrl) return false
-    if (!isSiteScopeAllowed(topUrl, config) || !isSiteScopeAllowed(effectiveUrl, config)) return false
-    if (isExcludedSite(topUrl, config.excludedHosts) || isExcludedSite(effectiveUrl, config.excludedHosts)) return false
-    if (isSensitivePage(topUrl) || isSensitivePage(effectiveUrl)) return false
-    return true
-  } catch {
-    return false
-  }
-}
-
-async function keyStateFor(baseUrl: string): Promise<{ keyState: KeyState; hasKey?: boolean }> {
-  const origin = credentialOrigin(baseUrl)
-  try {
-    const stored = await readStoredApiKey()
-    if (stored === undefined) return { keyState: 'none', hasKey: false }
-    if (typeof stored === 'string') return { keyState: 'legacy', hasKey: true }
-    if (origin !== '' && stored.origin === origin) return { keyState: 'ready', hasKey: true }
-    return { keyState: 'different-origin', hasKey: true }
-  } catch {
-    return { keyState: 'unavailable' }
-  }
-}
-
-async function customHeadersStateFor(baseUrl: string, revision: string): Promise<CustomHeadersState> {
-  if (revision === '') return 'none'
-  const origin = credentialOrigin(baseUrl)
-  try {
-    const stored = await readStoredCustomHeaders()
-    if (stored === undefined || stored.revision !== revision) return 'unavailable'
-    if (origin !== '' && stored.origin === origin) return 'ready'
-    return 'different-origin'
-  } catch {
-    return 'unavailable'
-  }
-}
-
-async function endpointAllowed(baseUrl: string): Promise<boolean> {
-  const url = completionUrl(baseUrl)
-  if (url === '') return false
-  if (typeof browser.permissions?.contains !== 'function') return false
-  try {
-    return await browser.permissions.contains({ origins: [hostPermissionPattern(url)] })
-  } catch {
-    return false
-  }
-}
-
-function failureReply(error: unknown): TranslationFailure {
-  return { ok: false, ...describeFailure(error) }
-}
-
-function unavailableReply(snapshot: ModelSnapshot | undefined): TranslationFailure {
-  return snapshot === undefined ? { ok: false, error: SNAPSHOT_ERROR } : failureReply(new CompletionCancelledError())
-}
-
-async function patternAllowed(pattern: string): Promise<boolean> {
-  if (typeof browser.permissions?.contains !== 'function') return false
-  try {
-    return await browser.permissions.contains({ origins: [pattern] })
-  } catch {
-    return false
-  }
-}
-
-async function originAllowed(origin: string): Promise<boolean> {
-  return origin !== '' && patternAllowed(hostPermissionPattern(origin))
-}
-
-function checkCurrent(snapshot: ModelSnapshot, signal: AbortSignal): void {
-  if (signal.aborted || snapshot.revision !== currentRevision()) throw new CompletionCancelledError()
-}
-
-interface SelectionDocument {
-  readonly frameId: number
-  readonly documentId: string
-  readonly url: string
+function reportError(error: unknown): void {
+  reportBackgroundError('background', error)
 }
 
 async function readTopDocument(tabId: number): Promise<SelectionDocument | undefined> {
@@ -451,15 +307,6 @@ async function startPageTranslation(tab: PageTarget): Promise<TranslationReply<'
   }
 }
 
-interface ManualGrant {
-  readonly id: string
-  readonly top: SelectionDocument
-  readonly source: SelectionDocument
-  readonly text: string
-  readonly expires: number
-  claimedBy?: string
-}
-
 interface DispatchPolicy {
   origin?: string
   auto?: boolean
@@ -582,141 +429,6 @@ function invalidateModelWork(hint: 'settings' | 'permissions' = 'settings'): voi
   interactive.clear()
 }
 
-const SNAPSHOT_ERROR = '无法读取接口配置或密钥，请在设置中检查'
-
-const manualGrants = new Map<number, ManualGrant>()
-const MANUAL_GRANT_MS = 15000
-const MANUAL_GRANT_MAX = 32
-
-function pruneManualGrants(): void {
-  const now = Date.now()
-  for (const [tabId, grant] of manualGrants) {
-    if (grant.claimedBy === undefined && grant.expires <= now) manualGrants.delete(tabId)
-  }
-}
-
-function clearManualGrants(): void {
-  manualGrants.clear()
-}
-
-interface RawInjectionSnapshot {
-  readonly frameId: number
-  readonly documentId: string
-  readonly snapshot: ManualSelectionSnapshot
-}
-
-function isManualSelectionSnapshot(value: unknown): value is ManualSelectionSnapshot {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const record = value as Record<string, unknown>
-  return (
-    typeof record.url === 'string' &&
-    typeof record.focused === 'boolean' &&
-    typeof record.text === 'string' &&
-    typeof record.frameFocused === 'boolean'
-  )
-}
-
-function parseInjectionSnapshots(results: unknown): RawInjectionSnapshot[] {
-  if (!Array.isArray(results)) return []
-  const parsed: RawInjectionSnapshot[] = []
-  for (const item of results) {
-    if (typeof item !== 'object' || item === null) continue
-    const entry = item as { frameId?: unknown; documentId?: unknown; result?: unknown }
-    if (
-      typeof entry.frameId === 'number' &&
-      typeof entry.documentId === 'string' &&
-      entry.documentId !== '' &&
-      isManualSelectionSnapshot(entry.result)
-    ) {
-      parsed.push({
-        frameId: entry.frameId,
-        documentId: entry.documentId,
-        snapshot: entry.result,
-      })
-    }
-  }
-  return parsed
-}
-
-function readDocumentHref(): string {
-  return location.href
-}
-
-async function verifySelectionDocuments(tabId: number, grant: ManualGrant): Promise<boolean> {
-  const scripting = browser.scripting
-  if (typeof scripting?.executeScript !== 'function') return false
-  const documentIds =
-    grant.top.documentId === grant.source.documentId
-      ? [grant.top.documentId]
-      : [grant.top.documentId, grant.source.documentId]
-  try {
-    const results = await scripting.executeScript({
-      target: { tabId, documentIds },
-      func: readDocumentHref,
-    })
-    if (!Array.isArray(results) || results.length !== documentIds.length) return false
-    const matchesDoc = (expected: SelectionDocument): boolean =>
-      results.some(
-        (item) =>
-          typeof item === 'object' &&
-          item !== null &&
-          (item as { frameId?: unknown }).frameId === expected.frameId &&
-          (item as { documentId?: unknown }).documentId === expected.documentId &&
-          (item as { result?: unknown }).result === expected.url,
-      )
-    return matchesDoc(grant.top) && matchesDoc(grant.source)
-  } catch {
-    return false
-  }
-}
-
-function activeGrantForTicket(
-  tabId: number,
-  ticketId: string,
-  text: string,
-  sender?: MessageSender,
-  requestKey?: string,
-): ManualGrant | undefined {
-  pruneManualGrants()
-  const grant = manualGrants.get(tabId)
-  if (grant === undefined || grant.id !== ticketId || grant.text !== text) return undefined
-  if (grant.claimedBy !== undefined && grant.claimedBy !== requestKey) return undefined
-  const leased = requestKey !== undefined && grant.claimedBy === requestKey
-  if (!leased && Date.now() >= grant.expires) {
-    manualGrants.delete(tabId)
-    return undefined
-  }
-  if (sender !== undefined) {
-    if (
-      sender.tab?.id !== tabId ||
-      sender.frameId !== 0 ||
-      sender.documentId !== grant.top.documentId ||
-      sender.url !== grant.top.url
-    ) {
-      return undefined
-    }
-  }
-  return grant
-}
-
-async function verifyManualTicket(
-  sender: MessageSender,
-  text: string,
-  ticketId: string,
-  requestKey?: string,
-): Promise<ManualGrant | undefined> {
-  const tabId = sender.tab?.id
-  if (typeof tabId !== 'number') return undefined
-  const grant = activeGrantForTicket(tabId, ticketId, text, sender, requestKey)
-  if (grant === undefined) return undefined
-  const alive = await verifySelectionDocuments(tabId, grant)
-  if (!alive) {
-    if (manualGrants.get(tabId)?.id === ticketId) manualGrants.delete(tabId)
-    return undefined
-  }
-  return activeGrantForTicket(tabId, ticketId, text, sender, requestKey)
-}
-
 async function translationContext(
   senderUrl: string,
   page: PageContext | undefined,
@@ -746,28 +458,6 @@ async function translationContext(
   return { currentPage, recentPages }
 }
 
-/** 在途请求及其适用范围：配置变更时只中止受影响的请求。 */
-class TrackedRequest extends AbortController implements RequestScope {
-  readonly kind: RequestKind
-  url: string
-  readonly pageSession: string | undefined
-  sourceUrl: string | undefined
-  recentSites: readonly string[] = []
-  cancellationHint: 'settings' | 'permissions' | undefined
-
-  constructor(kind: RequestKind, url: string, pageSession?: string) {
-    super()
-    this.kind = kind
-    this.url = url
-    this.pageSession = pageSession
-  }
-}
-
-const requests = new Map<string, TrackedRequest>()
-const interactive = new Set<string>()
-/** 已结束的页面会话：旧文档卸载前发出的消息可能晚于端口断开才到达。 */
-const endedPageSessions = new Set<string>()
-const ENDED_PAGE_SESSIONS_MAX = 256
 /** 划词、主动提示、排除列表或网站运行范围每变更一次递增，让已读取旧策略的阅读线索作废。 */
 let readingGeneration = 0
 let invalidatedFor: string | undefined
@@ -795,53 +485,6 @@ function invalidateForConfig(previous: TranslationConfig, next: TranslationConfi
     requests.delete(key)
     interactive.delete(key)
   }
-}
-
-/** 带上标签页与文档作用域，一个页面或子文档无法影响其他会话。 */
-function pageSessionKey(sender: MessageSender, session: string | undefined): string | undefined {
-  return session === undefined ? undefined : `${assistScope(sender)}:${session}`
-}
-
-function pageSessionEnded(key: string | undefined): boolean {
-  return key !== undefined && endedPageSessions.has(key)
-}
-
-/**
- * 文档已消失：中止它的排队与在途请求，让出调度槽。中止走 cancelled 路径，不计失败，也不触发 429 暂停。
- * 按会话而不是 assistScope 匹配：Firefox 没有 documentId，同一标签页的新旧文档共用一个 scope。
- */
-function endPageSession(key: string): void {
-  endedPageSessions.add(key)
-  if (endedPageSessions.size > ENDED_PAGE_SESSIONS_MAX) {
-    const oldest = endedPageSessions.values().next().value
-    if (oldest !== undefined) endedPageSessions.delete(oldest)
-  }
-  for (const [requestKey, request] of requests) {
-    if (request.pageSession !== key) continue
-    request.abort()
-    requests.delete(requestKey)
-    interactive.delete(requestKey)
-  }
-}
-
-function installPageSessions(): void {
-  browser.runtime.onConnect.addListener((port) => {
-    if (!port.name.startsWith(PAGE_PORT_PREFIX)) return
-    const session = port.name.slice(PAGE_PORT_PREFIX.length)
-    const sender = port.sender
-    if (
-      sender === undefined ||
-      (!fromOurContent(sender) && !fromOurInputFrame(sender) && !fromTextWindow(sender)) ||
-      !isPageId(session)
-    ) {
-      port.disconnect()
-      return
-    }
-    const key = pageSessionKey(sender, session)!
-    port.onDisconnect.addListener(() => {
-      endPageSession(key)
-    })
-  })
 }
 
 /** 写入前先作废：之后取快照的请求要等本次变更结束，读到的一定是新配置。监听器不再重复作废同一次写入。 */
@@ -1531,9 +1174,6 @@ async function handleTranslate(
   }
 }
 
-function assistScope(sender: MessageSender): string {
-  return `${sender.tab?.id ?? -1}:${sender.documentId ?? sender.frameId ?? 0}`
-}
 
 async function handleAssist(
   message: Extract<TranslationMessage, { type: 'wt:assist' }>,
@@ -2795,13 +2435,7 @@ export function installTranslationBackground(): void {
       browser.tabs.onRemoved.addListener((tabId) => {
         manualGrants.delete(tabId)
         void revokeManualPageGrant(tabId).catch(reportError)
-        for (const [key, controller] of requests) {
-          if (key.startsWith(`${tabId}:`)) {
-            controller.abort()
-            requests.delete(key)
-            interactive.delete(key)
-          }
-        }
+        abortTabRequests(tabId)
       })
     }
   } catch {
