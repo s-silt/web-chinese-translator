@@ -80,7 +80,7 @@ import {
   type ModelSnapshot,
 } from './model-state'
 import { clearPageContexts, installContextExpiry, recentPageContexts, recordPageContext } from './context-memory'
-import { isPageId, type PageContext, type TranslationContext } from './reading-context'
+import type { PageContext, TranslationContext } from './reading-context'
 import {
   isApiType,
   isTemperature,
