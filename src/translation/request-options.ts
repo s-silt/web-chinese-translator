@@ -116,9 +116,15 @@ export function requestOptionsKey(config: RequestOptions): string {
   ])
 }
 
+/** 用量只影响流式响应的统计。保存冲突仍比较完整配置，译文身份只比较影响输出的参数。 */
+export function translationRequestOptionsKey(config: RequestOptions): string {
+  const { stream_options: _usage, ...requestParams } = config.requestParams ?? {}
+  return requestOptionsKey({ ...config, requestParams })
+}
+
 /** 内存缓存只保留固定长度摘要，避免每条译文重复占用整份附加参数的空间。 */
 export async function requestOptionsCacheKey(config: RequestOptions, outputOptions?: readonly string[]): Promise<string> {
-  const options = requestOptionsKey(config)
+  const options = translationRequestOptionsKey(config)
   const material = outputOptions === undefined ? options : JSON.stringify([options, ...outputOptions])
   try {
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(material))

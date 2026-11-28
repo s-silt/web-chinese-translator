@@ -289,7 +289,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     let visible = 0
     for (const [node, source] of map) {
       const parent = node.parentElement
-      const stale = !node.isConnected || textValue(node) !== source || records.has(node) || parent === null ||
+      const stale = !node.isConnected || textValue(node) !== source || (records.has(node) && !layoutHidden.has(node)) || parent === null ||
         (layout && !wasRejected(node, source)) || isExcludedElement(parent)
       if (stale) map.delete(node)
       else if (isVisible(parent)) visible += 1
@@ -484,6 +484,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
 
   const bilingualNodes = new Map<Text, { line: HTMLElement; members: readonly Text[] }>()
   const bilingualBlocks = new WeakMap<Element, Text>()
+  /** 原位替换被布局拒绝的模型译文仍在原有记录预算内，能回到双语但不计作已展示。 */
+  const layoutHidden = new Map<Text, Element | null>()
 
   function rememberRendering(rendering: ModelRendering): void {
     for (const { node } of rendering.changes) modelTexts.set(node, rendering)
@@ -499,6 +501,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     for (const { node, source } of changes) {
       const original = records.get(node)?.original ?? source
       if (node.data !== original) node.data = original
+      layoutHidden.delete(node)
       bilingualNodes.set(node, group)
       layoutSkips.delete(node)
       redrawSkips.delete(node)
@@ -510,42 +513,53 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     return true
   }
 
-  function setDisplayMode(mode: TranslationDisplayMode): void {
-    for (const rendering of new Set(modelTexts.values())) {
-      const { changes, block } = rendering
-      const anchor = changes[0]!.node
-      const bilingual = bilingualNodes.get(anchor)
-      if ((mode === 'bilingual') === (bilingual !== undefined)) continue
-      const current = changes.filter(({ node }) => node.isConnected && modelTexts.get(node) === rendering &&
-        records.get(node)?.applied === node.data && (!block || block.contains(node)))
-      if (mode === 'bilingual') {
-        if (current.length === changes.length) showBilingual(rendering)
-        else for (const change of current) showBilingual({ changes: [change], text: change.translated })
-      } else if (bilingual && current.length === changes.length) {
-        const replacements = changes.map(change => ({ ...change, source: records.get(change.node)!.original }))
-        removeBilingualNode(bilingual.line)
-        if (block) bilingualBlocks.delete(block)
-        if (!tryReplaceTextUnit(replacements)) {
-          noteLayoutSkips(replacements)
-          forgetNode(anchor)
-          continue
-        }
-        for (const change of replacements) {
-          bilingualNodes.delete(change.node)
-          rememberWrite(change)
-        }
+  function displayRendering(mode: TranslationDisplayMode, rendering: ModelRendering): void {
+    const { changes, block } = rendering
+    const anchor = changes[0]!.node
+    const bilingual = bilingualNodes.get(anchor)
+    const hidden = layoutHidden.has(anchor)
+    if (!hidden && (mode === 'bilingual') === (bilingual !== undefined)) return
+    const current = changes.filter(({ node }) => node.isConnected && modelTexts.get(node) === rendering &&
+      records.get(node)?.applied === node.data && (!block || block.contains(node)) &&
+      (!hidden || (layoutHidden.get(node) === node.parentElement && node.parentElement && !isExcludedElement(node.parentElement))))
+    if (hidden && current.length !== changes.length) {
+      forgetNode(anchor)
+      return
+    }
+    if (mode === 'bilingual') {
+      if (current.length === changes.length) showBilingual(rendering)
+      else for (const change of current) showBilingual({ changes: [change], text: change.translated })
+    } else if (bilingual && current.length === changes.length) {
+      const replacements = changes.map(change => ({ ...change, source: records.get(change.node)!.original }))
+      removeBilingualNode(bilingual.line)
+      if (!tryReplaceTextUnit(replacements)) {
+        noteLayoutSkips(replacements)
+        for (const { node } of replacements) layoutHidden.set(node, node.parentElement)
+        return
+      }
+      if (block) bilingualBlocks.delete(block)
+      for (const change of replacements) {
+        bilingualNodes.delete(change.node)
+        layoutHidden.delete(change.node)
+        rememberWrite(change)
       }
     }
   }
 
+  function setDisplayMode(mode: TranslationDisplayMode): void {
+    for (const rendering of new Set(modelTexts.values())) displayRendering(mode, rendering)
+  }
+
   function forgetNode(node: Text): void {
     const group = bilingualNodes.get(node)
-    if (group?.line.parentElement && bilingualBlocks.get(group.line.parentElement) === group.members[0]) {
-      bilingualBlocks.delete(group.line.parentElement)
+    const block = modelTexts.get(node)?.block
+    if (group && block && bilingualBlocks.get(block) === group.members[0]) {
+      bilingualBlocks.delete(block)
     }
     removeBilingualNode(group?.line)
     for (const member of group?.members ?? [node]) {
       bilingualNodes.delete(member)
+      layoutHidden.delete(member)
       records.delete(member)
       modifiedTexts.delete(member)
       modelTexts.delete(member)
@@ -1506,6 +1520,9 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     visitText(node) {
       if (disposed || suspended) return 0
       if (!node.isConnected) return 0
+      if (layoutHidden.has(node) && !wasRejected(node, node.data)) {
+        displayRendering(options.displayMode?.() ?? 'replace', modelTexts.get(node)!)
+      }
       const failedSource = failedItems.get(node)
       if (failedSource !== undefined && failedSource !== textValue(node)) {
         failedItems.delete(node)
@@ -1551,7 +1568,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       if (!node.isConnected) {
         if (record !== undefined && textValue(node) === record.applied) node.nodeValue = record.original
         forgetNode(node)
-      } else if (record === undefined || textValue(node) !== record.applied) {
+      } else if (record === undefined || textValue(node) !== record.applied ||
+        (layoutHidden.has(node) && layoutHidden.get(node) !== node.parentElement)) {
         forgetNode(node)
       }
       releaseRecordCap()
@@ -1831,6 +1849,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   function syncPageIdentity(): void {
     const current = pageIdentity(location.href)
     if (current === lastLocation) return
+    for (const node of layoutHidden.keys()) forgetNode(node)
     lastLocation = current
     releaseBatchReservation()
     spent = 0
@@ -1923,7 +1942,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   return {
     syncPageIdentity,
     setDisplayMode,
-    isModelTranslated(node) { return modelTexts.has(node) && records.get(node)?.applied === node.data },
+    isModelTranslated(node) { return modelTexts.has(node) && !layoutHidden.has(node) && records.get(node)?.applied === node.data },
     start() {
       if (disposed || document.body === null) return
       syncPageIdentity()
@@ -2020,7 +2039,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       return {
         spent: Math.max(0, Math.trunc(spent)),
         budget: Number.isFinite(limit) ? Math.trunc(limit) : 0,
-        translated: modelTexts.size,
+        translated: modelTexts.size - layoutHidden.size,
         queued,
         ...(layoutSkipped > 0 ? { layoutSkipped } : {}),
         ...(redrawSkipped > 0 ? { redrawSkipped } : {}),

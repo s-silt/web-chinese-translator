@@ -164,11 +164,18 @@
           @change="handleImportFile"
         />
       </div>
-      <div v-if="pendingBackup" class="wt-backup-preview" data-test="wt-backup-preview">
-        <p role="status">{{ pendingBackup.missing.length
+      <div v-if="pendingBackup || skippedBackupOrigins" class="wt-backup-preview">
+        <p v-if="pendingBackup" data-test="wt-backup-preview" role="status">{{ pendingBackup.missing.length
           ? t('wtBackupNeedsAccess', { origins: pendingBackup.missing.join(', ') })
           : t('wtBackupReady') }}</p>
-        <div class="wt-inline-row">
+        <p v-else data-test="wt-backup-partial" role="status">{{ t('wtBackupPartial', { origins: skippedBackupOrigins }) }}</p>
+        <div v-if="visibleOmissions.length" data-test="wt-backup-omissions" role="status">
+          <p>{{ t(pendingBackup ? 'wtBackupProfileLimitPreview' : 'wtBackupProfileLimitResult', { max: MAX_MODEL_PROFILES }) }}</p>
+          <ul>
+            <li v-for="(name, index) in visibleOmissions" :key="index">{{ name }}</li>
+          </ul>
+        </div>
+        <div v-if="pendingBackup" class="wt-inline-row">
           <UiButton size="sm" variant="primary" :disabled="restoringBackup" data-test="wt-backup-confirm" @click="restoreBackup(true)">
             {{ t(pendingBackup.missing.length ? 'wtBackupGrantAndRestore' : 'wtBackupRestore') }}
           </UiButton>
@@ -178,9 +185,6 @@
           <UiButton size="sm" :disabled="restoringBackup" @click="pendingBackup = undefined">{{ t('cancel') }}</UiButton>
         </div>
       </div>
-      <p v-if="skippedBackupOrigins" class="wt-backup-preview" data-test="wt-backup-partial" role="status">
-        {{ t('wtBackupPartial', { origins: skippedBackupOrigins }) }}
-      </p>
     </div>
   </section>
 </template>
@@ -205,7 +209,8 @@ import {
   type ModelProfile,
   type TranslationConfig,
 } from '../../translation/config'
-import { backupPermissionOrigins, configBackupPatch, exportConfigBackup, MAX_CONFIG_BACKUP_BYTES, parseConfigBackup } from '../../translation/config-backup'
+import { backupPermissionOrigins, exportConfigBackup, MAX_CONFIG_BACKUP_BYTES, parseConfigBackup, planConfigBackupRestore } from '../../translation/config-backup'
+import { MAX_MODEL_PROFILES } from '../../translation/preferences-extra'
 import { createId } from '../../translation/id'
 import type { PersistentCacheStats } from '../../translation/persistent-cache'
 import { emptyUsageStats, type UsageStatsSnapshot } from '../../translation/usage-stats'
@@ -223,6 +228,10 @@ const importInput = ref<HTMLInputElement | null>(null)
 const pendingBackup = ref<{ config: TranslationConfig; missing: string[] }>()
 const restoringBackup = ref(false)
 const skippedBackupOrigins = ref('')
+const omittedBackupProfiles = ref<readonly string[]>([])
+const pendingRestore = computed(() => pendingBackup.value &&
+  planConfigBackupRestore(pendingBackup.value.config, config.value, pendingBackup.value.missing))
+const visibleOmissions = computed(() => pendingRestore.value?.omittedProfiles ?? omittedBackupProfiles.value)
 let importGeneration = 0
 
 const canSaveProfile = computed(
@@ -418,6 +427,7 @@ async function handleImportFile(event: Event): Promise<void> {
   const generation = ++importGeneration
   pendingBackup.value = undefined
   skippedBackupOrigins.value = ''
+  omittedBackupProfiles.value = []
   if (file.size > MAX_CONFIG_BACKUP_BYTES) {
     showToast('danger', 'wtBackupTooLarge')
     return
@@ -454,9 +464,11 @@ async function restoreBackup(requestAccess: boolean): Promise<void> {
     }
     const missing = await missingBackupOrigins(pending.config)
     pendingBackup.value = { ...pending, missing }
-    if (await patchConfig(configBackupPatch(pending.config, config.value, missing))) {
+    const plan = pendingRestore.value
+    if (plan && await patchConfig(plan.patch)) {
       pendingBackup.value = undefined
       skippedBackupOrigins.value = missing.join(', ')
+      omittedBackupProfiles.value = plan.omittedProfiles
       if (!missing.length) showToast('success', 'wtBackupImported')
     }
   } finally {

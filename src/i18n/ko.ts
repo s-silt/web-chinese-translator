@@ -476,6 +476,8 @@ const messages: Messages = {
   wtBackupGrantAndRestore: '허용하고 복원',
   wtBackupSkipAccess: '권한 부여 없이 복원',
   wtBackupPartial: '사용 가능한 설정을 복원했습니다. {origins} 액세스 권한이 필요한 연결이나 기능은 건너뛰었습니다.',
+  wtBackupProfileLimitPreview: '권한을 건너뛰면 이 기기에서 사용 중인 프로필을 유지합니다. 프로필이 {max}개를 초과하여 다음 백업 프로필은 복원되지 않습니다.',
+  wtBackupProfileLimitResult: '이 기기에서 사용 중인 프로필을 유지했습니다. 프로필 한도인 {max}개에 도달하여 다음 백업 프로필은 복원하지 않았습니다.',
   wtBackupTooLarge: '백업 파일이 1 MiB를 초과합니다.',
   wtProfileReviewConnection: '새 주소를 확인하고 필요한 경우 해당 API 키를 입력한 뒤 저장하세요. 새로 입력하지 않으면 이전 맞춤 헤더는 삭제됩니다.',
   wtProfileFinishDraft: '프로필을 전환하기 전에 현재 연결 초안을 저장하거나 취소하세요.',

@@ -486,6 +486,8 @@ const zhCN = {
   wtBackupGrantAndRestore: '授权并恢复',
   wtBackupSkipAccess: '跳过授权并恢复',
   wtBackupPartial: '已恢复可用设置。依赖以下权限的连接或功能已跳过：{origins}。',
+  wtBackupProfileLimitPreview: '若跳过授权，本机在用档案会占用名额。受 {max} 个档案上限限制，以下备份档案将不会导入。',
+  wtBackupProfileLimitResult: '已保留本机在用档案。达到 {max} 个档案上限，以下备份档案未导入。',
   wtBackupTooLarge: '备份文件超过 1 MiB。',
   wtProfileReviewConnection: '请核对新接口，按需输入它的 API Key，再保存。原接口的自定义请求头将清空，也可以填入新接口的请求头。',
   wtProfileFinishDraft: '请先保存或放弃当前连接草稿，再切换模型档案。',

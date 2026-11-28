@@ -476,6 +476,8 @@ const messages: Messages = {
   wtBackupGrantAndRestore: '許可して復元',
   wtBackupSkipAccess: '許可せずに復元',
   wtBackupPartial: '利用できる設定を復元しました。{origins} へのアクセスが必要な接続または機能はスキップしました。',
+  wtBackupProfileLimitPreview: '許可をスキップすると、この端末で使用中のプロファイルが保持されます。上限の {max} 件を超えるため、次のバックアッププロファイルは復元されません。',
+  wtBackupProfileLimitResult: 'この端末で使用中のプロファイルを保持しました。{max} 件の上限に達したため、次のバックアッププロファイルは復元されませんでした。',
   wtBackupTooLarge: 'バックアップが 1 MiB を超えています。',
   wtProfileReviewConnection: '新しい接続先を確認し、必要ならその API キーを入力して保存します。以前のカスタムヘッダーは、新しく入力しない限り消去されます。',
   wtProfileFinishDraft: '現在の接続設定の下書きを保存または破棄してから、プロファイルを切り替えてください。',

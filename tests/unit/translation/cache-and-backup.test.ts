@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto'
 import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_TRANSLATION_CONFIG } from '../../../src/translation/config'
-import { configBackupPatch, exportConfigBackup, parseConfigBackup } from '../../../src/translation/config-backup'
+import { exportConfigBackup, parseConfigBackup, planConfigBackupRestore } from '../../../src/translation/config-backup'
 import { isTranslationMessage, isTranslationReply } from '../../../src/translation/messages'
 import {
   CACHE_TTL_MS, clearPersistentTranslationsForHost, getPersistentCacheStats, readPersistentTranslations,
@@ -142,10 +142,17 @@ describe('可移植配置', () => {
       ...settings, baseUrl: primary.baseUrl, model: primary.model, apiType: primary.apiType, activeProfileId: primary.id,
       selectionProfileId: dedicated.id, modelProfiles: [...filler, denied, remote],
     }
-    const restored = { ...current, ...configBackupPatch(imported, current, ['https://denied.fixture.test/*']) }
+    const { patch, omittedProfiles } = planConfigBackupRestore(imported, current, ['https://denied.fixture.test/*'])
+    const restored = { ...current, ...patch }
     expect(restored.modelProfiles).toHaveLength(MAX_MODEL_PROFILES)
     expect(new Set(restored.modelProfiles.map(p => p.id)).size).toBe(MAX_MODEL_PROFILES)
     expect(restored.modelProfiles.find(p => p.id === local.id)).toEqual(local)
+    expect(omittedProfiles).toEqual(imported.modelProfiles.filter(p => !restored.modelProfiles.some(saved =>
+      saved.name === p.name && saved.baseUrl === p.baseUrl && saved.model === p.model)).map(p => p.name))
+    expect(omittedProfiles).toHaveLength(1)
+    const completed = planConfigBackupRestore(imported, current)
+    expect(completed.omittedProfiles).toEqual([])
+    expect(completed.patch.modelProfiles).toEqual(imported.modelProfiles)
     expect(denySelection ? restored.selectionProfileId : restored.activeProfileId).toBe(local.id)
     const snapshot = { config: restored, revision: 0, apiKey: '' }
     const main = resolveSceneSnapshot(snapshot, 'page').config
@@ -159,7 +166,7 @@ describe('可移植配置', () => {
 
   it('备份明确选择跟随主模型时才清空先前的专用选择', () => {
     const current = { ...settings, modelProfiles: [local], selectionProfileId: local.id }
-    const patch = configBackupPatch({ ...settings, baseUrl: denied.baseUrl, selectionProfileId: '' }, current, ['https://denied.fixture.test/*'])
+    const { patch } = planConfigBackupRestore({ ...settings, baseUrl: denied.baseUrl, selectionProfileId: '' }, current, ['https://denied.fixture.test/*'])
     expect(patch.selectionProfileId).toBe('')
     const effective = resolveSceneSnapshot({ config: { ...current, ...patch }, revision: 0, apiKey: '' }, 'text').config
     expect(effective.baseUrl).toBe(current.baseUrl)
@@ -175,13 +182,13 @@ describe('可移植配置', () => {
     expect(exported).not.toContain('local.example')
     const imported = parseConfigBackup(exported)
     if (!imported.ok) throw new Error(imported.error)
-    const patch = configBackupPatch(imported.config, config)
+    const { patch } = planConfigBackupRestore(imported.config, config)
     expect(isTranslationMessage({ type: 'wt:save-config', patch })).toBe(true)
     expect(patch.displayMode).toBe('bilingual')
     expect(patch).not.toHaveProperty('inputReplaceKey')
     expect(patch).not.toHaveProperty('siteScopeMode')
     expect(patch).not.toHaveProperty('requestParams')
-    expect(configBackupPatch(imported.config, { ...config, baseUrl: 'https://other.example' }).requestParams).toEqual({})
+    expect(planConfigBackupRestore(imported.config, { ...config, baseUrl: 'https://other.example' }).patch.requestParams).toEqual({})
   })
 
   it.each([[], {}, { unknown: true }])('不完整的导入数据无法覆盖现有设置', config => {

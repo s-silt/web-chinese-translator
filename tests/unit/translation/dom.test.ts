@@ -2553,8 +2553,9 @@ describe('行内单元翻译', () => {
     expect(document.querySelectorAll('[data-wt-bilingual]')).toHaveLength(1)
     expect(engine.isModelTranslated(label)).toBe(true)
     const used = engine.progress().spent
+    let tooNarrow = true
     Object.defineProperty(link, 'clientWidth', { get: () => 10 })
-    Object.defineProperty(link, 'scrollWidth', { get: () => label.data.includes('指南') ? 999 : 10 })
+    Object.defineProperty(link, 'scrollWidth', { get: () => tooNarrow && label.data.includes('指南') ? 999 : 10 })
     settings.displayMode = 'replace'
     engine.setDisplayMode(settings.displayMode)
     engine.start()
@@ -2564,6 +2565,65 @@ describe('行内单元翻译', () => {
     expect(engine.progress()).toMatchObject({ translated: 0, layoutSkipped: members, spent: used })
     link.className = 'site-rerender'
     await settle(500)
+    expect(batches).toHaveLength(1)
+    for (let turn = 0; turn < 2; turn++) {
+      settings.displayMode = 'bilingual'
+      engine.setDisplayMode(settings.displayMode)
+      await settle()
+      expect(document.querySelectorAll('[data-wt-bilingual]')).toHaveLength(1)
+      expect(document.querySelector('[data-wt-bilingual]')?.textContent).toBe('阅读指南。')
+      expect(engine.progress()).toMatchObject({ translated: members, spent: used })
+      settings.displayMode = 'replace'
+      engine.setDisplayMode(settings.displayMode)
+      await settle()
+      expect(document.querySelector('[data-wt-bilingual]')).toBeNull()
+      expect(engine.progress()).toMatchObject({ translated: 0, layoutSkipped: members, spent: used })
+      expect(batches).toHaveLength(1)
+    }
+    tooNarrow = false
+    window.dispatchEvent(new Event('resize'))
+    await settle(650)
+    expect(label.data).toContain('指南')
+    expect(engine.progress()).toMatchObject({ translated: members, spent: used })
+    expect(batches).toHaveLength(1)
+    settings.displayMode = 'bilingual'
+    engine.setDisplayMode('bilingual')
+    tooNarrow = true
+    settings.displayMode = 'replace'
+    engine.setDisplayMode('replace')
+    expect(engine.progress().translated).toBe(0)
+    engine.restore()
+    engine.setDisplayMode('bilingual')
+    expect(document.querySelector('[data-wt-bilingual]')).toBeNull()
+    expect(engine.progress().translated).toBe(0)
+  })
+
+  it.each(['edit', 'move', 'route', 'recreate'] as const)('替换被布局拒绝后，%s 使旧双语译文失效', async (change) => {
+    document.body.innerHTML = '<a href="#">Read the guide today.</a><aside></aside>'
+    const link = document.querySelector('a')!
+    const source = link.firstChild as Text
+    const settings: { auto: boolean; displayMode: 'bilingual' | 'replace' } = { auto: true, displayMode: 'bilingual' }
+    engine = makeEngine(settings)
+    engine.start()
+    await settle()
+    batches[0]!.apply(['旧译文'])
+    Object.defineProperty(link, 'clientWidth', { get: () => 10 })
+    Object.defineProperty(link, 'scrollWidth', { get: () => source.data === '旧译文' ? 999 : 10 })
+    settings.displayMode = 'replace'
+    engine.setDisplayMode('replace')
+    settings.auto = false
+    if (change === 'edit') source.data = 'Updated article today.'
+    if (change === 'move') document.querySelector('aside')!.append(source)
+    if (change === 'recreate') link.replaceChildren(document.createTextNode(source.data))
+    if (change === 'route') {
+      vi.stubGlobal('location', new URL('https://new.fixture.test/other'))
+      engine.syncPageIdentity()
+    }
+    settings.displayMode = 'bilingual'
+    engine.setDisplayMode('bilingual')
+    await settle()
+    expect(document.querySelector('[data-wt-bilingual]')).toBeNull()
+    expect(engine.progress().translated).toBe(0)
     expect(batches).toHaveLength(1)
   })
 

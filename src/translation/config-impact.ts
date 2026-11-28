@@ -1,6 +1,6 @@
 import { normalizeOrigin, type TranslationConfig } from './config'
 import { isExcludedSite } from './page-policy'
-import { requestOptionsKey } from './request-options'
+import { translationRequestOptionsKey } from './request-options'
 import { isSiteScopeAllowed } from './site-scope'
 import { glossarySignature } from './preferences-extra'
 
@@ -26,7 +26,7 @@ export function translationOutputChanged(previous: TranslationConfig, next: Tran
     previous.sourceLanguage !== next.sourceLanguage ||
     previous.translationStyle !== next.translationStyle ||
     glossarySignature(previous.promptGlossary) !== glossarySignature(next.promptGlossary) ||
-    requestOptionsKey(previous) !== requestOptionsKey(next)
+    translationRequestOptionsKey(previous) !== translationRequestOptionsKey(next)
   )
 }
 

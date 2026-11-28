@@ -492,6 +492,8 @@ export default {
   wtBackupGrantAndRestore: 'Grant access and restore',
   wtBackupSkipAccess: 'Restore without granting access',
   wtBackupPartial: 'Available settings restored. Connections or features requiring access to {origins} were skipped.',
+  wtBackupProfileLimitPreview: 'If you skip access, profiles in use on this device will be kept. The {max}-profile limit leaves no room for the following backup profiles.',
+  wtBackupProfileLimitResult: 'Profiles in use on this device were kept. The following backup profiles were omitted because the {max}-profile limit was reached.',
   wtBackupTooLarge: 'The backup exceeds 1 MiB.',
   wtProfileReviewConnection: 'Review the new endpoint, enter its API key if required, and save. Previous custom headers are cleared unless you enter replacements.',
   wtProfileFinishDraft: 'Finish saving or discard the current connection draft before switching profiles.',

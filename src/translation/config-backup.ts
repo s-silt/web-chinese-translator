@@ -37,7 +37,8 @@ function restoreProfiles(imported: TranslationConfig, current: TranslationConfig
   // 未授权的场景继续引用本机档案。同名 ID 的导入记录不得改变该场景的实际端点。
   const pinned = current.modelProfiles.filter(p =>
     (!restoreMain && p.id === activeProfileId) || (!restoreSelection && p.id === selectionProfileId))
-  if (!pinned.length) return { activeProfileId, selectionProfileId, modelProfiles: imported.modelProfiles }
+  const omittedProfiles: string[] = []
+  if (!pinned.length) return { activeProfileId, selectionProfileId, modelProfiles: imported.modelProfiles, omittedProfiles }
 
   const modelProfiles = [...pinned]
   const chosen = new Set([restoreMain ? activeProfileId : '', restoreSelection ? selectionProfileId : ''])
@@ -47,9 +48,12 @@ function restoreProfiles(imported: TranslationConfig, current: TranslationConfig
   let sequence = 0
   for (const profile of incoming) {
     const existing = pinned.find(p => p.id === profile.id)
-    if (existing && existing.baseUrl === profile.baseUrl && existing.model === profile.model &&
+    if (existing && existing.name === profile.name && existing.baseUrl === profile.baseUrl && existing.model === profile.model &&
       existing.apiType === profile.apiType && existing.temperature === profile.temperature) continue
-    if (modelProfiles.length >= MAX_MODEL_PROFILES) break
+    if (modelProfiles.length >= MAX_MODEL_PROFILES) {
+      omittedProfiles.push(profile.name)
+      continue
+    }
     if (existing) {
       let id: string
       do { id = `imported-${++sequence}` } while (reserved.has(id))
@@ -60,15 +64,15 @@ function restoreProfiles(imported: TranslationConfig, current: TranslationConfig
     }
   }
   return {
-    modelProfiles,
+    modelProfiles, omittedProfiles,
     activeProfileId: restoreMain ? renamed.get(activeProfileId) ?? activeProfileId : activeProfileId,
     selectionProfileId: restoreSelection ? renamed.get(selectionProfileId) ?? selectionProfileId : selectionProfileId,
   }
 }
 
-export function configBackupPatch(
+export function planConfigBackupRestore(
   imported: TranslationConfig, current: TranslationConfig, missingOrigins: readonly string[] = [],
-): TranslationConfigPatch {
+): { patch: TranslationConfigPatch; omittedProfiles: readonly string[] } {
   const settings = portableSettings(imported)
   const previousOrigin = current.baseUrl === '' ? '' : new URL(current.baseUrl).origin
   const nextOrigin = settings.baseUrl === '' ? '' : new URL(settings.baseUrl).origin
@@ -81,17 +85,19 @@ export function configBackupPatch(
   } = settings
   const selection = selectionProfileOrigin(imported)
   const restoreSelection = imported.selectionProfileId === '' || (selection !== undefined && !missingOrigins.includes(selection))
-  return {
+  const { omittedProfiles, ...profiles } = restoreProfiles(imported, current, connectionAllowed, restoreSelection)
+  const patch = {
     ...other,
     ...(connectionAllowed ? { baseUrl, model, apiType, temperature } : {}),
     ...(connectionAllowed && previousOrigin !== nextOrigin ? { requestParams: {} } : {}),
-    ...restoreProfiles(imported, current, connectionAllowed, restoreSelection),
+    ...profiles,
     // 避免将导入的主动功能指向另一份仍在使用的本机连接。
     ...(connectionAllowed && siteAccess ? {
       selectionPopupEnabled, selectionToolbarEnabled, proactiveAssistEnabled, hoverTranslateEnabled,
       inputTranslationEnabled, autoInteractionEnabled,
     } : {}),
   }
+  return { patch, omittedProfiles }
 }
 
 export interface ConfigBackupPayload {

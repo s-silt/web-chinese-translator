@@ -1659,6 +1659,7 @@ describe('配置变更的作废范围', () => {
     ['不匹配本页的排除网站', { type: 'wt:save-config', patch: { excludedHosts: ['unrelated.example'] } }],
     ['固定词库开关', { type: 'wt:save-config', patch: { disabledDictionaries: ['cursor'] } }],
     ['划词辅助开关', { type: 'wt:save-config', patch: { selectionPopupEnabled: true } }],
+    ['流式用量开关', { type: 'wt:save-config', patch: { requestParams: { stream_options: { include_usage: true } } } }],
     ['连接字段原样重新保存', { type: 'wt:save-config', patch: { baseUrl: VALID_CONFIG.baseUrl, model: VALID_CONFIG.model } }],
   ])('无关保存（%s）不中止在途请求，也不清缓存', async (name, message) => {
     const text = `Unrelated ${name}`
@@ -1677,6 +1678,23 @@ describe('配置变更的作废范围', () => {
     await vi.waitFor(() => expect(signals[0]!.aborted).toBe(false))
     release[0]!()
     expect(await pending).toMatchObject({ ok: true })
+  })
+
+  it('切换流式用量时保留先前的划词缓存和正在翻译的划词', async () => {
+    const select = (text: string) => trigger({ type: 'wt:translate', mode: 'selection', texts: [text] }, contentSender)
+    const cached = 'Usage preference cached selection'
+    const warm = select(cached)
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1))
+    release[0]!()
+    expect(await warm).toMatchObject({ ok: true })
+    const pending = select('Usage preference active selection')
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2))
+    expect(await trigger({ type: 'wt:save-config', patch: { requestParams: { stream_options: { include_usage: false } } } }, extSender)).toMatchObject({ ok: true })
+    expect(signals[1]!.aborted).toBe(false)
+    release[1]!()
+    expect(await pending).toMatchObject({ ok: true })
+    expect(await select(cached)).toMatchObject({ ok: true, cachedChars: cached.length })
+    expect(fetcher).toHaveBeenCalledTimes(2)
   })
 
   it('切换专用模型中止旧划词请求，保留在途整页请求和已有页面缓存', async () => {
@@ -3500,6 +3518,15 @@ describe('高级接口设置与自定义请求头事务边界', () => {
     )
     expect(second).toMatchObject({ ok: false, error: '接口配置已在其他窗口更改，请重新加载' })
     expect((await translationConfigItem.getValue()).temperature).toBe(0.5)
+  })
+
+  it('单独保存流式用量偏好后，旧窗口仍不能用原配置键覆盖它', async () => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    const expectedConnection = { baseUrl: VALID_CONFIG.baseUrl, model: VALID_CONFIG.model, requestOptionsKey: requestOptionsKey(VALID_CONFIG) }
+    const requestParams = { stream_options: { include_usage: true } }
+    expect(await trigger({ type: 'wt:save-config', patch: { requestParams }, expectedConnection }, extSender)).toMatchObject({ ok: true })
+    expect(await trigger({ type: 'wt:save-config', patch: { requestParams: {} }, expectedConnection }, extSender)).toMatchObject({ ok: false, error: '接口配置已在其他窗口更改，请重新加载' })
+    expect((await translationConfigItem.getValue()).requestParams).toEqual(requestParams)
   })
 
   it('请求头记录缺失或修订号不匹配时允许无关阅读策略保存，但阻止无重填的连接变更并阻断模型调用', async () => {

@@ -488,6 +488,8 @@ export default {
   wtBackupGrantAndRestore: '授權並還原',
   wtBackupSkipAccess: '略過授權並還原',
   wtBackupPartial: '已還原可用設定。需要以下權限的連線或功能已略過：{origins}。',
+  wtBackupProfileLimitPreview: '若略過授權，本機使用中的設定檔會占用名額。受 {max} 個設定檔上限限制，以下備份設定檔將不會匯入。',
+  wtBackupProfileLimitResult: '已保留本機使用中的設定檔。已達 {max} 個設定檔上限，以下備份設定檔未匯入。',
   wtBackupTooLarge: '備份檔案超過 1 MiB。',
   wtProfileReviewConnection: '請核對新端點，視需要輸入 API Key，再儲存。原端點的自訂標頭將清除，也可填入新端點的標頭。',
   wtProfileFinishDraft: '請先儲存或捨棄目前的連線草稿，再切換模型設定檔。',
