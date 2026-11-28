@@ -4,7 +4,7 @@ export const BILINGUAL_ATTR = 'data-wt-bilingual'
 export const BILINGUAL_STYLE_ATTR = 'data-wt-bilingual-style'
 export const BILINGUAL_VARIANT_ATTR = 'data-wt-bilingual-variant'
 
-const styledRoots = new WeakSet<Document | ShadowRoot>()
+const stylesByContainer = new WeakMap<Element | ShadowRoot, HTMLStyleElement>()
 const LINE_SELECTOR = `.wt-bilingual-line[${BILINGUAL_ATTR}="1"]`
 
 const BILINGUAL_CSS = `
@@ -52,20 +52,22 @@ export function isBilingualElement(node: Node | null): boolean {
 
 export function ensureBilingualStyle(target: Node): void {
   const root = target.getRootNode()
-  if (!(root instanceof Document || root instanceof ShadowRoot)) return
-  if (styledRoots.has(root)) return
-  styledRoots.add(root)
-  const doc = root instanceof Document ? root : root.ownerDocument
-  if (!doc) return
-  if (root instanceof Document && root.head?.querySelector(`[${BILINGUAL_STYLE_ATTR}="1"]`)) return
+  const doc = target.ownerDocument ?? document
+  const container = root === doc ? doc.head ?? doc.documentElement : root instanceof ShadowRoot ? root : undefined
+  if (!container || stylesByContainer.get(container)?.parentNode === container) return
+  // 重注入时仅复用本版的有效规则。旧表或网页同名标记均保留原状。
+  for (const child of container.children) {
+    if (child instanceof HTMLStyleElement && child.getAttribute(BILINGUAL_STYLE_ATTR) === '1' &&
+      child.attributes.length === 1 && !child.disabled && !child.sheet?.disabled && child.textContent === BILINGUAL_CSS) {
+      stylesByContainer.set(container, child)
+      return
+    }
+  }
   const style = doc.createElement('style')
   style.setAttribute(BILINGUAL_STYLE_ATTR, '1')
   style.textContent = BILINGUAL_CSS
-  if (root instanceof Document) {
-    ;(root.head ?? root.documentElement)?.appendChild(style)
-  } else {
-    root.appendChild(style)
-  }
+  container.appendChild(style)
+  stylesByContainer.set(container, style)
 }
 
 function createBilingualSpan(doc: Document, translatedText: string, variant: BilingualStyle = 'subtle'): HTMLElement {

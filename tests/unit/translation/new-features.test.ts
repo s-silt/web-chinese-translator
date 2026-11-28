@@ -327,6 +327,21 @@ describe('bilingualStyle variants & glossary bulk import/export', () => {
     expect(parseGlossaryBulkText('#include = 包含')).toEqual({ ok: true, entries: [entries[0]] })
   })
 
+  it('reads both spreadsheet cells verbatim before considering text delimiters or comments', () => {
+    const rows = ['Washington, D.C.\t华盛顿', ' a=b \t 相等 ', '# key\ttarget = value', '["x"]\t[x]']
+    expect(parseGlossaryBulkText(rows.join('\r\n'))).toEqual({ ok: true, entries: [
+      { source: 'Washington, D.C.', target: '华盛顿' }, { source: 'a=b', target: '相等' },
+      { source: '# key', target: 'target = value' }, { source: '["x"]', target: '[x]' },
+    ] })
+    for (const invalid of ['\ta=b', 'a=b\t', '\t', '\t# comment', 'a=b\tB\tC', 'A\tB\t']) {
+      expect(parseGlossaryBulkText('good = row\n' + invalid)).toEqual({ ok: false, reason: 'invalid', line: 2 })
+    }
+    const entries = [{ source: 'word', target: 'first\tsecond' }]
+    const copied = formatGlossaryBulkText(entries)
+    expect(copied).toBe(JSON.stringify(['word', 'first\tsecond']))
+    expect(parseGlossaryBulkText(copied)).toEqual({ ok: true, entries })
+  })
+
   it('rejects invalid rows atomically and enforces the unique term limit without discarding excess input', () => {
     for (const invalid of ['bad row', 'a = ', '["source", 3]', '["truncated', 'x = ' + 'y'.repeat(MAX_GLOSSARY_TERM_LENGTH + 1)]) {
       expect(parseGlossaryBulkText('A = B\r\n# a comment\r\n' + invalid)).toEqual({ ok: false, reason: 'invalid', line: 3 })

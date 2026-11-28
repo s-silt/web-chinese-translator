@@ -96,8 +96,20 @@ test('翻译工具保存双语模式、风格与术语，并从实际导出的�
 
 test('术语表从设置页复制后可无损导回，混有无效行时保留草稿', async ({ page, extensionId, extension }) => {
   const terms = [{ source: '#include', target: '包含' }, { source: 'a=b', target: 'A -> B' }]
+  await extension.setSettings({ uiLanguage: 'en' })
   await extension.setTranslationConfig({ promptGlossary: terms })
   await page.goto(`chrome-extension://${extensionId}/options.html#wt-tools-title`)
+  const sourceInput = page.locator('[data-test="wt-glossary-source"]')
+  const targetInput = page.locator('[data-test="wt-glossary-target"]')
+  const longTerm = 'x'.repeat(121)
+  await sourceInput.fill('existing term')
+  await targetInput.focus()
+  await page.keyboard.insertText(longTerm)
+  await page.locator('[data-test="wt-glossary-add"]').click()
+  await expect(page.getByText('The source and translation can each contain up to 120 characters.', { exact: true })).toBeVisible()
+  await expect(targetInput).toHaveValue(longTerm)
+  await expect(sourceInput).toHaveValue('existing term')
+  await expect(page.locator('[data-test="wt-glossary-list"] li')).toHaveCount(terms.length)
   // 使用页面内的剪贴板保留实际用户的系统剪贴板内容。
   await page.evaluate(() => {
     let value = ''

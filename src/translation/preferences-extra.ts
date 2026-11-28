@@ -174,7 +174,7 @@ type GlossaryImport =
   | { ok: false; reason: 'invalid'; line: number }
   | { ok: false; reason: 'empty' | 'limit' }
 
-const glossarySeparator = /\t|=>|->|=|,/
+const glossarySeparator = /=>|->|=|,/
 
 function parseGlossaryLine(line: string): PromptGlossaryEntry | undefined {
   if (line.startsWith('["')) {
@@ -195,9 +195,16 @@ function parseGlossaryLine(line: string): PromptGlossaryEntry | undefined {
 export function parseGlossaryBulkText(raw: string): GlossaryImport {
   const entries = new Map<string, PromptGlossaryEntry>()
   for (const [index, line] of raw.split(/\r\n?|\n/).entries()) {
-    const trimmed = line.trim()
-    if (!trimmed || (trimmed.startsWith('#') && (/^#\s/.test(trimmed) || !glossarySeparator.test(trimmed)))) continue
-    const entry = parseGlossaryLine(trimmed)
+    // Spreadsheet rows have exactly two cells. Split before trimming so a missing cell stays visible.
+    const cells = line.split('\t')
+    let entry: PromptGlossaryEntry | undefined
+    if (cells.length === 2) {
+      entry = { source: cells[0]!.trim(), target: cells[1]!.trim() }
+    } else if (cells.length === 1) {
+      const trimmed = line.trim()
+      if (!trimmed || (trimmed.startsWith('#') && (/^#\s/.test(trimmed) || !glossarySeparator.test(trimmed)))) continue
+      entry = parseGlossaryLine(trimmed)
+    }
     if (!entry || !entry.source || !entry.target ||
       entry.source.length > MAX_GLOSSARY_TERM_LENGTH || entry.target.length > MAX_GLOSSARY_TERM_LENGTH) {
       return { ok: false, reason: 'invalid', line: index + 1 }

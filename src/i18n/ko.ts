@@ -495,6 +495,7 @@ const messages: Messages = {
   wtGlossaryBulkToggle: '일괄 가져오기',
   wtGlossaryBulkPlaceholder: '한 줄에 한 항목씩 원문 = 번역, 원문 -> 번역 또는 탭으로 구분하세요. 주석은 “# ”로 시작합니다.',
   wtGlossaryInvalidLine: '{line}번째 줄에 원문과 번역을 각각 1~{max}자로 입력하세요.',
+  wtGlossaryTermTooLong: '원문과 번역은 각각 {max}자까지 입력할 수 있습니다.',
   wtGlossaryEmpty: '가져올 용어를 하나 이상 입력하세요.',
   wtGlossaryLimit: '병합 후 용어 수가 최대 {max}개를 초과합니다.',
   wtGlossaryConflict: '다른 창에서 용어집을 변경했습니다. 최신 내용을 확인한 후 다시 시도하세요.',

@@ -511,6 +511,7 @@ export default {
   wtGlossaryBulkToggle: 'Bulk import',
   wtGlossaryBulkPlaceholder: 'One per line: source = target, source -> target, or tab-separated. Start comments with "# ".',
   wtGlossaryInvalidLine: 'Line {line} needs a source and a translation of 1–{max} characters each.',
+  wtGlossaryTermTooLong: 'The source and translation can each contain up to {max} characters.',
   wtGlossaryEmpty: 'Enter at least one glossary term to import.',
   wtGlossaryLimit: 'The merged glossary exceeds the {max}-term limit.',
   wtGlossaryConflict: 'Another window changed the glossary. Review the updated terms and try again.',

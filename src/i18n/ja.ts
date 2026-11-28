@@ -495,6 +495,7 @@ const messages: Messages = {
   wtGlossaryBulkToggle: '一括インポート',
   wtGlossaryBulkPlaceholder: '1 行に 1 件、原文 = 訳語、原文 -> 訳語、またはタブ区切りで入力します。コメントは「# 」で始めます。',
   wtGlossaryInvalidLine: '{line} 行目の原文と訳語をそれぞれ 1～{max} 文字で入力してください。',
+  wtGlossaryTermTooLong: '原文と訳語はそれぞれ {max} 文字以内で入力してください。',
   wtGlossaryEmpty: 'インポートする用語を 1 件以上入力してください。',
   wtGlossaryLimit: '統合後の用語数が上限の {max} 件を超えています。',
   wtGlossaryConflict: '別のウィンドウで用語集が変更されました。最新の内容を確認してから再試行してください。',

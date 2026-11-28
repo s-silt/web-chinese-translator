@@ -102,13 +102,11 @@
       <div class="wt-inline-row">
         <UiInput
           v-model="glossarySource"
-          :maxlength="MAX_GLOSSARY_TERM_LENGTH"
           :placeholder="t('wtGlossarySourcePlaceholder')"
           data-test="wt-glossary-source"
         />
         <UiInput
           v-model="glossaryTarget"
-          :maxlength="MAX_GLOSSARY_TERM_LENGTH"
           :placeholder="t('wtGlossaryTargetPlaceholder')"
           data-test="wt-glossary-target"
         />
@@ -448,6 +446,10 @@ async function addGlossaryTerm(): Promise<void> {
   const source = rawSource.trim()
   const target = rawTarget.trim()
   if (source === '' || target === '') return
+  if (source.length > MAX_GLOSSARY_TERM_LENGTH || target.length > MAX_GLOSSARY_TERM_LENGTH) {
+    showToast('danger', 'wtGlossaryTermTooLong', { max: MAX_GLOSSARY_TERM_LENGTH })
+    return
+  }
   const filtered = config.value.promptGlossary.filter((item) => item.source.toLowerCase() !== source.toLowerCase())
   if (await saveGlossary([...filtered, { source, target }]) && glossarySource.value === rawSource && glossaryTarget.value === rawTarget) {
     glossarySource.value = ''

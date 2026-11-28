@@ -507,6 +507,7 @@ export default {
   wtGlossaryBulkToggle: '批次匯入',
   wtGlossaryBulkPlaceholder: '每行一筆，支援「原文 = 譯文」「原文 -> 譯文」或 Tab 分隔。註解以「# 」開頭。',
   wtGlossaryInvalidLine: '第 {line} 行需要原文和譯文，每項限 1 至 {max} 個字元。',
+  wtGlossaryTermTooLong: '原文和譯文每項最多 {max} 個字元。',
   wtGlossaryEmpty: '請至少輸入一筆要匯入的術語。',
   wtGlossaryLimit: '合併後的術語表超過 {max} 筆上限。',
   wtGlossaryConflict: '其他視窗已修改術語表。請核對最新內容後再試一次。',

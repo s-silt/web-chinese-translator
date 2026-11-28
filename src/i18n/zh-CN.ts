@@ -505,6 +505,7 @@ const zhCN = {
   wtGlossaryBulkToggle: '批量导入',
   wtGlossaryBulkPlaceholder: '每行一条，支持「原文 = 译文」「原文 -> 译文」或 Tab 分隔。注释以「# 」开头。',
   wtGlossaryInvalidLine: '第 {line} 行需要原文和译文，每项限 1 至 {max} 个字符。',
+  wtGlossaryTermTooLong: '原文和译文每项最多 {max} 个字符。',
   wtGlossaryEmpty: '请至少输入一条要导入的术语。',
   wtGlossaryLimit: '合并后的术语表超出 {max} 条上限。',
   wtGlossaryConflict: '其他窗口已修改术语表。请核对最新内容后重试。',

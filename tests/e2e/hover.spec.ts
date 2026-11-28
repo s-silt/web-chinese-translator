@@ -106,7 +106,7 @@ test('双语外观覆盖嵌套开放组件，封顶后可用现有译文重绘�
   })
 })
 
-test('Alt 悬停保留链接及监听器，忽略隐藏正文、敏感路由、过期响应与已松开的手势', async ({ context, extension }) => {
+test('Alt 悬停保留链接及监听器，忽略隐藏正文、敏感路由、过期响应与已松开的手势', async ({ context, extension, extensionId }) => {
   const origin = 'https://app.devin.ai'
   const endpoint = 'https://fixture-hover.devin.ai'
   const requests: string[] = []
@@ -193,14 +193,23 @@ test('Alt 悬停保留链接及监听器，忽略隐藏正文、敏感路由、�
     await expect(hoverLine).toHaveAttribute('data-wt-bilingual-variant', 'highlight')
     await page.keyboard.up('Alt')
     await expect(hoverLine).toHaveText('阅读指南。')
-    const hoverRequests = requests.length
-    await extension.setTranslationConfig({ ...hoverConfig, bilingualStyle: 'underline' })
+    const hoverRequests = payloads.length
+    const options = await context.newPage()
+    await options.goto(`chrome-extension://${extensionId}/options.html#wt-tools-title`)
+    const appearance = options.locator('#wt-bilingual-style')
+    const underline = options.getByRole('option', { name: /底部虚线下划线|Dashed underline/ })
+    await appearance.click()
+    await underline.click()
+    await appearance.click()
+    await expect(underline).toHaveAttribute('aria-selected', 'true')
+    await options.close()
+    await page.bringToFront()
     await expect(hoverLine).toHaveAttribute('data-wt-bilingual-variant', 'underline')
     await expect(rich).toHaveAttribute('data-wt-hover-translated', '1')
     await expect(link).toHaveText('the guide')
     await rich.click({ modifiers: ['Alt'], position: { x: 3, y: 3 } })
     await expect(hoverLine).toHaveCount(0)
-    expect(requests).toHaveLength(hoverRequests)
+    expect(payloads).toHaveLength(hoverRequests)
     const config = { ...hoverConfig, autoOrigins: [origin] }
     await extension.setTranslationConfig({ ...config, displayMode: 'bilingual' })
     await page.goto(origin + '/bilingual-article')
