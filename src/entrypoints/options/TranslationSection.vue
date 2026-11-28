@@ -869,7 +869,7 @@ const customHeadersStatusHint = computed(() => {
   }
 })
 
-async function load(): Promise<void> {
+async function load(preserveDraft = false): Promise<void> {
   const reply = await send({ type: 'wt:get-config' })
   if (!reply.ok || reply.config === undefined) {
     setStatus(reply.ok ? t('wtConfigFailed') : reply.error, true)
@@ -878,7 +878,7 @@ async function load(): Promise<void> {
   ready.value = true
   endpointAuthorized.value = reply.endpointAuthorized !== false
   const state = keyStateFrom(reply)
-  applyConfig(reply.config, state, true, reply.customHeadersState)
+  applyConfig(reply.config, state, !preserveDraft || !connectionDirty.value, reply.customHeadersState)
   if (state === 'unavailable') setStatus(t('wtKeyUnavailable'), true)
   else if (reply.customHeadersState === 'unavailable') setStatus(t('wtCustomHeadersUnavailable'), true)
 }
@@ -1624,6 +1624,8 @@ async function grantEndpointAccess(): Promise<void> {
 }
 
 /** 从浏览器的快捷键页改完回来时重新读取绑定 */
+defineExpose({ refreshSavedSettings: () => load(true) })
+
 function refreshShortcuts(): void {
   if (document.visibilityState !== 'visible') return
   void loadShortcuts()

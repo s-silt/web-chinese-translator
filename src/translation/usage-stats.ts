@@ -87,12 +87,13 @@ export function isUsageStatsSnapshot(value: unknown): value is UsageStatsSnapsho
   return (
     typeof record.todayDate === 'string' &&
     typeof record.monthKey === 'string' &&
-    typeof record.today === 'object' &&
-    record.today !== null &&
-    typeof record.month === 'object' &&
-    record.month !== null &&
-    typeof record.total === 'object' &&
-    record.total !== null
+    [record.today, record.month, record.total].every(bucket => {
+      if (typeof bucket !== 'object' || bucket === null || Array.isArray(bucket)) return false
+      return Object.keys(EMPTY_BUCKET).every(key => {
+        const count = (bucket as Record<string, unknown>)[key]
+        return isFiniteNonNegative(count) && Number.isSafeInteger(count)
+      })
+    })
   )
 }
 
@@ -113,12 +114,13 @@ export const usageStatsItem = storage.defineItem<UsageStatsSnapshot>('local:tran
 let writeQueue: Promise<void> = Promise.resolve()
 
 export async function getUsageStats(now: Date = new Date()): Promise<UsageStatsSnapshot> {
+  await writeQueue
   return sanitizeUsageStats(await usageStatsItem.getValue(), now)
 }
 
 export function recordUsageDelta(delta: Partial<UsageBucket>, now: Date = new Date()): Promise<UsageStatsSnapshot> {
   const pending = writeQueue.then(async () => {
-    const current = await getUsageStats(now)
+    const current = sanitizeUsageStats(await usageStatsItem.getValue(), now)
     const next: UsageStatsSnapshot = {
       todayDate: current.todayDate,
       today: addBucket(current.today, delta),

@@ -18,7 +18,7 @@ import { isSiteScopeMode } from './site-scope'
 import { isSourceLanguage, isTargetLanguage, type SourceLanguage, type TargetLanguage } from './target-language'
 import { isPageContext, isPageId, type PageContext } from './reading-context'
 import { documentFormOfBrowserUrl } from './page-lifecycle'
-import { isAssistInput, parseAssistResult, type AssistInput, type AssistResult } from './intent'
+import { isAssistInput, isSiteHost, parseAssistResult, type AssistInput, type AssistResult } from './intent'
 import { isFailureCode, type FailureCode } from './failure'
 import type { ChatReplacementStatus } from './chat-input'
 import type { DiscordReplacementStatus } from './discord-input'
@@ -47,6 +47,7 @@ export const NOTHING_TO_TOGGLE_ERROR = '本页没有可切换的翻译'
 
 export interface PageModes {
   readonly enabled: boolean
+  readonly hover?: boolean
   readonly fixed: boolean
   readonly auto: boolean
   readonly selection: boolean
@@ -487,7 +488,7 @@ export function isTranslationMessage(value: unknown): value is TranslationMessag
     case 'wt:save-config':
       return isSaveConfig(value)
     case 'wt:clear-site-cache':
-      return typeof value.host === 'string' && value.host.trim().length > 0 && value.host.length <= 255
+      return isSiteHost(value.host)
     case 'wt:set-site-auto':
       return isSetSiteAuto(value)
     case 'wt:set-site-excluded':
@@ -649,7 +650,7 @@ export function isPageTranslationStatus(value: unknown): value is PageTranslatio
   )
 }
 
-function isConfigShape(value: unknown): value is TranslationConfig {
+export function isConfigShape(value: unknown): value is TranslationConfig {
   if (!isRecord(value)) return false
   if ('apiKey' in value || 'customHeaders' in value) return false
   if (typeof value.baseUrl !== 'string' || value.baseUrl.length > 2048) return false
@@ -704,6 +705,7 @@ function isModes(value: unknown): value is PageModes {
     typeof value.selection === 'boolean' &&
     typeof value.smart === 'boolean' &&
     (value.floating === undefined || typeof value.floating === 'boolean') &&
+    (value.hover === undefined || typeof value.hover === 'boolean') &&
     (value.input === undefined || typeof value.input === 'boolean') &&
     (value.fixedEntries === undefined ||
       (isRecord(value.fixedEntries) &&

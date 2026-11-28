@@ -112,7 +112,9 @@ export async function startMock(): Promise<{
       const userText = responsesApi
         ? parsed.input?.find((item) => item.role === 'user')?.content.find((part) => part.type === 'input_text')?.text
         : parsed.messages?.[1]?.content
-      const parsedUser = JSON.parse(userText ?? '{}') as Record<string, unknown> | unknown[]
+      const parsedUser = parsed.stream === true
+        ? { texts: [userText] }
+        : JSON.parse(userText ?? '{}') as Record<string, unknown> | unknown[]
       // 连接测试固定发送 ["Hello"]，仍按 other 统计；字幕、输入翻译等无语境请求也是裸数组，按 texts 处理
       const connectionProbe = Array.isArray(parsedUser) && parsedUser.length === 1 && parsedUser[0] === 'Hello'
       const user: Record<string, unknown> = Array.isArray(parsedUser)
@@ -162,7 +164,7 @@ export async function startMock(): Promise<{
                   .join('')
               : '中文译文',
         )
-        content = JSON.stringify(wrongCount(texts) ? [...results, '多余条目'] : results)
+        content = parsed.stream === true ? results[0]! : JSON.stringify(wrongCount(texts) ? [...results, '多余条目'] : results)
       } else if (call.kind === 'assist') {
         content = JSON.stringify({
           decision: 'show',
@@ -176,6 +178,14 @@ export async function startMock(): Promise<{
       const respond = (error = false): void => {
         if (res.destroyed) return
         call.respondedAt = Date.now()
+        if (!error && parsed.stream === true) {
+          const event = responsesApi
+            ? { type: 'response.output_text.delta', delta: content }
+            : { choices: [{ delta: { content } }] }
+          res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+          res.end(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`)
+          return
+        }
         res.writeHead(error ? 500 : 200, { 'Content-Type': 'application/json' })
         const output = responsesApi
           ? {

@@ -629,6 +629,8 @@ function createInstance(inputOnly = false): Instance {
   }
 
   function disposeLiveFeatures(): void {
+    hoverTranslator?.dispose()
+    hoverTranslator = undefined
     inputTranslation?.dispose()
     inputTranslation = undefined
     documentInput?.dispose()
@@ -645,6 +647,27 @@ function createInstance(inputOnly = false): Instance {
 
   function syncWatchers(): void {
     if (disposed || suspended) return
+    if (hoverOn() && !hoverTranslator) {
+      hoverTranslator = createHoverTranslator({
+        isEnabled: hoverOn,
+        displayMode: () => config?.displayMode ?? 'replace',
+        translateText: async (text, signal) => {
+          const requestId = createId()
+          const abort = () => { void sendTranslationMessage({ type: 'wt:cancel-assist', requestId }) }
+          signal.addEventListener('abort', abort, { once: true })
+          const identity = pageIdentity(location.href)
+          try {
+            const reply = await sendMessage({ type: 'wt:translate', mode: 'selection', requestId, pageId, texts: [text] })
+            return reply.ok && identity === pageIdentity(location.href) ? reply.texts[0] : undefined
+          } finally {
+            signal.removeEventListener('abort', abort)
+          }
+        },
+      })
+    } else if (!hoverOn() && hoverTranslator) {
+      hoverTranslator.dispose()
+      hoverTranslator = undefined
+    }
     if (selectionOn()) ensureWatcher()
     else if (watcher !== undefined) {
       watcher.dispose()
@@ -789,6 +812,7 @@ function createInstance(inputOnly = false): Instance {
     if (action === 'restore') {
       // 由悬浮菜单触发时保留菜单：恢复后的状态与可能的错误要在菜单里看到，焦点也不丢
       cancelAll(true)
+      hoverTranslator?.restoreAll()
       pageRestored = true
       engine?.restore()
       lastError = ''
@@ -920,6 +944,7 @@ function createInstance(inputOnly = false): Instance {
         pageRestored = false
       }
       const connectionChanged = translationOutputChanged(previousConfig, nextConfig)
+      if (previousConfig.displayMode !== nextConfig.displayMode) engine?.restore()
       if (
         connectionChanged ||
         nextConfig.inputTranslationEnabled !== previousConfig.inputTranslationEnabled ||
@@ -1110,23 +1135,13 @@ function createInstance(inputOnly = false): Instance {
     },
   })
 
-  if (!inputOnly) {
-    hoverTranslator = createHoverTranslator({
-      isEnabled: () => config?.hoverTranslateEnabled === true && config.baseUrl !== '' && config.model !== '',
-      displayMode: () => config?.displayMode ?? 'replace',
-      translateText: async (text) => {
-        const reply = await sendTranslationMessage({ type: 'wt:translate', mode: 'selection', texts: [text] })
-        return reply.ok ? reply.texts[0] : undefined
-      },
-    })
+  function hoverOn(): boolean {
+    if (inputOnly || disposed || suspended || !modes.enabled || !modes.hover || !config?.hoverTranslateEnabled || !modelConfigured()) return false
+    const url = location.href
+    return isSiteScopeAllowed(url, config) && !isExcludedSite(url, config.excludedHosts) && !isSensitivePage(url)
   }
 
-  const unwatchConfig = watchTranslationConfig((next, previous) => {
-    if (previous.displayMode !== next.displayMode && engine !== undefined) {
-      engine.restore()
-      hoverTranslator?.restoreAll()
-      if (autoOn()) engine.start()
-    }
+  const unwatchConfig = watchTranslationConfig((next) => {
     const url = location.href
     disposeLiveFeatures()
     if (
@@ -1175,9 +1190,7 @@ function createInstance(inputOnly = false): Instance {
     reloadEpoch += 1
     domEpoch += 1
     try {
-      hoverTranslator?.dispose()
-    hoverTranslator = undefined
-    unwatchConfig()
+      unwatchConfig()
     } catch {
       void 0
     }

@@ -179,6 +179,21 @@ beforeEach(() => {
 })
 
 describe('模型隐私边界真实消息入口', () => {
+  it('工具页七项翻译偏好从后台写入并可重新读取，悬停需要站点授权', async () => {
+    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [] as never)
+    const profile = { id: 'terms', name: 'Terms', baseUrl: 'https://model.example/v1', model: 'sample', apiType: 'responses', temperature: null }
+    const patch = {
+      displayMode: 'bilingual', translationStyle: 'technical', promptGlossary: [{ source: 'Tab', target: '标签页' }],
+      modelProfiles: [profile], activeProfileId: profile.id, selectionProfileId: profile.id, hoverTranslateEnabled: true,
+    }
+    vi.mocked(fakeBrowser.permissions.contains).mockImplementation(async () => false)
+    expect(await trigger({ type: 'wt:save-config', patch }, extSender)).toMatchObject({ ok: false })
+    vi.mocked(fakeBrowser.permissions.contains).mockImplementation(async () => true)
+    expect(await trigger({ type: 'wt:save-config', patch }, extSender)).toMatchObject({ ok: true, config: patch })
+    expect(await translationConfigItem.getValue()).toMatchObject(patch)
+    expect(await trigger({ type: 'wt:get-config' }, extSender)).toMatchObject({ ok: true, config: patch })
+  })
+
   it('保存自动弹窗偏好经真实消息入口持久化，不改连接、语言和其他开关', async () => {
     vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [] as never)
     const original = { ...DEFAULT_TRANSLATION_CONFIG, baseUrl: 'https://api.example.com/v1', model: 'synthetic-model', targetLanguage: 'ja' as const, sourceLanguage: 'en' as const, temperature: 0.2, selectionPopupEnabled: true, proactiveAssistEnabled: true }
@@ -4671,6 +4686,79 @@ describe('wt:translate-text 文本翻译窗口', () => {
   function textMessage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return { ...message, ...overrides }
   }
+
+  function openTextPort(sender: object = textSender) {
+    let receive: ((value: unknown) => void) | undefined
+    const port = {
+      name: 'wt:text-stream', sender, postMessage: vi.fn(), disconnect: vi.fn(),
+      onMessage: { addListener: (fn: (value: unknown) => void) => { receive = fn } },
+      onDisconnect: { addListener: vi.fn() },
+    }
+    for (const [listener] of vi.mocked(fakeBrowser.runtime.onConnect.addListener).mock.calls) {
+      listener(port as never)
+    }
+    return { ...port, send: (value: unknown) => receive?.(value) }
+  }
+
+  it('流式端口只接受独立窗口且沿用正文长度、语言及请求 ID 校验', () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    for (const sender of [popupSender, contentSender, pageSender]) {
+      const port = openTextPort(sender)
+      expect(port.disconnect).toHaveBeenCalledOnce()
+      expect(port.onDisconnect.addListener).not.toHaveBeenCalled()
+    }
+    for (const override of [{ text: 'a'.repeat(6001) }, { targetLanguage: 'unknown' }, { requestId: '' }]) {
+      const port = openTextPort()
+      port.send(textMessage(override))
+      expect(port.disconnect).toHaveBeenCalledOnce()
+    }
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('流式请求中途撤销授权会停止网络与后续输出', async () => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    const encoder = new TextEncoder()
+    let body!: ReadableStreamDefaultController<Uint8Array>
+    let signal!: AbortSignal
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      signal = init!.signal!
+      const stream = new ReadableStream<Uint8Array>({ start(c) { body = c } })
+      signal.addEventListener('abort', () => body.error(new DOMException('Aborted', 'AbortError')))
+      return new Response(stream, { headers: { 'content-type': 'text/event-stream' } })
+    })
+    const port = openTextPort()
+    port.send(textMessage())
+    await vi.waitFor(() => expect(body).toBeDefined())
+    body.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"片段"}}]}\n\n'))
+    await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'delta', text: '片段' })))
+    removedListeners.forEach((listener) => listener({ origins: ['https://api.example.com/*'] }))
+    expect(signal.aborted).toBe(true)
+    await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'result', reply: expect.objectContaining({ ok: false, code: 'cancelled' }),
+    })))
+    expect(port.postMessage).toHaveBeenCalledTimes(2)
+  })
+
+  it('按配置档的实际接口核验授权，仅同源接口复用连接凭据', async () => {
+    const profile = { id: 'secondary', name: 'Secondary', baseUrl: 'https://second.example/v1', model: 'other', apiType: 'chat-completions' as const, temperature: null }
+    customHeadersStore = { headers: { 'X-Fixture': 'A-only' }, origin: 'https://api.example.com', revision: 'r1' }
+    await translationConfigItem.setValue({ ...VALID_CONFIG, customHeadersRevision: 'r1', modelProfiles: [profile], selectionProfileId: profile.id })
+    const contains = vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (query) =>
+      !(query.origins ?? []).some((pattern) => pattern.includes('second.example')))
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ choices: [{ message: { content: '译文' } }] })))
+    let port = openTextPort()
+    port.send(textMessage())
+    await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ reply: expect.objectContaining({ ok: false }) })))
+    expect(fetcher).not.toHaveBeenCalled()
+    contains.mockImplementation(async () => true)
+    port = openTextPort()
+    port.send(textMessage())
+    await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ reply: { ok: true, texts: ['译文'] } })))
+    const [url, init] = fetcher.mock.calls[0]!
+    expect(url).toBe('https://second.example/v1/chat/completions')
+    expect(new Headers(init?.headers).has('authorization')).toBe(false)
+    expect(new Headers(init?.headers).has('x-fixture')).toBe(false)
+  })
 
   it.each([
     ['内容脚本', contentSender],

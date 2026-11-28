@@ -1,5 +1,7 @@
-import { attachBilingualNode, isBilingualElement, removeBilingualNode } from './bilingual'
+import { attachBilingualBlock, inlineTranslationText, isBilingualElement, removeBilingualNode } from './bilingual'
+import { inlineUnitFor, isInlineUnitCurrent, parseInlineResult } from './inline-units'
 import type { TranslationDisplayMode } from './preferences-extra'
+import { isReadableElement } from './reading-context'
 import { isExcludedElement } from './sites'
 
 const HOVER_BLOCK_SELECTOR = 'p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th, dd, dt, figcaption'
@@ -31,7 +33,7 @@ const MAX_HOVER_TEXT_LENGTH = 2000
 export interface HoverTranslatorOptions {
   readonly isEnabled: () => boolean
   readonly displayMode: () => TranslationDisplayMode
-  readonly translateText: (text: string) => Promise<string | undefined>
+  readonly translateText: (text: string, signal: AbortSignal) => Promise<string | undefined>
 }
 
 export interface HoverTranslator {
@@ -40,10 +42,28 @@ export interface HoverTranslator {
 }
 
 interface HoverRecord {
-  readonly element: HTMLElement
-  readonly mode: TranslationDisplayMode
-  readonly originalText?: string
+  readonly changes?: readonly { node: Text; original: string; applied: string }[]
   readonly bilingualEl?: HTMLElement
+}
+
+const inlineOptions = { isExcluded: (element: Element) => !isReadableElement(element) }
+
+function paragraphSource(block: HTMLElement) {
+  if (!isReadableElement(block)) return
+  let inspected = 0
+  const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, (node) => {
+    if (++inspected > 200) return NodeFilter.FILTER_ACCEPT
+    if (node instanceof Element) return isReadableElement(node) ? NodeFilter.FILTER_SKIP : NodeFilter.FILTER_REJECT
+    return node.nodeValue?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP
+  })
+  const first = walker.nextNode()
+  if (inspected > 200 || !(first instanceof Text)) return
+  const unit = inlineUnitFor(first, inlineOptions)
+  if (unit && unit.block !== block) return
+  if (!unit && walker.nextNode()) return
+  const source = unit?.template ?? first.data
+  if (source.trim().length < MIN_HOVER_TEXT_LENGTH || source.length > MAX_HOVER_TEXT_LENGTH) return
+  return { first, source, unit }
 }
 
 function findHoverBlock(target: EventTarget | null): HTMLElement | undefined {
@@ -60,7 +80,7 @@ function findHoverBlock(target: EventTarget | null): HTMLElement | undefined {
  */
 export function createHoverTranslator(options: HoverTranslatorOptions): HoverTranslator {
   const translated = new Map<HTMLElement, HoverRecord>()
-  const inFlight = new Set<HTMLElement>()
+  let pending: AbortController | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let lastTarget: HTMLElement | undefined
   let disposed = false
@@ -69,59 +89,67 @@ export function createHoverTranslator(options: HoverTranslatorOptions): HoverTra
     const rec = translated.get(el)
     if (!rec) return
     translated.delete(el)
-    if (rec.mode === 'bilingual') {
-      removeBilingualNode(rec.bilingualEl)
-    } else if (rec.originalText !== undefined && el.isConnected) {
-      el.textContent = rec.originalText
+    removeBilingualNode(rec.bilingualEl)
+    for (const { node, original, applied } of rec.changes ?? []) {
+      if (el.contains(node) && node.data === applied) node.data = original
     }
     el.removeAttribute('data-wt-hover-translated')
   }
 
   async function translateBlock(el: HTMLElement): Promise<void> {
-    if (disposed || !el.isConnected || translated.has(el) || inFlight.has(el)) return
-    const text = (el.textContent ?? '').trim()
-    if (text.length < MIN_HOVER_TEXT_LENGTH || text.length > MAX_HOVER_TEXT_LENGTH) return
+    if (disposed || !options.isEnabled() || !el.isConnected || translated.has(el)) return
+    const snapshot = paragraphSource(el)
+    if (!snapshot) return
+    const { source, first, unit } = snapshot
     ensureHoverStyle()
-    inFlight.add(el)
+    pending?.abort()
+    const request = new AbortController()
+    pending = request
     el.removeAttribute('data-wt-hover-preview')
     el.setAttribute('data-wt-hover-loading', '1')
     try {
-      const result = await options.translateText(text)
-      if (disposed || !el.isConnected || result === undefined || result.trim() === '' || result.trim() === text) return
-      const mode = options.displayMode()
-      if (mode === 'bilingual') {
-        const bilingualEl = attachBilingualNode(el, result)
+      const result = await options.translateText(source.trim(), request.signal)
+      if (disposed || request.signal.aborted || !el.isConnected || !options.isEnabled() || !result?.trim() || result.trim() === source.trim()) return
+      const current = paragraphSource(el)
+      if (!current || current.first !== first || current.source !== source || (unit && !isInlineUnitCurrent(unit, inlineOptions))) return
+      const segments = unit ? parseInlineResult(result, unit) : [result.trim()]
+      if (!segments) return
+      if (options.displayMode() === 'bilingual') {
+        const bilingualEl = attachBilingualBlock(el, unit ? inlineTranslationText(result) : result)
         if (!bilingualEl) return
-        translated.set(el, { element: el, mode, bilingualEl })
+        translated.set(el, { bilingualEl })
       } else {
-        const originalText = el.textContent ?? ''
-        el.textContent = result
-        translated.set(el, { element: el, mode, originalText })
+        const changes = (unit?.nodes ?? [first]).map((node, i) => {
+          const original = node.data
+          const applied = unit ? segments[i]! : original.replace(/\S[\s\S]*\S|\S/, () => segments[i]!)
+          return { node, original, applied }
+        })
+        for (const { node, applied } of changes) node.data = applied
+        translated.set(el, { changes })
       }
       el.setAttribute('data-wt-hover-translated', '1')
     } finally {
-      inFlight.delete(el)
+      if (pending === request) pending = undefined
       el.removeAttribute('data-wt-hover-loading')
     }
   }
 
-  function onMouseMove(event: MouseEvent): void {
-    if (disposed || !event.altKey || !options.isEnabled()) {
-      if (timer !== undefined) {
-        clearTimeout(timer)
-        timer = undefined
-      }
-      lastTarget?.removeAttribute('data-wt-hover-preview')
-      lastTarget = undefined
-      return
-    }
-    const block = findHoverBlock(event.target)
-    if (!block || block === lastTarget) return
+  function clearPreview(): void {
+    clearTimeout(timer)
+    timer = undefined
     lastTarget?.removeAttribute('data-wt-hover-preview')
+    lastTarget = undefined
+  }
+
+  function onMouseMove(event: MouseEvent): void {
+    if (!event.isTrusted) return
+    const block = !disposed && event.altKey && options.isEnabled() ? findHoverBlock(event.composedPath()[0] ?? null) : undefined
+    if (block === lastTarget) return
+    clearPreview()
+    if (!block || translated.has(block)) return
     lastTarget = block
     ensureHoverStyle()
     block.setAttribute('data-wt-hover-preview', '1')
-    if (timer !== undefined) clearTimeout(timer)
     timer = setTimeout(() => {
       timer = undefined
       void translateBlock(block)
@@ -129,8 +157,8 @@ export function createHoverTranslator(options: HoverTranslatorOptions): HoverTra
   }
 
   function onClick(event: MouseEvent): void {
-    if (disposed || !event.altKey || !options.isEnabled()) return
-    const block = findHoverBlock(event.target)
+    if (disposed || !event.isTrusted || !event.altKey || !options.isEnabled()) return
+    const block = findHoverBlock(event.composedPath()[0] ?? null)
     if (!block || !translated.has(block)) return
     event.preventDefault()
     event.stopPropagation()
@@ -138,6 +166,8 @@ export function createHoverTranslator(options: HoverTranslatorOptions): HoverTra
   }
 
   function restoreAll(): void {
+    clearPreview()
+    pending?.abort()
     for (const el of [...translated.keys()]) {
       restoreElement(el)
     }
@@ -145,19 +175,22 @@ export function createHoverTranslator(options: HoverTranslatorOptions): HoverTra
 
   function dispose(): void {
     disposed = true
-    if (timer !== undefined) {
-      clearTimeout(timer)
-      timer = undefined
-    }
-    lastTarget?.removeAttribute('data-wt-hover-preview')
-    lastTarget = undefined
     restoreAll()
     document.removeEventListener('mousemove', onMouseMove, true)
     document.removeEventListener('click', onClick, true)
+    document.removeEventListener('keyup', onKeyUp, true)
+    document.removeEventListener('mouseleave', clearPreview)
+    window.removeEventListener('blur', clearPreview)
   }
 
+  function onKeyUp(event: KeyboardEvent): void {
+    if (event.key === 'Alt') clearPreview()
+  }
   document.addEventListener('mousemove', onMouseMove, true)
   document.addEventListener('click', onClick, true)
+  document.addEventListener('keyup', onKeyUp, true)
+  document.addEventListener('mouseleave', clearPreview)
+  window.addEventListener('blur', clearPreview)
 
   return { restoreAll, dispose }
 }

@@ -191,7 +191,7 @@ describe('bilingual DOM rendering & hover-translate', () => {
     expect(p.textContent).toBe('Original paragraph')
   })
 
-  it('translates a paragraph on Alt+hover and restores it on Alt+click', async () => {
+  it('ignores synthetic Alt+hover events from page scripts', async () => {
     vi.useFakeTimers()
     const p = document.createElement('p')
     p.textContent = 'Hover me with Alt pressed'
@@ -206,11 +206,7 @@ describe('bilingual DOM rendering & hover-translate', () => {
 
     p.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, altKey: true }))
     await vi.advanceTimersByTimeAsync(200)
-    expect(translateText).toHaveBeenCalledWith('Hover me with Alt pressed')
-    expect(p.getAttribute('data-wt-hover-translated')).toBe('1')
-    expect(document.body.querySelector('[data-wt-bilingual="1"]')?.textContent).toBe('按住 Alt 悬停翻译结果')
-
-    p.dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true }))
+    expect(translateText).not.toHaveBeenCalled()
     expect(p.getAttribute('data-wt-hover-translated')).toBeNull()
     expect(document.body.querySelector('[data-wt-bilingual="1"]')).toBeNull()
 

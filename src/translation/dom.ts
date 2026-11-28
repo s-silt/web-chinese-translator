@@ -20,7 +20,7 @@ import {
 } from './sites'
 import { inlineUnitFor, inlineUnitKey, isInlineUnitCurrent, parseInlineResult, type InlineUnit } from './inline-units'
 import type { PageTranslationProgress } from './messages'
-import { attachBilingualBlock, attachBilingualNode, removeBilingualNode } from './bilingual'
+import { attachBilingualBlock, attachBilingualNode, inlineTranslationText, removeBilingualNode } from './bilingual'
 import type { TranslationDisplayMode } from './preferences-extra'
 import type { SourceLanguage, TargetLanguage } from './target-language'
 
@@ -409,6 +409,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
 
   /** 行内单元按原样重绘：逐节点原文与有序标签结构都一致才整体回放，任一成员放不下就全部回滚。 */
   function replayUnit(node: Text): ReplayResult {
+    if (options.displayMode?.() === 'bilingual') return 'miss'
     if (unitReplayTexts.size === 0 || !options.autoEnabled()) return 'miss'
     const source = textValue(node)
     if (!unitReplayTexts.has(source) || unitFallback.has(node) || pageIdentity(location.href) !== lastLocation) return 'miss'
@@ -473,15 +474,22 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     modifiedTexts.add(change.node)
   }
 
-  const bilingualNodes = new Map<Text, HTMLElement>()
+  const bilingualNodes = new Map<Text, { line: HTMLElement; members: readonly Text[] }>()
+  const bilingualBlocks = new WeakMap<Element, Text>()
 
   function forgetNode(node: Text): void {
-    removeBilingualNode(bilingualNodes.get(node))
-    bilingualNodes.delete(node)
-    records.delete(node)
-    modifiedTexts.delete(node)
-    modelTexts.delete(node)
-    ownership.release(node, 'web')
+    const group = bilingualNodes.get(node)
+    if (group?.line.parentElement && bilingualBlocks.get(group.line.parentElement) === group.members[0]) {
+      bilingualBlocks.delete(group.line.parentElement)
+    }
+    removeBilingualNode(group?.line)
+    for (const member of group?.members ?? [node]) {
+      bilingualNodes.delete(member)
+      records.delete(member)
+      modifiedTexts.delete(member)
+      modelTexts.delete(member)
+      ownership.release(member, 'web')
+    }
   }
 
   function writeNode(node: Text, source: string, translated: string): number {
@@ -492,10 +500,10 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     }
     if ((options.displayMode?.() ?? 'replace') === 'bilingual') {
       if (textValue(node) !== source) return 0
-      removeBilingualNode(bilingualNodes.get(node))
+      if (bilingualNodes.has(node)) forgetNode(node)
       const el = attachBilingualNode(node, translated)
       if (!el) return 0
-      bilingualNodes.set(node, el)
+      bilingualNodes.set(node, { line: el, members: [node] })
       layoutSkips.delete(node)
       redrawSkips.delete(node)
       records.set(node, { original: source, applied: source, generation, location: lastLocation })
@@ -1364,13 +1372,15 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
             })
             if ((options.displayMode?.() ?? 'replace') === 'bilingual') {
               const anchor = unit.nodes[0]
-              const combined = segments.join('').trim()
+              const combined = inlineTranslationText(translated)
               if (anchor !== undefined && combined !== '') {
-                removeBilingualNode(bilingualNodes.get(anchor))
+                if (bilingualNodes.has(anchor)) forgetNode(anchor)
                 const el = attachBilingualBlock(unit.block, combined)
                 if (el !== undefined) {
-                  bilingualNodes.set(anchor, el)
+                  const group = { line: el, members: unit.nodes }
+                  bilingualBlocks.set(unit.block, anchor)
                   changes.forEach((change) => {
+                    bilingualNodes.set(change.node, group)
                     layoutSkips.delete(change.node)
                     redrawSkips.delete(change.node)
                     records.set(change.node, { original: change.source, applied: change.source, generation, location: lastLocation })
@@ -1619,6 +1629,20 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
         break
       }
       if (mutation.type === 'childList') {
+        if (bilingualNodes.size && [...mutation.addedNodes, ...mutation.removedNodes].some(
+          item => !(item instanceof Element && item.hasAttribute('data-wt-bilingual')),
+        )) {
+          let block = mutation.target instanceof Element ? mutation.target : null
+          while (block) {
+            const member = bilingualBlocks.get(block)
+            if (member) {
+              forgetNode(member)
+              roots.add(block)
+              break
+            }
+            block = block.parentElement
+          }
+        }
         removed ||= mutation.removedNodes.length > 0
         for (const added of mutation.addedNodes) {
           if (added instanceof Element && added.closest('[data-wt-root]') !== null) continue
@@ -1636,7 +1660,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
         if (record !== undefined) {
           // 诗歌逐句出现、聊天回复逐字输出：网站在译文后面接着写原文
           const value = textValue(node)
-          if (value.length > record.applied.length && value.startsWith(record.applied)) {
+          if (!bilingualNodes.has(node) && value.length > record.applied.length && value.startsWith(record.applied)) {
             appendedTails.set(node, { applied: record.applied, original: record.original })
           } else {
             appendedTails.delete(node)

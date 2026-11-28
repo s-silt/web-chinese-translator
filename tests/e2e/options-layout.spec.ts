@@ -1,6 +1,36 @@
 import { expect, test } from './fixtures'
+import { readFile } from 'node:fs/promises'
 
 test.use({ headless: false })
+
+test('翻译工具保存双语模式、风格与术语，并从实际导出的备份恢复', async ({ page, extensionId, extension }) => {
+  await extension.setSettings({ uiLanguage: 'en' })
+  await page.setViewportSize({ width: 360, height: 800 })
+  await page.goto(`chrome-extension://${extensionId}/options.html#wt-tools-title`)
+  await page.locator('#wt-display-mode').click()
+  await page.getByRole('option', { name: 'Bilingual parallel' }).click()
+  await page.locator('#wt-style-select').click()
+  await page.getByRole('option', { name: /Technical docs/ }).click()
+  await page.locator('[data-test="wt-glossary-source"]').fill('window handle')
+  await page.locator('[data-test="wt-glossary-target"]').fill('窗口句柄')
+  await page.locator('[data-test="wt-glossary-add"]').click()
+  const entries = page.locator('[data-test="wt-glossary-list"]')
+  await expect(entries).toContainText('窗口句柄')
+  await page.reload()
+  await expect(entries).toContainText('window handle')
+  const downloadEvent = page.waitForEvent('download')
+  await page.locator('[data-test="wt-backup-export"]').click()
+  const download = await downloadEvent
+  const buffer = await readFile((await download.path())!)
+  expect(JSON.parse(buffer.toString()).config).toMatchObject({
+    displayMode: 'bilingual', translationStyle: 'technical', promptGlossary: [{ source: 'window handle', target: '窗口句柄' }],
+  })
+  await entries.getByRole('button').click()
+  await expect(entries).toHaveCount(0)
+  await page.locator('[data-test="wt-backup-file"]').setInputFiles({ name: 'settings.json', mimeType: 'application/json', buffer })
+  await expect(entries).toContainText('窗口句柄')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
+})
 
 test('模型设置在各外观与宽窄视口下正常布局，保存按钮可滚动并点击', async ({ page, extensionId, extension }) => {
   test.setTimeout(180_000)

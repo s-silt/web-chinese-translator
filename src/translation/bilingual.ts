@@ -20,6 +20,10 @@ const BILINGUAL_CSS = `
 [${BILINGUAL_ATTR}="1"][data-wt-bilingual-collapsed="1"] {
   opacity: 0.22;
 }
+[${BILINGUAL_ATTR}="1"]:focus-visible { outline: 2px solid currentColor; }
+@media (prefers-reduced-motion: reduce) {
+  [${BILINGUAL_ATTR}="1"] { transition: none; }
+}
 `
 
 export function isBilingualElement(node: Node | null): boolean {
@@ -51,23 +55,35 @@ function createBilingualSpan(doc: Document, translatedText: string): HTMLElement
   el.setAttribute(BILINGUAL_ATTR, '1')
   el.className = 'wt-bilingual-line'
   el.textContent = translatedText
+  el.tabIndex = 0
+  el.setAttribute('role', 'button')
+  el.setAttribute('aria-pressed', 'false')
   el.addEventListener('click', (event) => {
     event.stopPropagation()
+    event.preventDefault()
     const collapsed = el.getAttribute('data-wt-bilingual-collapsed') === '1'
     if (collapsed) el.removeAttribute('data-wt-bilingual-collapsed')
     else el.setAttribute('data-wt-bilingual-collapsed', '1')
+    el.setAttribute('aria-pressed', String(!collapsed))
+  })
+  el.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    event.stopPropagation()
+    el.click()
   })
   return el
 }
 
 /** 在原文节点后插入双语对照译文节点，不破坏原文内容，返回插入的元素以便恢复时彻底清除。 */
 export function attachBilingualNode(anchor: Node, translatedText: string): HTMLElement | undefined {
-  const parent = anchor.parentNode
+  const insertionPoint = anchor.parentElement?.closest('a,button,label') ?? anchor
+  const parent = insertionPoint.parentNode
   const doc = anchor.ownerDocument
   if (!parent || !doc) return undefined
   ensureBilingualStyle(anchor)
   const el = createBilingualSpan(doc, translatedText)
-  parent.insertBefore(el, anchor.nextSibling)
+  parent.insertBefore(el, insertionPoint.nextSibling)
   return el
 }
 
@@ -82,6 +98,10 @@ export function attachBilingualBlock(block: Element, translatedText: string): HT
 }
 
 export function removeBilingualNode(el: HTMLElement | undefined): void {
-  if (!el) return
-  if (el.isConnected) el.remove()
+  el?.remove()
+}
+
+/** Only remove validated inline placeholders. Preserve the model's spacing and escaped literal text. */
+export function inlineTranslationText(translated: string): string {
+  return translated.replace(/<\/?\d+\/?>/g, '').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&').trim()
 }

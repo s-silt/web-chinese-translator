@@ -113,8 +113,9 @@ export function requestOptionsKey(config: RequestOptions): string {
 }
 
 /** 内存缓存只保留固定长度摘要，避免每条译文重复占用整份附加参数的空间。 */
-export async function requestOptionsCacheKey(config: RequestOptions): Promise<string> {
-  const material = requestOptionsKey(config)
+export async function requestOptionsCacheKey(config: RequestOptions, outputOptions?: readonly string[]): Promise<string> {
+  const options = requestOptionsKey(config)
+  const material = outputOptions === undefined ? options : JSON.stringify([options, ...outputOptions])
   try {
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(material))
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')

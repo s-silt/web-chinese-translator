@@ -33,8 +33,8 @@
         <UiButton size="sm" data-test="wt-notice-dismiss" @click="noticeDismissed = true">{{ t('wtNoticeDismiss') }}</UiButton>
       </div>
       <DictionarySection v-if="translationSupported" v-show="currentNav === 'wt-dictionary-title'" />
-      <TranslationSection v-if="translationSupported" v-show="showTranslation" :view="translationView" />
-      <ToolsSection v-if="translationSupported && currentNav === 'wt-tools-title'" />
+      <TranslationSection v-if="translationSupported" v-show="showTranslation" ref="translationSection" :view="translationView" />
+      <ToolsSection v-if="translationSupported && currentNav === 'wt-tools-title'" @saved="translationSection?.refreshSavedSettings()" />
       <div v-show="currentNav === 'github-title'" id="github-title" class="wt-github-group" role="region" :aria-label="t('navGithub')">
         <div class="section wt-github-preferences">
           <h2 id="github-preferences-title" class="section-title">{{ t('navGithub') }}</h2>
@@ -79,6 +79,7 @@ import ToolsSection from './ToolsSection.vue'
 import TranslationSection from './TranslationSection.vue'
 
 const translationSupported = !isFirefoxBuild()
+const translationSection = ref<InstanceType<typeof TranslationSection>>()
 
 /** 扩展图标（public/ 下的文件）。用绑定而非静态属性：模板里静态的绝对路径会被编译成模块导入 */
 const LOGO_URL = '/icon/96.png'

@@ -418,8 +418,8 @@ describe('网站运行范围脚本注册', () => {
     expect(denied).toEqual([])
   })
 
-  it('仅开启输入翻译时匹配已授权全站并遵守网站运行范围', async () => {
-    for (const flag of [{ inputTranslationEnabled: true }] as const) {
+  it('仅开启输入或悬停翻译时匹配已授权站点并遵守网站运行范围', async () => {
+    for (const flag of [{ inputTranslationEnabled: true }, { hoverTranslateEnabled: true }] as const) {
       const matches = await siteScriptMatches({
         ...DEFAULT_TRANSLATION_CONFIG,
         selectionPopupEnabled: false,

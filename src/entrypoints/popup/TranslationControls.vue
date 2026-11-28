@@ -49,6 +49,7 @@
             />
             <UiSwitch
               :checked="bilingualMode"
+              :disabled="moreDisabled"
               :label="t('wtDisplayModeBilingual')"
               data-test="wt-bilingual"
               @change="setBilingualMode"

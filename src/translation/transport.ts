@@ -384,8 +384,9 @@ export async function requestCompletionStream(
       const parsed = parseJson(body)
       const content = config.apiType === 'responses' ? readResponseContent(parsed) : readMessageContent(parsed)
       if (signal?.aborted) throw new CompletionCancelledError()
+      if (!content.trim() || content.length > 18_000) throw invalidCompletion()
       notifyUsage(parsed, userContent.length)
-      if (content !== '') onDelta(content, content)
+      onDelta(content, content)
       return content
     }
     const reader = response.body.getReader()
@@ -394,47 +395,53 @@ export async function requestCompletionStream(
     let accumulated = ''
     let received = 0
     let lastUsagePayload: unknown
+    let completed = false
+    function consumeLine(line: string): void {
+      if (!line.startsWith('data:')) return
+      const data = line.slice(5).trim()
+      if (data === '[DONE]') {
+        completed = true
+        return
+      }
+      if (data === '') return
+      const parsed = parseJson(data)
+      if (!isRecord(parsed)) throw invalidCompletion()
+      if (parsed.error || parsed.type === 'error' || parsed.type === 'response.failed' || parsed.type === 'response.incomplete') {
+        throw new TranslationError('模型未完成翻译，请重试', 'bad_output')
+      }
+      const usageSource = isRecord(parsed.response) ? parsed.response : parsed
+      if (usageSource.usage !== undefined) lastUsagePayload = usageSource
+      const delta = extractStreamDelta(parsed, config.apiType)
+      if (delta !== '') {
+        accumulated += delta
+        if (accumulated.length > 18_000) throw invalidCompletion()
+        if (signal?.aborted) throw new CompletionCancelledError()
+        onDelta(delta, accumulated)
+      }
+      if (parsed.type === 'message_stop' || parsed.type === 'response.completed') completed = true
+    }
     try {
-      let done = false
-      while (!done) {
+      while (!completed) {
         const chunk = await reader.read()
-        if (chunk.value !== undefined) {
-          received += chunk.value.byteLength
-          if (received > MAX_RESPONSE_BYTES) {
-            await reader.cancel().then(() => undefined, () => undefined)
-            throw new TranslationError('响应过大', 'bad_output')
-          }
-          buffer += decoder.decode(chunk.value, { stream: true })
-          let newlineIndex = buffer.indexOf('\n')
-          while (newlineIndex !== -1) {
-            const line = buffer.slice(0, newlineIndex).trim()
-            buffer = buffer.slice(newlineIndex + 1)
-            if (line.startsWith('data:')) {
-              const data = line.slice(5).trim()
-              if (data !== '' && data !== '[DONE]') {
-                try {
-                  const parsed: unknown = JSON.parse(data)
-                  if (isRecord(parsed) && parsed.usage !== undefined) lastUsagePayload = parsed
-                  const delta = extractStreamDelta(parsed, config.apiType)
-                  if (delta !== '') {
-                    accumulated += delta
-                    onDelta(delta, accumulated)
-                  }
-                } catch {
-                  // 跳过非 JSON 心跳或注释行
-                }
-              }
-            }
-            newlineIndex = buffer.indexOf('\n')
-          }
+        if (chunk.done) {
+          consumeLine((buffer + decoder.decode()).trim())
+          break
         }
-        done = chunk.done
+        received += chunk.value.byteLength
+        if (received > MAX_RESPONSE_BYTES) throw new TranslationError('响应过大', 'bad_output')
+        const lines = (buffer + decoder.decode(chunk.value, { stream: true })).split('\n')
+        buffer = lines.pop()!
+        for (const line of lines) {
+          consumeLine(line.trim())
+          if (completed) break
+        }
       }
       if (signal?.aborted) throw new CompletionCancelledError()
       if (accumulated.trim() === '') throw invalidCompletion()
       notifyUsage(lastUsagePayload, userContent.length)
       return accumulated
     } finally {
+      void reader.cancel().catch(() => undefined)
       reader.releaseLock()
     }
   } catch (error) {

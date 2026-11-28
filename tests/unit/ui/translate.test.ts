@@ -687,3 +687,33 @@ async function chooseLanguage(wrapper: VueWrapper, testId: string, label: string
   if (option === undefined) throw new Error(`未找到选项：${label}`)
   await option.trigger('click')
 }
+
+it.each(['edit', 'disconnect'] as const)('流式 %s 立即结束当前请求且不会重复发送原文', async (reason) => {
+  let push!: (message: unknown) => void
+  let disconnect!: () => void
+  const port = {
+    onDisconnect: { addListener: (listener: () => void) => { disconnect = listener } },
+    onMessage: { addListener: (listener: (message: unknown) => void) => { push = listener } },
+    disconnect: vi.fn(), postMessage: vi.fn(),
+  }
+  vi.mocked(fakeBrowser.runtime.connect).mockReturnValue(port as never)
+  const wrapper = await render()
+  const input = wrapper.get('[data-test="wt-text-input"]')
+  const result = wrapper.get('[data-test="wt-text-result"]')
+  await input.setValue('Synthetic stream draft.')
+  await wrapper.get('[data-test="wt-text-translate"]').trigger('click')
+  const request = port.postMessage.mock.calls[0]![0] as Sent
+  expect(request.type).toBe('wt:translate-text')
+  push({ requestId: request.requestId, type: 'delta', text: '部分' })
+  await settle()
+  expect((result.element as HTMLTextAreaElement).value).toBe('部分')
+  if (reason === 'edit') await input.setValue('New draft')
+  else disconnect()
+  push({ requestId: request.requestId, type: 'result', reply: { ok: true, texts: ['旧译文'] } })
+  await settle()
+  expect(port.disconnect).toHaveBeenCalledOnce()
+  expect(translateCalls()).toHaveLength(0)
+  expect((result.element as HTMLTextAreaElement).value).toBe('')
+  expect((input.element as HTMLTextAreaElement).value).toBe(reason === 'edit' ? 'New draft' : 'Synthetic stream draft.')
+  expect(wrapper.find('[data-test="wt-text-busy"]').exists()).toBe(false)
+})

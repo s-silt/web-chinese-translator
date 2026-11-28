@@ -1,3 +1,4 @@
+import { isSiteHost } from './intent'
 import type { TranslationContext } from './reading-context'
 
 const CACHE_DB = 'web-translator-cache'
@@ -138,7 +139,7 @@ async function withStore<T>(mode: IDBTransactionMode, run: (store: IDBObjectStor
   }
 }
 
-/** 语境相关的译文分开存放：页面或近期线索不同就是不同的桶。只有键的哈希落盘，语境本身不写入。 */
+/** 语境进入缓存键的哈希；站点清理的索引另存当前普通页主机名，不写入标题或近期页面。 */
 function contextBucket(context: TranslationContext | undefined): unknown {
   if (context === undefined) return null
   const page = ({ site, title, heading }: TranslationContext['currentPage']) => [site, title, heading]
@@ -374,16 +375,19 @@ export async function writePersistentTranslations(
   if (entries.length === 0 || !usable()) return
   const generation = clearGeneration
   try {
-    const keys = await Promise.all(entries.map(([text]) => entryKey(scope, text)))
     await serializeCacheMutation(async () => {
       if (generation !== clearGeneration) return
+      const keys = await Promise.all(entries.map(([text]) => entryKey(scope, text)))
+      if (generation !== clearGeneration) return
       const now = Date.now()
+      const host = isSiteHost(scope.host) && scope.host.toLowerCase() === scope.context?.currentPage.site.toLowerCase()
+        ? scope.host.toLowerCase() : undefined
       let added = 0
       await withStore<void>('readwrite', (store) => {
         if (generation !== clearGeneration) return () => undefined
         entries.forEach(([, translation], index) => {
           const bytes = translation.length * 2 + ENTRY_OVERHEAD_BYTES
-          const record: CacheRecord = scope.host ? { translation, createdAt: now, usedAt: now, bytes, host: scope.host } : { translation, createdAt: now, usedAt: now, bytes }
+          const record: CacheRecord = { translation, createdAt: now, usedAt: now, bytes, ...(host ? { host } : {}) }
           store.put(record, keys[index])
           added += bytes
         })
@@ -436,75 +440,74 @@ export function isPersistentCacheStats(value: unknown): value is PersistentCache
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const record = value as Record<string, unknown>
   return (
-    typeof record.entries === 'number' &&
-    Number.isFinite(record.entries) &&
-    typeof record.approxBytes === 'number' &&
-    Number.isFinite(record.approxBytes) &&
-    typeof record.expired === 'number' &&
-    Number.isFinite(record.expired)
+    [record.entries, record.approxBytes, record.expired].every(isCount) &&
+    Array.isArray(record.hosts) && record.hosts.length <= 20 &&
+    record.hosts.every(item =>
+      typeof item === 'object' && item !== null && isSiteHost(item.host) && isCount(item.entries))
   )
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
 /** 读取持久译文缓存的条目数、估算体积与已过期条数。 */
 export async function getPersistentCacheStats(now: number = Date.now()): Promise<PersistentCacheStats> {
-  if (!usable()) return { entries: 0, approxBytes: 0, expired: 0, hosts: [] }
-  try {
-    let entries = 0
+  await mutationTail
+  // 仅扫描索引键，查看统计无需把所有译文读入内存。
+  return withStore('readonly', store => {
+    const count = store.count()
+    const expired = store.index(CREATED_INDEX).count(IDBKeyRange.upperBound(now - CACHE_TTL_MS))
     let approxBytes = 0
-    let expired = 0
+    const sizes = store.index(LRU_INDEX).openKeyCursor()
+    sizes.onsuccess = () => {
+      const cursor = sizes.result
+      if (!cursor) return
+      const [, bytes] = cursor.key as [number, number]
+      approxBytes += bytes
+      cursor.continue()
+    }
     const hostCounts = new Map<string, number>()
-    await withStore<void>('readonly', (store) => {
-      const request = store.openCursor()
-      request.onsuccess = () => {
-        const cursor = request.result
-        if (!cursor) return
-        const record = cursor.value as CacheRecord | undefined
-        if (record) {
-          entries += 1
-          approxBytes += typeof record.bytes === 'number' ? record.bytes : ENTRY_OVERHEAD_BYTES
-          const created = typeof record.createdAt === 'number' ? record.createdAt : record.usedAt
-          if (now - created > CACHE_TTL_MS) expired += 1
-          if (typeof record.host === 'string' && record.host !== '') {
-            hostCounts.set(record.host, (hostCounts.get(record.host) ?? 0) + 1)
-          }
-        }
-        cursor.continue()
-      }
-      return () => undefined
+    const hostKeys = store.index(HOST_INDEX).openKeyCursor()
+    hostKeys.onsuccess = () => {
+      const cursor = hostKeys.result
+      if (!cursor) return
+      const host = cursor.key as string
+      hostCounts.set(host, (hostCounts.get(host) ?? 0) + 1)
+      cursor.continue()
+    }
+    return () => ({
+      entries: count.result,
+      approxBytes,
+      expired: expired.result,
+      hosts: [...hostCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20)
+        .map(([host, entries]) => ({ host, entries })),
     })
-    const hosts = [...hostCounts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 20)
-      .map(([host, count]) => ({ host, entries: count }))
-    return { entries, approxBytes, expired, hosts }
-  } catch {
-    return { entries: 0, approxBytes: 0, expired: 0, hosts: [] }
-  }
+  })
 }
 
-/** 按站点 host 清空该站点的持久译文缓存，返回删除的条数。 */
-export async function clearPersistentTranslationsForHost(host: string): Promise<number> {
-  const normalized = host.trim().toLowerCase()
-  if (normalized === '' || !usable()) return 0
-  clearGeneration += 1
+/** 与写入按调用先后排序，不打断其他站点的写入。0 表示没有匹配，undefined 表示删除失败。 */
+export async function clearPersistentTranslationsForHost(host: string): Promise<number | undefined> {
+  if (!isSiteHost(host)) return undefined
   try {
     let removed = 0
-    await withStore<void>('readwrite', (store) => {
-      if (!store.indexNames.contains(HOST_INDEX)) return () => undefined
-      const request = store.index(HOST_INDEX).openKeyCursor(IDBKeyRange.only(normalized))
-      request.onsuccess = () => {
-        const cursor = request.result
-        if (!cursor) return
-        store.delete(cursor.primaryKey)
-        removed += 1
-        cursor.continue()
-      }
-      return () => undefined
+    await serializeCacheMutation(async () => {
+      await withStore<void>('readwrite', (store) => {
+        const request = store.index(HOST_INDEX).openKeyCursor(IDBKeyRange.only(host.toLowerCase()))
+        request.onsuccess = () => {
+          const cursor = request.result
+          if (!cursor) return
+          store.delete(cursor.primaryKey)
+          removed += 1
+          cursor.continue()
+        }
+        return () => undefined
+      })
+      estimate = undefined
     })
-    estimate = undefined
     return removed
   } catch {
     markFailed()
-    return 0
+    return undefined
   }
 }

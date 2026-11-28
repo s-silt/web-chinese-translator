@@ -331,14 +331,16 @@ export function useTranslationControls(): UseTranslationControls {
     }
   }
 
-  async function setFloating(enabled: boolean): Promise<void> {
-    if (disposed || busy.value || !configurationReady.value || enabled === floatingEnabled.value) return
+  async function savePopupPreference(patch: Pick<Partial<TranslationConfig>, 'floatingButtonEnabled' | 'displayMode'>): Promise<void> {
+    if (disposed || busy.value || !configurationReady.value) return
+    if (patch.floatingButtonEnabled !== undefined && patch.floatingButtonEnabled === floatingEnabled.value) return
+    if (patch.displayMode !== undefined && patch.displayMode === config.value?.displayMode) return
     busy.value = true
     autoError.value = ''
     pageError.value = ''
     toast.clear()
     try {
-      const reply = await sendTranslationMessage({ type: 'wt:save-config', patch: { floatingButtonEnabled: enabled } })
+      const reply = await sendTranslationMessage({ type: 'wt:save-config', patch })
       if (disposed) return
       if (!reply.ok || reply.config === undefined) {
         if (!reply.ok) pageError.value = reply.error
@@ -618,16 +620,10 @@ export function useTranslationControls(): UseTranslationControls {
     autoError,
     busy,
     translatePage,
-    setFloating,
+    setFloating: (enabled: boolean) => savePopupPreference({ floatingButtonEnabled: enabled }),
     setAutoInteraction,
     bilingualMode,
-    setBilingualMode: async (enabled: boolean) => {
-      const reply = await sendTranslationMessage({
-        type: 'wt:save-config',
-        patch: { displayMode: enabled ? 'bilingual' : 'replace' },
-      })
-      if (reply.ok) config.value = reply.config
-    },
+    setBilingualMode: (enabled: boolean) => savePopupPreference({ displayMode: enabled ? 'bilingual' : 'replace' }),
     setAuto,
     setInputTranslation: (enabled: boolean) => setRealtimeFeature('inputTranslationEnabled', enabled),
     restore: () => pageAction('restore'),

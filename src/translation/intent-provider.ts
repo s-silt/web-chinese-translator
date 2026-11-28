@@ -9,9 +9,8 @@ import {
 } from './intent'
 import { CompletionCancelledError, invalidCompletion, requestCompletion, TranslationError, unwrapFence } from './transport'
 import type { TranslationContext } from './reading-context'
-import { requestOptionsCacheKey } from './request-options'
 import { sourceLanguageInstruction, TARGET_LANGUAGE_PROMPT_NAME, type SourceLanguage, type TargetLanguage } from './target-language'
-import { findMatchedGlossaryEntries, type PromptGlossaryEntry, type TranslationStyle } from './preferences-extra'
+import { findMatchedGlossaryEntries, translationOptionsCacheKey, type PromptGlossaryEntry, type TranslationStyle } from './preferences-extra'
 import { glossaryPromptInstruction, translationStyleInstruction } from './translation-style'
 
 export function assistSystemPrompt(language: TargetLanguage, source: SourceLanguage = 'auto', style: TranslationStyle = 'natural', glossary: readonly PromptGlossaryEntry[] = []): string {
@@ -74,7 +73,7 @@ export async function getCachedAssistance(
   if (!isAssistInput(input)) return undefined
   let optionsKey: string
   try {
-    optionsKey = await requestOptionsCacheKey(config)
+    optionsKey = await translationOptionsCacheKey(config)
   } catch {
     return undefined
   }
@@ -149,7 +148,7 @@ export async function inferAssistance(
       : { ...canonical, currentPage: context.currentPage, recentPages: context.recentPages }
   let optionsKey: string
   try {
-    optionsKey = await requestOptionsCacheKey(config)
+    optionsKey = await translationOptionsCacheKey(config)
   } catch {
     throw new TranslationError('模型请求设置无效，请检查高级设置')
   }

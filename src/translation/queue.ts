@@ -13,8 +13,7 @@ import { cancelModelTasks, describeFailure, modelSchedulerGeneration, scheduleMo
 import { CompletionCancelledError, invalidCompletion } from './transport'
 import { modelRequestConfig, type ModelSnapshot } from './model-state'
 import type { TranslationContext } from './reading-context'
-import { glossarySignature } from './preferences-extra'
-import { requestOptionsCacheKey } from './request-options'
+import { translationOptionsCacheKey } from './preferences-extra'
 import { recordUsageDelta } from './usage-stats'
 
 export type TranslateOutcome =
@@ -41,7 +40,7 @@ export type StillAllowed = (snapshot: ModelSnapshot) => Promise<boolean>
 const CACHE_MAX_ITEMS = 256
 const CACHE_MAX_BYTES = 512 * 1024
 
-const cache = new Map<string, TranslationCacheEntry>()
+const cache = new Map<string, TranslationCacheEntry & { readonly host?: string }>()
 let cacheBytes = 0
 let epoch = 0
 
@@ -51,6 +50,14 @@ export function clearTranslationCache(): void {
   cache.clear()
   cacheBytes = 0
   cancelModelTasks()
+}
+
+export function clearTranslationCacheForHost(host: string): void {
+  for (const [key, value] of cache) {
+    if (value.host !== host) continue
+    cache.delete(key)
+    cacheBytes -= entryBytes(key, value)
+  }
 }
 
 function cacheKey(
@@ -85,14 +92,14 @@ function cacheGet(key: string): TranslationCacheEntry | undefined {
   return value
 }
 
-function cacheSet(key: string, value: TranslationCacheEntry): void {
+function cacheSet(key: string, value: TranslationCacheEntry, host?: string): void {
   if (liveEntry(value) === undefined) return
   const existing = cache.get(key)
   if (existing !== undefined) {
     cacheBytes -= entryBytes(key, existing)
     cache.delete(key)
   }
-  cache.set(key, value)
+  cache.set(key, host ? { ...value, host: host.toLowerCase() } : value)
   cacheBytes += entryBytes(key, value)
   while (cache.size > CACHE_MAX_ITEMS || cacheBytes > CACHE_MAX_BYTES) {
     const oldest = cache.keys().next().value
@@ -107,7 +114,8 @@ function isBadOutput(error: unknown): boolean {
   return error instanceof TranslationError && error.code === 'bad_output'
 }
 
-function cachedCharsField(chars: number): Pick<TranslateOutcome, 'cachedChars'> {
+function cachedCharsField(count: number, chars: number): Pick<TranslateOutcome, 'cachedChars'> {
+  if (count > 0) void recordUsageDelta({ cacheHits: count, translatedChars: chars }).catch(() => undefined)
   return chars > 0 ? { cachedChars: chars } : {}
 }
 
@@ -138,11 +146,14 @@ async function runJob(
     ) ?? liveEntry(persisted.get(text)),
   )
   let cachedChars = 0
+  let cachedCount = 0
   const misses = new Set<string>()
   results.forEach((value, index) => {
     const text = texts[index]!
-    if (value !== undefined) cachedChars += text.length
-    else misses.add(text)
+    if (value !== undefined) {
+      cachedCount += 1
+      cachedChars += text.length
+    } else misses.add(text)
   })
   const uniqueMisses = [...misses]
   const fresh = new Map<string, TranslationCacheEntry>()
@@ -188,6 +199,7 @@ async function runJob(
           optionsKey,
         ),
         value,
+        context?.currentPage.site,
       )
     }
   })
@@ -197,7 +209,7 @@ async function runJob(
       [...fresh].map(([text, value]) => [text, value.translation]),
     )
   }
-  return { ok: true, texts: results.map((value) => value?.translation ?? ''), ...cachedCharsField(cachedChars) }
+  return { ok: true, texts: results.map((value) => value?.translation ?? ''), ...cachedCharsField(cachedCount, cachedChars) }
 }
 
 export async function requestTranslation(
@@ -219,12 +231,7 @@ export async function requestTranslation(
   try {
     checkActive(signal)
     const endpoint = completionUrl(snapshot.config.baseUrl, snapshot.config.apiType)
-    const baseOptionsKey = await requestOptionsCacheKey(snapshot.config)
-    const gSig = glossarySignature(snapshot.config.promptGlossary)
-    const optionsKey =
-      snapshot.config.translationStyle === 'natural' && gSig === ''
-        ? baseOptionsKey
-        : `${baseOptionsKey}|style:${snapshot.config.translationStyle}|g:${gSig}`
+    const optionsKey = await translationOptionsCacheKey(snapshot.config)
     checkActive(signal)
     const memory = texts.map((text) =>
       cacheGet(
@@ -271,6 +278,7 @@ export async function requestTranslation(
               optionsKey,
             ),
             entry,
+            context?.currentPage.site,
           )
         }
       }
@@ -281,8 +289,7 @@ export async function requestTranslation(
       checkActive(signal)
       if (cached.every((value) => liveEntry(value) !== undefined)) {
         const chars = texts.reduce((sum, text) => sum + text.length, 0)
-        void recordUsageDelta({ cacheHits: texts.length, translatedChars: chars }).catch(() => undefined)
-        return { ok: true, texts: cached.map((value) => value.translation), ...cachedCharsField(chars) }
+        return { ok: true, texts: cached.map((value) => value.translation), ...cachedCharsField(texts.length, chars) }
       }
     }
     return await scheduleModelTask(mode === 'selection' ? 'interactive' : 'automatic', async (scheduledSignal) => {

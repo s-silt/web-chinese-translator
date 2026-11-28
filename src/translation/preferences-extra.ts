@@ -1,4 +1,5 @@
-import { isApiType, isTemperature, type ApiType } from './request-options'
+import type { TranslationModelConfig } from './config'
+import { isApiType, isTemperature, requestOptionsCacheKey, type ApiType } from './request-options'
 
 export type TranslationDisplayMode = 'replace' | 'bilingual'
 export const DEFAULT_DISPLAY_MODE: TranslationDisplayMode = 'replace'
@@ -151,5 +152,12 @@ export function findMatchedGlossaryEntries(
 /** 计算术语表确定性签名，用于区分缓存与检测配置变更。 */
 export function glossarySignature(entries: readonly PromptGlossaryEntry[] | undefined): string {
   if (!entries || entries.length === 0) return ''
-  return entries.map((item) => `${item.source.toLowerCase()}=${item.target}`).sort().join('\u001f')
+  return JSON.stringify(entries.map(item => JSON.stringify([item.source.toLowerCase(), item.target])).sort())
+}
+
+export function translationOptionsCacheKey(config: TranslationModelConfig): Promise<string> {
+  const style = config.translationStyle ?? DEFAULT_TRANSLATION_STYLE
+  const glossary = glossarySignature(config.promptGlossary)
+  const extra = style === DEFAULT_TRANSLATION_STYLE && glossary === '' ? undefined : [style, glossary]
+  return requestOptionsCacheKey(config, extra)
 }

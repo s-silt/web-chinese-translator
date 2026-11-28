@@ -59,11 +59,12 @@ function stubGeometry(): void {
   )
 }
 
-function makeEngine(options: { fixed?: boolean; auto?: boolean; debounceMs?: number; recordBudget?: number; autoBudget?: number }): DomEngine {
+function makeEngine(options: { fixed?: boolean; auto?: boolean; debounceMs?: number; recordBudget?: number; autoBudget?: number; displayMode?: 'bilingual' | 'replace' }): DomEngine {
   return createDomEngine({
     targetLanguage: () => 'zh-CN',
     fixedEnabled: () => options.fixed === true,
     autoEnabled: () => options.auto === true,
+    displayMode: () => options.displayMode ?? 'replace',
     autoBudget: options.autoBudget,
     translateFixed: (text) => fixedTranslationWith(DEVIN_ENTRIES, text),
     debounceMs: options.debounceMs ?? 10,
@@ -2535,6 +2536,32 @@ it('review5 失败记录和已译记录共享上限，移除节点释放容量',
 })
 
 describe('行内单元翻译', () => {
+  it('双语行保留链接，网站改写内部链接文字后更新整行，移除段落后也能完整恢复', async () => {
+    document.body.innerHTML = '<p>Read <a href="/guide">the guide</a> today.</p>'
+    const paragraph = document.querySelector('p')!
+    const link = paragraph.querySelector('a')!
+    engine = makeEngine({ auto: true, displayMode: 'bilingual' })
+    engine.start()
+    await settle()
+    batches[0]!.apply(['阅读 <1>指南</1>。'])
+    await settle()
+    const line = '[data-wt-bilingual]'
+    expect(paragraph.querySelector(line)?.textContent).toBe('阅读 指南。')
+    expect(link.textContent).toBe('the guide')
+    link.textContent = 'the manual'
+    await settle(300)
+    expect(batches.at(-1)!.texts).toEqual(['Read <1>the manual</1> today.'])
+    batches.at(-1)!.apply(['阅读<1>手册</1>。'])
+    await settle()
+    expect(paragraph.querySelectorAll(line)).toHaveLength(1)
+    expect(paragraph.querySelector(line)?.textContent).toBe('阅读手册。')
+    paragraph.remove()
+    engine.restore()
+    expect(paragraph.querySelector(line)).toBeNull()
+    expect(paragraph.querySelector('a')).toBe(link)
+    expect(paragraph.textContent).toBe('Read the manual today.')
+  })
+
   it.each(['changed-tag', 'layout'] as const)(
     '整句回贴遇到 %s 时不留下半段译文',
     async (reason) => {

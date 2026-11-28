@@ -287,6 +287,8 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
   if (!isConfigRecord(value)) return DEFAULT_TRANSLATION_CONFIG
   const selectionOn = value.selectionPopupEnabled === true
   const toolbarOn = selectionOn && value.selectionToolbarEnabled === true
+  const modelProfiles = sanitizeModelProfiles(value.modelProfiles, normalizeBaseUrl, clampModel)
+  const savedProfile = (id: unknown): string => modelProfiles.find(profile => profile.id === id)?.id ?? ''
   return {
     baseUrl: typeof value.baseUrl === 'string' ? normalizeBaseUrl(value.baseUrl) : '',
     model: typeof value.model === 'string' ? clampModel(value.model) : '',
@@ -321,9 +323,9 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
     displayMode: isDisplayMode(value.displayMode) ? value.displayMode : DEFAULT_DISPLAY_MODE,
     translationStyle: isTranslationStyle(value.translationStyle) ? value.translationStyle : DEFAULT_TRANSLATION_STYLE,
     promptGlossary: sanitizePromptGlossary(value.promptGlossary),
-    modelProfiles: sanitizeModelProfiles(value.modelProfiles, normalizeBaseUrl, clampModel),
-    activeProfileId: typeof value.activeProfileId === 'string' ? value.activeProfileId.trim().slice(0, 64) : '',
-    selectionProfileId: typeof value.selectionProfileId === 'string' ? value.selectionProfileId.trim().slice(0, 64) : '',
+    modelProfiles,
+    activeProfileId: savedProfile(value.activeProfileId),
+    selectionProfileId: savedProfile(value.selectionProfileId),
     hoverTranslateEnabled: value.hoverTranslateEnabled === true,
   }
 }

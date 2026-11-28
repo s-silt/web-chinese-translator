@@ -64,18 +64,16 @@
         />
       </div>
 
-      <div class="wt-field-row">
-        <div class="wt-field-main">
-          <label class="wt-field-label" for="wt-hover-translate">{{ t('wtHoverTranslateLabel') }}</label>
-          <p class="section-desc">{{ t('wtHoverTranslateDesc') }}</p>
-        </div>
+      <div>
         <UiSwitch
           id="wt-hover-translate"
           :checked="config.hoverTranslateEnabled"
           :label="t('wtHoverTranslateLabel')"
+          aria-describedby="wt-hover-hint"
           data-test="wt-hover-translate"
           @change="updateHoverTranslate"
         />
+        <p id="wt-hover-hint" class="section-desc">{{ t('wtHoverTranslateDesc') }}</p>
       </div>
 
       <div class="wt-field-row">
@@ -172,6 +170,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { browser } from 'wxt/browser'
 import { downloadText } from '../../components/download'
 import { showToast } from '../../components/toast'
 import { useI18n } from '../../components/ui-preferences'
@@ -183,17 +182,19 @@ import { sendTranslationMessage } from '../../translation/client'
 import type { TranslationConfigPatch } from '../../translation/messages'
 import {
   DEFAULT_TRANSLATION_CONFIG,
+  hostPermissionPattern,
   isDisplayMode,
   isTranslationStyle,
   type ModelProfile,
   type TranslationConfig,
 } from '../../translation/config'
-import { exportConfigBackup, parseConfigBackup } from '../../translation/config-backup'
+import { configBackupPatch, exportConfigBackup, MAX_CONFIG_BACKUP_BYTES, parseConfigBackup } from '../../translation/config-backup'
 import { createId } from '../../translation/id'
 import type { PersistentCacheStats } from '../../translation/persistent-cache'
 import { emptyUsageStats, type UsageStatsSnapshot } from '../../translation/usage-stats'
 
 const { t } = useI18n()
+const emit = defineEmits<{ saved: [] }>()
 
 const config = ref<TranslationConfig>(DEFAULT_TRANSLATION_CONFIG)
 const usageStats = ref<UsageStatsSnapshot>(emptyUsageStats())
@@ -243,15 +244,18 @@ async function refreshStats(): Promise<void> {
   ])
   if (usageReply.ok) usageStats.value = usageReply.usageStats
   if (cacheReply.ok) cacheStats.value = cacheReply.cacheStats
+  const failure = [usageReply, cacheReply].find(reply => !reply.ok)
+  if (failure) showToast('danger', 'wtToolsFailed', { error: failure.error })
 }
 
 async function patchConfig(patch: TranslationConfigPatch): Promise<boolean> {
   const reply = await sendTranslationMessage({ type: 'wt:save-config', patch })
   if (!reply.ok) {
-    showToast('danger', 'wtSavedFail', { error: reply.error })
+    showToast('danger', 'wtToolsFailed', { error: reply.error })
     return false
   }
   config.value = reply.config
+  emit('saved')
   return true
 }
 
@@ -268,26 +272,23 @@ async function saveCurrentAsProfile(): Promise<void> {
   const nextProfiles = [...config.value.modelProfiles, profile]
   if (await patchConfig({ modelProfiles: nextProfiles, activeProfileId: profile.id })) {
     newProfileName.value = ''
-    showToast('success', 'wtSavedOk')
+    showToast('success', 'saved')
   }
 }
 
 async function applyProfile(profile: ModelProfile): Promise<void> {
-  const prevOrigin = config.value.baseUrl
+  if (!(await grantOrigins([hostPermissionPattern(profile.baseUrl)]))) return
   if (
     await patchConfig({
       baseUrl: profile.baseUrl,
       model: profile.model,
       apiType: profile.apiType,
       temperature: profile.temperature,
+      ...(new URL(config.value.baseUrl || profile.baseUrl).origin !== new URL(profile.baseUrl).origin ? { requestParams: {} } : {}),
       activeProfileId: profile.id,
     })
   ) {
-    if (prevOrigin !== profile.baseUrl) {
-      showToast('success', 'wtNeedPermission')
-    } else {
-      showToast('success', 'wtSavedOk')
-    }
+    showToast('success', 'saved')
   }
 }
 
@@ -300,7 +301,15 @@ async function deleteProfile(id: string): Promise<void> {
 }
 
 async function updateSelectionProfile(value: string): Promise<void> {
+  const profile = config.value.modelProfiles.find((item) => item.id === value)
+  if (profile && !(await grantOrigins([hostPermissionPattern(profile.baseUrl)]))) return
   await patchConfig({ selectionProfileId: value })
+}
+
+async function grantOrigins(origins: string[]): Promise<boolean> {
+  const granted = await browser.permissions.request({ origins }).catch(() => false)
+  if (!granted) showToast('danger', 'wtPermissionDenied')
+  return granted
 }
 
 async function updateDisplayMode(value: string): Promise<void> {
@@ -309,6 +318,7 @@ async function updateDisplayMode(value: string): Promise<void> {
 }
 
 async function updateHoverTranslate(value: boolean): Promise<void> {
+  if (value && !(await grantOrigins(['http://*/*', 'https://*/*']))) return
   await patchConfig({ hoverTranslateEnabled: value })
 }
 
@@ -339,7 +349,7 @@ async function clearSiteCache(host: string): Promise<void> {
     showToast('success', 'wtClearCacheDone')
     await refreshStats()
   } else {
-    showToast('danger', 'wtSavedFail', { error: reply.error })
+    showToast('danger', 'wtToolsFailed', { error: reply.error })
   }
 }
 
@@ -349,13 +359,14 @@ async function clearCache(): Promise<void> {
     showToast('success', 'wtClearCacheDone')
     await refreshStats()
   } else {
-    showToast('danger', 'wtSavedFail', { error: reply.error })
+    showToast('danger', 'wtToolsFailed', { error: reply.error })
   }
 }
 
 async function resetUsage(): Promise<void> {
   const reply = await sendTranslationMessage({ type: 'wt:reset-usage-stats' })
   if (reply.ok) usageStats.value = reply.usageStats
+  else showToast('danger', 'wtToolsFailed', { error: reply.error })
 }
 
 function handleExport(): void {
@@ -373,19 +384,23 @@ async function handleImportFile(event: Event): Promise<void> {
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
-  const text = await file.text()
-  const parsed = parseConfigBackup(text)
-  if (!parsed.ok) {
-    showToast('danger', 'wtSavedFail', { error: parsed.error })
+  if (file.size > MAX_CONFIG_BACKUP_BYTES) {
+    showToast('danger', 'wtBackupTooLarge')
     return
   }
-  const {
-    autoOrigins: _auto,
-    siteScopeHosts: _scope,
-    customHeadersRevision: _rev,
-    ...patch
-  } = parsed.config
-  if (await patchConfig(patch)) {
+  let text: string
+  try {
+    text = await file.text()
+  } catch {
+    showToast('danger', 'wtBackupReadFailed')
+    return
+  }
+  const parsed = parseConfigBackup(text)
+  if (!parsed.ok) {
+    showToast('danger', 'wtToolsFailed', { error: parsed.error })
+    return
+  }
+  if (await patchConfig(configBackupPatch(parsed.config, config.value))) {
     showToast('success', 'wtBackupImported')
   }
 }
@@ -444,6 +459,7 @@ onMounted(() => {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 .wt-compact-meta {
   font-size: 0.8rem;

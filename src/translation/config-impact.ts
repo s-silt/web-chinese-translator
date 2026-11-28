@@ -26,6 +26,9 @@ export function translationOutputChanged(previous: TranslationConfig, next: Tran
     previous.sourceLanguage !== next.sourceLanguage ||
     previous.translationStyle !== next.translationStyle ||
     glossarySignature(previous.promptGlossary) !== glossarySignature(next.promptGlossary) ||
+    previous.selectionProfileId !== next.selectionProfileId ||
+    JSON.stringify(previous.modelProfiles.find((profile) => profile.id === previous.selectionProfileId)) !==
+      JSON.stringify(next.modelProfiles.find((profile) => profile.id === next.selectionProfileId)) ||
     requestOptionsKey(previous) !== requestOptionsKey(next)
   )
 }

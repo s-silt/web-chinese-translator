@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { unwrapFence } from '../../../src/translation/transport'
+import { requestCompletionStream, unwrapFence } from '../../../src/translation/transport'
 
 describe('unwrapFence', () => {
   it('剥掉 ``` 与 ```json 围栏，返回内部 JSON', () => {
@@ -44,5 +44,35 @@ describe('unwrapFence', () => {
     const started = performance.now()
     expect(unwrapFence(hostile)).toBe('')
     expect(performance.now() - started).toBeLessThan(500)
+  })
+})
+
+describe('流式译文收尾', () => {
+  const config = { baseUrl: 'https://stream.example/v1', model: 'fixture', apiType: 'responses' as const,
+    temperature: null, requestParams: {} }
+
+  function stream(chunks: string[]): Response {
+    const encoder = new TextEncoder()
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
+        controller.close()
+      },
+    }), { headers: { 'content-type': 'text/event-stream' } })
+  }
+
+  it('Responses 跨分块且末行无换行时仍交付完整译文', async () => {
+    const response = stream(['data: {"type":"response.output_text.', 'delta","delta":"末行"}'])
+    const delta = vi.fn()
+    await expect(requestCompletionStream(config, 'sys', 'sample', '', delta, undefined, async () => response))
+      .resolves.toBe('末行')
+    expect(delta).toHaveBeenCalledExactlyOnceWith('末行', '末行')
+  })
+
+  it('部分输出后服务端明确宣告 incomplete 时返回受控错误', async () => {
+    const response = stream(['data: {"type":"response.output_text.delta","delta":"片段"}\n',
+      'data: {"type":"response.incomplete","error":{"message":"synthetic-private-marker"}}\n'])
+    await expect(requestCompletionStream(config, 'sys', 'sample', '', () => {}, undefined, async () => response))
+      .rejects.toMatchObject({ code: 'bad_output', message: '模型未完成翻译，请重试' })
   })
 })
