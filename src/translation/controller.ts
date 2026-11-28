@@ -650,6 +650,7 @@ function createInstance(inputOnly = false): Instance {
     if (hoverOn() && !hoverTranslator) {
       hoverTranslator = createHoverTranslator({
         isEnabled: hoverOn,
+        isPageTranslated: node => engine?.isModelTranslated(node) === true,
         displayMode: () => config?.displayMode ?? 'replace',
         translateText: async (text, signal) => {
           const requestId = createId()
@@ -657,7 +658,7 @@ function createInstance(inputOnly = false): Instance {
           signal.addEventListener('abort', abort, { once: true })
           const identity = pageIdentity(location.href)
           try {
-            const reply = await sendMessage({ type: 'wt:translate', mode: 'selection', requestId, pageId, texts: [text] })
+            const reply = await sendMessage({ type: 'wt:translate', mode: 'hover', requestId, pageId, texts: [text] })
             return reply.ok && identity === pageIdentity(location.href) ? reply.texts[0] : undefined
           } finally {
             signal.removeEventListener('abort', abort)
@@ -944,7 +945,7 @@ function createInstance(inputOnly = false): Instance {
         pageRestored = false
       }
       const connectionChanged = translationOutputChanged(previousConfig, nextConfig)
-      if (previousConfig.displayMode !== nextConfig.displayMode) engine?.restore()
+      if (!connectionChanged && previousConfig.displayMode !== nextConfig.displayMode) engine?.setDisplayMode(nextConfig.displayMode)
       if (
         connectionChanged ||
         nextConfig.inputTranslationEnabled !== previousConfig.inputTranslationEnabled ||

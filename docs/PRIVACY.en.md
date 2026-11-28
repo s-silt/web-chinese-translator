@@ -21,6 +21,8 @@ Applies to the browser extension "Web Chinese Translator". Chrome and Edge provi
 | Custom request headers | Request headers you enter in Advanced settings, which may contain service credentials | Same as API Key: stored in local IndexedDB (`web-translator-secrets`) in plaintext and not synced; bound to the endpoint origin and sent only to the corresponding model endpoint |
 | Page marker | The `data-gcn-i-<random id>` attribute on `<html>` during translation, readable by page scripts | Not stored; removed when disabled |
 
+When hover translation is enabled, holding Alt over a paragraph sends its translatable text to the model. Hover requests omit reading clues from other pages. Your glossary is stored locally. Model requests include terms that match the current text.
+
 The translation tools keep aggregate request, token and cache-hit counts locally by day, month and overall. Reset these counters in Settings. A settings backup includes your model profiles and glossary. It omits credentials, custom request parameters and browser permissions.
 
 ## Retention and Deletion

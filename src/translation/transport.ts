@@ -350,7 +350,11 @@ export async function requestCompletionStream(
       Accept: 'text/event-stream, application/json',
     }
     if (apiKey !== '') headers.Authorization = 'Bearer ' + apiKey
-    const payload = { ...completionBody(config, systemPrompt, userContent), stream: true }
+    const payload = {
+      ...completionBody(config, systemPrompt, userContent),
+      stream: true,
+      ...(config.apiType === 'responses' ? {} : { stream_options: { include_usage: true } }),
+    }
     requestBody = JSON.stringify(payload)
   } catch {
     throw new TranslationError('模型请求设置无效，请检查高级设置')
@@ -396,6 +400,7 @@ export async function requestCompletionStream(
     let received = 0
     let lastUsagePayload: unknown
     let completed = false
+    let chatFinished = false
     function consumeLine(line: string): void {
       if (!line.startsWith('data:')) return
       const data = line.slice(5).trim()
@@ -406,9 +411,16 @@ export async function requestCompletionStream(
       if (data === '') return
       const parsed = parseJson(data)
       if (!isRecord(parsed)) throw invalidCompletion()
-      if (parsed.error || parsed.type === 'error' || parsed.type === 'response.failed' || parsed.type === 'response.incomplete') {
+      const firstChoice: unknown = Array.isArray(parsed.choices) ? parsed.choices[0] : undefined
+      const finishReason = isRecord(firstChoice) ? firstChoice.finish_reason : undefined
+      const stopReason = parsed.type === 'message_delta' && isRecord(parsed.delta) ? parsed.delta.stop_reason : undefined
+      if (parsed.error || parsed.type === 'error' || parsed.type === 'response.failed' || parsed.type === 'response.incomplete' ||
+        (finishReason != null && finishReason !== 'stop') ||
+        (stopReason != null && stopReason !== 'end_turn' && stopReason !== 'stop_sequence')) {
         throw new TranslationError('模型未完成翻译，请重试', 'bad_output')
       }
+      // Chat 的用量可能在 finish_reason 之后的独立块中，继续读取到 [DONE] 或正常 EOF。
+      if (finishReason === 'stop') chatFinished = true
       const usageSource = isRecord(parsed.response) ? parsed.response : parsed
       if (usageSource.usage !== undefined) lastUsagePayload = usageSource
       const delta = extractStreamDelta(parsed, config.apiType)
@@ -437,7 +449,7 @@ export async function requestCompletionStream(
         }
       }
       if (signal?.aborted) throw new CompletionCancelledError()
-      if (accumulated.trim() === '') throw invalidCompletion()
+      if ((!completed && !chatFinished) || accumulated.trim() === '') throw invalidCompletion()
       notifyUsage(lastUsagePayload, userContent.length)
       return accumulated
     } finally {

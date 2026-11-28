@@ -221,6 +221,7 @@ describe('Anthropic native SSE & bilingual block micro-interaction', () => {
       start(controller) {
         controller.enqueue(encoder.encode('data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"流式"}}\n\n'))
         controller.enqueue(encoder.encode('data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"译文"}}\n\n'))
+        controller.enqueue(encoder.encode('data: {"type":"message_stop"}\n\n'))
         controller.close()
       },
     })

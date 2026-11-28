@@ -71,7 +71,7 @@
           type="password"
           autocomplete="off"
           :disabled="!ready || saving || testing"
-          :placeholder="keyState === 'none' ? t('wtApiKeyEnter') : t('wtApiKeyKeep')"
+          :placeholder="keyState === 'none' || profileDraft ? t('wtApiKeyEnter') : t('wtApiKeyKeep')"
           aria-labelledby="wt-api-key-label"
           aria-describedby="wt-api-key-hint"
         />
@@ -511,7 +511,7 @@ import {
   type JsonObject,
 } from '../../translation/request-options'
 import { SITE_SCOPE_INVALID_ERROR, SITE_SCOPE_LIMIT_ERROR, type SiteScopeMode } from '../../translation/site-scope'
-import type { TranslationConfig } from '../../translation/config'
+import type { ModelProfile, TranslationConfig } from '../../translation/config'
 import { sendTranslationMessage as send } from '../../translation/client'
 import { openTextTranslationWindow } from '../../translation/text-window'
 import {
@@ -564,6 +564,8 @@ const temperatureBadInput = ref(false)
 const requestParamsDraft = ref('')
 const customHeadersDraft = ref('')
 const apiKey = ref('')
+const profileDraft = ref<ModelProfile>()
+let connectionEpoch = 0
 const keyState = ref<KeyState>('none')
 const customHeadersState = ref<CustomHeadersState>('none')
 const invalidField = ref<InvalidAdvancedField>(null)
@@ -778,13 +780,20 @@ function applyConfig(
   headersState?: CustomHeadersState,
 ): void {
   if (replaceDrafts) {
+    const optionsKey = requestOptionsKey(config)
+    const changed = persistedBase !== config.baseUrl || persistedModel !== config.model || persistedOptionsKey !== optionsKey
+    if (changed) {
+      connectionEpoch++
+      setStatus('', false)
+    }
+    profileDraft.value = undefined
     persistedBase = config.baseUrl
     persistedModel = config.model
     persistedApiType = config.apiType
     persistedTemperature = config.temperature === null ? '' : String(config.temperature)
     persistedParams =
       Object.keys(config.requestParams).length === 0 ? '' : JSON.stringify(config.requestParams, null, 2)
-    persistedOptionsKey = requestOptionsKey(config)
+    persistedOptionsKey = optionsKey
     persistedRevision.value += 1
     baseUrl.value = config.baseUrl
     model.value = config.model
@@ -793,7 +802,7 @@ function applyConfig(
     requestParamsDraft.value = persistedParams
     customHeadersDraft.value = ''
     invalidField.value = null
-    if (connection.value.kind !== 'testing' && connection.value.kind !== 'ok') {
+    if (changed || (connection.value.kind !== 'testing' && connection.value.kind !== 'ok')) {
       connection.value = {
         kind: persistedBase === ''
           ? 'unconfigured'
@@ -842,6 +851,7 @@ function persistedMode(): AssistMode {
 }
 
 const keyHint = computed(() => {
+  if (profileDraft.value) return t('wtProfileReviewConnection')
   switch (keyState.value) {
     case 'ready':
       return t('wtKeySaved')
@@ -1090,6 +1100,7 @@ function applyConnectionReply(reply: TranslationReply<'wt:test'>, ms: number): v
 
 function discardDraft(): void {
   if (saving.value || testing.value || grantingEndpoint.value) return
+  profileDraft.value = undefined
   baseUrl.value = persistedBase
   model.value = persistedModel
   apiType.value = persistedApiType
@@ -1103,6 +1114,7 @@ function discardDraft(): void {
 
 function applyPreset(url: string): void {
   if (!ready.value || saving.value || testing.value) return
+  profileDraft.value = undefined
   baseUrl.value = url
   apiType.value = 'chat-completions'
   if (url === '') void nextTick(() => baseUrlInput.value?.focus())
@@ -1117,7 +1129,9 @@ async function testConnection(): Promise<void> {
   connection.value = { kind: 'testing' }
   const started = performance.now()
   try {
+    const epoch = connectionEpoch
     const reply = await send({ type: 'wt:test' })
+    if (connectionEpoch !== epoch) return
     const ms = Math.round(performance.now() - started)
     applyConnectionReply(reply, ms)
     if (reply.ok) toast.show('success', 'wtConnectedMs', { ms })
@@ -1203,6 +1217,9 @@ async function saveAndConnect(): Promise<void> {
         apiType: apiType.value,
         temperature: parsedTemperature,
         requestParams: parsedRequestParams,
+        ...(profileDraft.value?.baseUrl === trimmed && profileDraft.value.model === model.value.trim()
+          && profileDraft.value.apiType === apiType.value && profileDraft.value.temperature === parsedTemperature
+          ? { activeProfileId: profileDraft.value.id } : {}),
       },
       {
         apiKey: apiKey.value !== '' ? apiKey.value : undefined,
@@ -1228,7 +1245,9 @@ async function saveAndConnect(): Promise<void> {
     connection.value = { kind: 'testing' }
     const started = performance.now()
     try {
+      const epoch = connectionEpoch
       const reply = await send({ type: 'wt:test' })
+      if (connectionEpoch !== epoch) return
       const ms = Math.round(performance.now() - started)
       applyConnectionReply(reply, ms)
       // 行内状态已说明结果，延迟显示在连接徽章上；这里不再弹提示，避免同一结果出现两次
@@ -1623,9 +1642,25 @@ async function grantEndpointAccess(): Promise<void> {
   }
 }
 
-/** 从浏览器的快捷键页改完回来时重新读取绑定 */
-defineExpose({ refreshSavedSettings: () => load(true) })
+function prepareProfile(profile: ModelProfile): void {
+  if (!ready.value || saving.value || testing.value || connectionDirty.value) {
+    setStatus(t('wtProfileFinishDraft'), true)
+    return
+  }
+  profileDraft.value = profile
+  baseUrl.value = profile.baseUrl
+  model.value = profile.model
+  apiType.value = profile.apiType
+  temperatureDraft.value = profile.temperature === null ? '' : String(profile.temperature)
+  requestParamsDraft.value = ''
+  customHeadersDraft.value = customHeadersState.value === 'none' ? '' : '{}'
+  if (customHeadersDraft.value) openAdvanced()
+  setStatus('', false)
+}
 
+defineExpose({ refreshSavedSettings: () => load(true), prepareProfile })
+
+/** 从浏览器的快捷键页改完回来时重新读取绑定 */
 function refreshShortcuts(): void {
   if (document.visibilityState !== 'visible') return
   void loadShortcuts()

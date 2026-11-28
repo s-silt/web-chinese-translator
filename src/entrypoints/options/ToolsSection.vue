@@ -154,7 +154,7 @@
       <p class="section-desc">{{ t('wtBackupDesc') }}</p>
       <div class="wt-inline-row">
         <UiButton size="sm" data-test="wt-backup-export" @click="handleExport">{{ t('wtBackupExport') }}</UiButton>
-        <UiButton size="sm" data-test="wt-backup-import" @click="triggerImport">{{ t('wtBackupImport') }}</UiButton>
+        <UiButton size="sm" :disabled="restoringBackup" data-test="wt-backup-import" @click="triggerImport">{{ t('wtBackupImport') }}</UiButton>
         <input
           ref="importInput"
           type="file"
@@ -164,6 +164,23 @@
           @change="handleImportFile"
         />
       </div>
+      <div v-if="pendingBackup" class="wt-backup-preview" data-test="wt-backup-preview">
+        <p role="status">{{ pendingBackup.missing.length
+          ? t('wtBackupNeedsAccess', { origins: pendingBackup.missing.join(', ') })
+          : t('wtBackupReady') }}</p>
+        <div class="wt-inline-row">
+          <UiButton size="sm" variant="primary" :disabled="restoringBackup" data-test="wt-backup-confirm" @click="restoreBackup(true)">
+            {{ t(pendingBackup.missing.length ? 'wtBackupGrantAndRestore' : 'wtBackupRestore') }}
+          </UiButton>
+          <UiButton v-if="pendingBackup.missing.length" size="sm" :disabled="restoringBackup" data-test="wt-backup-skip" @click="restoreBackup(false)">
+            {{ t('wtBackupSkipAccess') }}
+          </UiButton>
+          <UiButton size="sm" :disabled="restoringBackup" @click="pendingBackup = undefined">{{ t('cancel') }}</UiButton>
+        </div>
+      </div>
+      <p v-if="skippedBackupOrigins" class="wt-backup-preview" data-test="wt-backup-partial" role="status">
+        {{ t('wtBackupPartial', { origins: skippedBackupOrigins }) }}
+      </p>
     </div>
   </section>
 </template>
@@ -188,13 +205,13 @@ import {
   type ModelProfile,
   type TranslationConfig,
 } from '../../translation/config'
-import { configBackupPatch, exportConfigBackup, MAX_CONFIG_BACKUP_BYTES, parseConfigBackup } from '../../translation/config-backup'
+import { backupPermissionOrigins, configBackupPatch, exportConfigBackup, MAX_CONFIG_BACKUP_BYTES, parseConfigBackup } from '../../translation/config-backup'
 import { createId } from '../../translation/id'
 import type { PersistentCacheStats } from '../../translation/persistent-cache'
 import { emptyUsageStats, type UsageStatsSnapshot } from '../../translation/usage-stats'
 
 const { t } = useI18n()
-const emit = defineEmits<{ saved: [] }>()
+const emit = defineEmits<{ saved: []; configureProfile: [profile: ModelProfile] }>()
 
 const config = ref<TranslationConfig>(DEFAULT_TRANSLATION_CONFIG)
 const usageStats = ref<UsageStatsSnapshot>(emptyUsageStats())
@@ -203,6 +220,10 @@ const newProfileName = ref('')
 const glossarySource = ref('')
 const glossaryTarget = ref('')
 const importInput = ref<HTMLInputElement | null>(null)
+const pendingBackup = ref<{ config: TranslationConfig; missing: string[] }>()
+const restoringBackup = ref(false)
+const skippedBackupOrigins = ref('')
+let importGeneration = 0
 
 const canSaveProfile = computed(
   () => newProfileName.value.trim() !== '' && config.value.baseUrl !== '' && config.value.model !== '',
@@ -277,6 +298,10 @@ async function saveCurrentAsProfile(): Promise<void> {
 }
 
 async function applyProfile(profile: ModelProfile): Promise<void> {
+  if (config.value.baseUrl && new URL(config.value.baseUrl).origin !== new URL(profile.baseUrl).origin) {
+    emit('configureProfile', profile)
+    return
+  }
   if (!(await grantOrigins([hostPermissionPattern(profile.baseUrl)]))) return
   if (
     await patchConfig({
@@ -284,7 +309,6 @@ async function applyProfile(profile: ModelProfile): Promise<void> {
       model: profile.model,
       apiType: profile.apiType,
       temperature: profile.temperature,
-      ...(new URL(config.value.baseUrl || profile.baseUrl).origin !== new URL(profile.baseUrl).origin ? { requestParams: {} } : {}),
       activeProfileId: profile.id,
     })
   ) {
@@ -379,11 +403,21 @@ function triggerImport(): void {
   importInput.value?.click()
 }
 
+async function missingBackupOrigins(imported: TranslationConfig): Promise<string[]> {
+  const required = backupPermissionOrigins(imported)
+  const granted = await Promise.all(required.map(origin =>
+    browser.permissions.contains({ origins: [origin] }).catch(() => false)))
+  return required.filter((_origin, i) => !granted[i])
+}
+
 async function handleImportFile(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
-  if (!file) return
+  if (!file || restoringBackup.value) return
+  const generation = ++importGeneration
+  pendingBackup.value = undefined
+  skippedBackupOrigins.value = ''
   if (file.size > MAX_CONFIG_BACKUP_BYTES) {
     showToast('danger', 'wtBackupTooLarge')
     return
@@ -392,16 +426,37 @@ async function handleImportFile(event: Event): Promise<void> {
   try {
     text = await file.text()
   } catch {
-    showToast('danger', 'wtBackupReadFailed')
+    if (generation === importGeneration) showToast('danger', 'wtBackupReadFailed')
     return
   }
+  if (generation !== importGeneration) return
   const parsed = parseConfigBackup(text)
   if (!parsed.ok) {
     showToast('danger', 'wtToolsFailed', { error: parsed.error })
     return
   }
-  if (await patchConfig(configBackupPatch(parsed.config, config.value))) {
-    showToast('success', 'wtBackupImported')
+  const missing = await missingBackupOrigins(parsed.config)
+  if (generation === importGeneration) pendingBackup.value = { config: parsed.config, missing }
+}
+
+async function restoreBackup(requestAccess: boolean): Promise<void> {
+  const pending = pendingBackup.value
+  if (!pending || restoringBackup.value) return
+  restoringBackup.value = true
+  try {
+    if (requestAccess && pending.missing.length) {
+      // 直接使用确认按钮的浏览器用户手势；读取文件和权限预检在选文件时已完成。
+      await browser.permissions.request({ origins: pending.missing }).catch(() => false)
+    }
+    const missing = await missingBackupOrigins(pending.config)
+    pendingBackup.value = { ...pending, missing }
+    if (await patchConfig(configBackupPatch(pending.config, config.value, missing))) {
+      pendingBackup.value = undefined
+      skippedBackupOrigins.value = missing.join(', ')
+      if (!missing.length) showToast('success', 'wtBackupImported')
+    }
+  } finally {
+    restoringBackup.value = false
   }
 }
 
@@ -415,6 +470,9 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+.wt-backup-preview {
+  overflow-wrap: anywhere;
 }
 .wt-inline-row {
   display: flex;

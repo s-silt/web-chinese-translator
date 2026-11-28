@@ -30,6 +30,8 @@ export interface DomEngine {
   start(): void
   stop(): void
   restore(): void
+  setDisplayMode(mode: TranslationDisplayMode): void
+  isModelTranslated(node: Text): boolean
   dispose(): void
   invalidate(): void
   pauseAuto(): void
@@ -86,6 +88,12 @@ interface NodeRecord {
   applied: string
   generation: number
   location: string
+}
+
+interface ModelRendering {
+  readonly changes: readonly TextReplacement[]
+  readonly text: string
+  readonly block?: Element
 }
 
 interface ReplayEntry {
@@ -205,7 +213,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   const attrRecords = new WeakMap<Element, Map<string, AttrRecord>>()
   const modifiedTexts = new Set<Text>()
   /** 只含模型译文写入的节点：固定词典写入也进 modifiedTexts，不计入翻译进度。 */
-  const modelTexts = new Set<Text>()
+  const modelTexts = new Map<Text, ModelRendering>()
   const modifiedElements = new Set<Element>()
   const pending = new Map<Text, AutoEntry>()
   /** 网站在已译文本末尾追加原文时，记下已译前缀，只翻译新增部分 */
@@ -452,9 +460,9 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       for (const member of unit.nodes) dropEntry(member)
       return 'rejected'
     }
+    rememberRendering({ changes, block: unit.block, text: entry.applied.join('') })
     for (const change of changes) {
       rememberWrite(change)
-      modelTexts.add(change.node)
       const anchored = unitMembers.get(change.node)
       if (anchored !== undefined) {
         clearUnit(anchored)
@@ -476,6 +484,55 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
 
   const bilingualNodes = new Map<Text, { line: HTMLElement; members: readonly Text[] }>()
   const bilingualBlocks = new WeakMap<Element, Text>()
+
+  function rememberRendering(rendering: ModelRendering): void {
+    for (const { node } of rendering.changes) modelTexts.set(node, rendering)
+  }
+
+  function showBilingual(rendering: ModelRendering): boolean {
+    const { block, changes, text } = rendering
+    const anchor = changes[0]!.node
+    const line = block ? attachBilingualBlock(block, text) : attachBilingualNode(anchor, text)
+    if (!line) return false
+    if (block) bilingualBlocks.set(block, anchor)
+    const group = { line, members: changes.map(change => change.node) }
+    for (const { node, source } of changes) {
+      const original = records.get(node)?.original ?? source
+      if (node.data !== original) node.data = original
+      bilingualNodes.set(node, group)
+      layoutSkips.delete(node)
+      redrawSkips.delete(node)
+      records.set(node, { original, applied: original, generation, location: lastLocation })
+      ownership.release(node, 'web')
+      modifiedTexts.add(node)
+      modelTexts.set(node, rendering)
+    }
+    return true
+  }
+
+  function setDisplayMode(mode: TranslationDisplayMode): void {
+    for (const rendering of new Set(modelTexts.values())) {
+      const { changes, block } = rendering
+      const anchor = changes[0]!.node
+      const bilingual = bilingualNodes.get(anchor)
+      if ((mode === 'bilingual') === (bilingual !== undefined)) continue
+      const current = changes.filter(({ node }) => node.isConnected && modelTexts.get(node) === rendering &&
+        records.get(node)?.applied === node.data && (!block || block.contains(node)))
+      if (mode === 'bilingual') {
+        if (current.length === changes.length) showBilingual(rendering)
+        else for (const change of current) showBilingual({ changes: [change], text: change.translated })
+      } else if (bilingual && current.length === changes.length) {
+        const replacements = changes.map(change => ({ ...change, source: records.get(change.node)!.original }))
+        if (!tryReplaceTextUnit(replacements)) continue
+        removeBilingualNode(bilingual.line)
+        if (block) bilingualBlocks.delete(block)
+        for (const change of replacements) {
+          bilingualNodes.delete(change.node)
+          rememberWrite(change)
+        }
+      }
+    }
+  }
 
   function forgetNode(node: Text): void {
     const group = bilingualNodes.get(node)
@@ -501,22 +558,15 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     if ((options.displayMode?.() ?? 'replace') === 'bilingual') {
       if (textValue(node) !== source) return 0
       if (bilingualNodes.has(node)) forgetNode(node)
-      const el = attachBilingualNode(node, translated)
-      if (!el) return 0
-      bilingualNodes.set(node, { line: el, members: [node] })
-      layoutSkips.delete(node)
-      redrawSkips.delete(node)
-      records.set(node, { original: source, applied: source, generation, location: lastLocation })
-      modifiedTexts.add(node)
-      modelTexts.add(node)
-      return 1
+      return showBilingual({ changes: [{ node, source, translated }], text: translated }) ? 1 : 0
     }
     if (!tryReplaceText(node, source, translated)) {
       if (wasRejected(node, source)) noteSkip(layoutSkips, node, source)
       return 0
     }
-    rememberWrite({ node, source, translated })
-    modelTexts.add(node)
+    const change = { node, source, translated }
+    rememberWrite(change)
+    rememberRendering({ changes: [change], text: translated })
     return 1
   }
 
@@ -1370,23 +1420,12 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
               const trail = source.slice(source.trimEnd().length)
               return { node: member, source, translated: `${lead}${segments[i]!}${trail}` }
             })
+            const rendering = { changes, block: unit.block, text: inlineTranslationText(translated) }
             if ((options.displayMode?.() ?? 'replace') === 'bilingual') {
               const anchor = unit.nodes[0]
-              const combined = inlineTranslationText(translated)
-              if (anchor !== undefined && combined !== '') {
+              if (anchor !== undefined && rendering.text !== '') {
                 if (bilingualNodes.has(anchor)) forgetNode(anchor)
-                const el = attachBilingualBlock(unit.block, combined)
-                if (el !== undefined) {
-                  const group = { line: el, members: unit.nodes }
-                  bilingualBlocks.set(unit.block, anchor)
-                  changes.forEach((change) => {
-                    bilingualNodes.set(change.node, group)
-                    layoutSkips.delete(change.node)
-                    redrawSkips.delete(change.node)
-                    records.set(change.node, { original: change.source, applied: change.source, generation, location: lastLocation })
-                    modifiedTexts.add(change.node)
-                    modelTexts.add(change.node)
-                  })
+                if (showBilingual(rendering)) {
                   clearUnit(entry)
                   continue
                 }
@@ -1394,10 +1433,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
             }
             const flags = tryReplaceTexts(changes)
             if (flags.every(Boolean)) {
-              changes.forEach((change) => {
-                rememberWrite({ node: change.node, source: change.source, translated: change.translated })
-                modelTexts.add(change.node)
-              })
+              changes.forEach(rememberWrite)
+              rememberRendering(rendering)
               rememberUnitReplay(unit, changes)
             } else {
               // 任一成员写回失败：整单元回滚；不写 failedItems，成员退到逐节点路径
@@ -1881,6 +1918,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
 
   return {
     syncPageIdentity,
+    setDisplayMode,
+    isModelTranslated(node) { return modelTexts.has(node) && records.get(node)?.applied === node.data },
     start() {
       if (disposed || document.body === null) return
       syncPageIdentity()

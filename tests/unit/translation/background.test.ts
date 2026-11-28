@@ -866,6 +866,24 @@ describe('模型隐私边界真实消息入口', () => {
     expect(autoCall.body).toContain('SAME_SITE_TITLE')
     expect(autoCall.body).not.toContain('OTHER_SITE_TITLE')
 
+    const hoverRequest = { type: 'wt:translate', mode: 'hover', texts: ['Public hovered sentence.'], pageId: 'hover-page', requestId: 'hover-request' }
+    expect(await trigger(hoverRequest, contentSender)).toMatchObject({ ok: false })
+    const current = await translationConfigItem.getValue()
+    await translationConfigItem.setValue({ ...current, hoverTranslateEnabled: true })
+    const top = vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation(async () =>
+      [{ frameId: 0, documentId: contentSender.documentId, result: contentSender.url }] as never)
+    expect(await trigger(hoverRequest, contentSender)).toMatchObject({ ok: true })
+    expect(lastCall().context.recentPages).toEqual([])
+    expect(lastCall().body).not.toContain('OTHER_SITE_TITLE')
+    expect(lastCall().body).not.toContain('SAME_SITE_TITLE')
+    fetcher.mockClear()
+    top.mockImplementation(async () => [{ frameId: 0, documentId: contentSender.documentId, result: sensitiveSender.url }] as never)
+    expect(await trigger(hoverRequest, contentSender)).toMatchObject({ ok: false })
+    expect(fetcher).not.toHaveBeenCalled()
+    top.mockRestore()
+    for (const fields of [{ page: { site: 'app.devin.ai', title: 'extra', heading: '' } }, { manualSelectionId: 'ticket' }, { texts: ['a'.repeat(2001)] }]) {
+      expect(isTranslationMessage({ ...hoverRequest, ...fields })).toBe(false)
+    }
     // mode=selection：结果只进扩展面板，保留跨站线索
     fetcher.mockClear()
     expect(await trigger({
@@ -887,6 +905,30 @@ describe('模型隐私边界真实消息入口', () => {
       type: 'wt:assist', requestId: 'cross-site', input,
     }, contentSender)).toMatchObject({ ok: true })
     expect(lastCall().context.recentPages).toEqual([sameEntry, otherEntry])
+  })
+
+  it('划词释义/解释按专用档案授权并发送，主动陪读仍走主接口', async () => {
+    await enableSmart()
+    const profile = { id: 'selection', name: 'Alt', baseUrl: 'https://selection.example/v1', model: 'select-m', apiType: 'chat-completions' as const, temperature: null }
+    await translationConfigItem.setValue({ ...(await translationConfigItem.getValue()), modelProfiles: [profile], selectionProfileId: profile.id })
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] }
+      const source = JSON.parse(body.messages[1]!.content) as { requestedIntent?: string }
+      const content = JSON.stringify({ decision: 'show', intent: source.requestedIntent ?? 'define', translation: '译文', explanation: '说明' })
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }))
+    })
+    const ask = (id: string, change: object) => trigger({ type: 'wt:assist', requestId: id, input: { ...input, ...change } }, contentSender)
+    const permission = vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (query) =>
+      !(query.origins ?? []).some((pattern) => pattern.includes('selection.example')))
+    expect(await ask('denied-selection', {})).toMatchObject({ ok: false })
+    expect(fetcher).not.toHaveBeenCalled()
+    permission.mockImplementation(async () => true)
+    expect(await ask('selection-define', { requestedIntent: 'define' })).toMatchObject({ ok: true })
+    expect(await ask('selection-explain', { requestedIntent: 'explain' })).toMatchObject({ ok: true })
+    expect(await ask('revisit', { trigger: 'revisit' })).toMatchObject({ ok: true })
+    expect(fetcher.mock.calls.map(([url, init]) => [new URL(String(url)).hostname, JSON.parse(String(init?.body)).model])).toEqual([
+      ['selection.example', profile.model], ['selection.example', profile.model], ['api.example.com', VALID_CONFIG.model],
+    ])
   })
 
   it('页面动作校验接受 retry-failed，拒绝未知动作', () => {

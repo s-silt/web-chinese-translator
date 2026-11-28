@@ -62,7 +62,7 @@ describe('流式译文收尾', () => {
   }
 
   it('Responses 跨分块且末行无换行时仍交付完整译文', async () => {
-    const response = stream(['data: {"type":"response.output_text.', 'delta","delta":"末行"}'])
+    const response = stream(['data: {"type":"response.output_text.', 'delta","delta":"末行"}\n', 'data: {"type":"response.completed"}'])
     const delta = vi.fn()
     await expect(requestCompletionStream(config, 'sys', 'sample', '', delta, undefined, async () => response))
       .resolves.toBe('末行')
@@ -74,5 +74,25 @@ describe('流式译文收尾', () => {
       'data: {"type":"response.incomplete","error":{"message":"synthetic-private-marker"}}\n'])
     await expect(requestCompletionStream(config, 'sys', 'sample', '', () => {}, undefined, async () => response))
       .rejects.toMatchObject({ code: 'bad_output', message: '模型未完成翻译，请重试' })
+  })
+
+  it.each(['length', 'content_filter', 'tool_calls'])('Chat 停止原因 %s 不会把片段标为成功', async (finish_reason) => {
+    const response = stream(['data: {"choices":[{"delta":{"content":"开头"}}]}\n',
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason }] })}\n\ndata: [DONE]\n`])
+    await expect(requestCompletionStream({ ...config, apiType: 'chat-completions' }, 'sys', 'sample', '', vi.fn(), undefined, async () => response))
+      .rejects.toMatchObject({ code: 'bad_output' })
+  })
+
+  it('Chat 在没有终止事件时拒绝已收到的片段；合法 stop 后可在 EOF 结束', async () => {
+    for (const finished of [false, true]) {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(stream([
+        'data: {"choices":[{"delta":{"content":"译文"}}]}\n',
+        finished ? 'data: {"choices":[{"finish_reason":"stop"}]}\n' : '',
+      ]))
+      const pending = requestCompletionStream({ ...config, apiType: 'chat-completions' }, 'sys', 'sample', '', vi.fn(), undefined, fetcher)
+      if (finished) await expect(pending).resolves.toBe('译文')
+      else await expect(pending).rejects.toMatchObject({ code: 'bad_output' })
+      expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ stream_options: { include_usage: true } })
+    }
   })
 })

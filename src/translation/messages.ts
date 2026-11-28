@@ -82,7 +82,7 @@ export type TranslationMessage =
   | { type: 'wt:test' }
   | {
       type: 'wt:translate'
-      mode: 'selection' | 'auto' | 'input'
+      mode: 'selection' | 'auto' | 'input' | 'hover'
       texts: string[]
       requestId?: string
       page?: PageContext
@@ -414,12 +414,20 @@ function isTranslateTexts(value: unknown): value is string[] {
 }
 
 const FEATURE_TRANSLATE_KEYS = new Set(['type', 'mode', 'texts', 'requestId', 'pageSession', 'manualInput'])
+const HOVER_TRANSLATE_KEYS = new Set(['type', 'mode', 'texts', 'requestId', 'pageSession', 'pageId'])
 
 function isInputTexts(value: unknown): value is string[] {
   return Array.isArray(value) && value.length === 1 && typeof value[0] === 'string' && value[0].length >= 1 && value[0].length <= 6000
 }
 
 function isTranslateMessage(value: Record<string, unknown>): boolean {
+  if (value.mode === 'hover') {
+    return Object.keys(value).every((key) => HOVER_TRANSLATE_KEYS.has(key)) &&
+      isRequestId(value.requestId) && isPageId(value.pageId) &&
+      (value.pageSession === undefined || isPageId(value.pageSession)) &&
+      Array.isArray(value.texts) && value.texts.length === 1 &&
+      typeof value.texts[0] === 'string' && value.texts[0].trim() !== '' && value.texts[0].length <= 2000
+  }
   if ('targetLanguage' in value || 'sourceLanguage' in value) return false
   if (value.mode !== 'input' && 'manualInput' in value) return false
   if ('manualInput' in value && typeof value.manualInput !== 'boolean') return false
@@ -794,7 +802,7 @@ export function isTranslationReply(value: unknown, message?: TranslationMessage)
       if (!Array.isArray(value.texts) || value.texts.length !== message.texts.length) return false
       const texts = value.texts as string[]
       if (
-        message.mode === 'selection' || message.mode === 'input'
+        message.mode !== 'auto'
           ? texts.some((text) => text.trim() === '')
           : !texts.some((text) => text.trim() !== '')
       ) {

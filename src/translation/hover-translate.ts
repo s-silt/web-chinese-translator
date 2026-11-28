@@ -32,6 +32,7 @@ const MAX_HOVER_TEXT_LENGTH = 2000
 
 export interface HoverTranslatorOptions {
   readonly isEnabled: () => boolean
+  readonly isPageTranslated?: (node: Text) => boolean
   readonly displayMode: () => TranslationDisplayMode
   readonly translateText: (text: string, signal: AbortSignal) => Promise<string | undefined>
 }
@@ -48,7 +49,7 @@ interface HoverRecord {
 
 const inlineOptions = { isExcluded: (element: Element) => !isReadableElement(element) }
 
-function paragraphSource(block: HTMLElement) {
+function paragraphSource(block: HTMLElement, isPageTranslated: HoverTranslatorOptions['isPageTranslated']) {
   if (!isReadableElement(block)) return
   let inspected = 0
   const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, (node) => {
@@ -58,8 +59,10 @@ function paragraphSource(block: HTMLElement) {
   })
   const first = walker.nextNode()
   if (inspected > 200 || !(first instanceof Text)) return
+  if (isPageTranslated?.(first)) return
   const unit = inlineUnitFor(first, inlineOptions)
   if (unit && unit.block !== block) return
+  if (unit && isPageTranslated && unit.nodes.some(isPageTranslated)) return
   if (!unit && walker.nextNode()) return
   const source = unit?.template ?? first.data
   if (source.trim().length < MIN_HOVER_TEXT_LENGTH || source.length > MAX_HOVER_TEXT_LENGTH) return
@@ -98,7 +101,7 @@ export function createHoverTranslator(options: HoverTranslatorOptions): HoverTra
 
   async function translateBlock(el: HTMLElement): Promise<void> {
     if (disposed || !options.isEnabled() || !el.isConnected || translated.has(el)) return
-    const snapshot = paragraphSource(el)
+    const snapshot = paragraphSource(el, options.isPageTranslated)
     if (!snapshot) return
     const { source, first, unit } = snapshot
     ensureHoverStyle()
@@ -110,7 +113,7 @@ export function createHoverTranslator(options: HoverTranslatorOptions): HoverTra
     try {
       const result = await options.translateText(source.trim(), request.signal)
       if (disposed || request.signal.aborted || !el.isConnected || !options.isEnabled() || !result?.trim() || result.trim() === source.trim()) return
-      const current = paragraphSource(el)
+      const current = paragraphSource(el, options.isPageTranslated)
       if (!current || current.first !== first || current.source !== source || (unit && !isInlineUnitCurrent(unit, inlineOptions))) return
       const segments = unit ? parseInlineResult(result, unit) : [result.trim()]
       if (!segments) return

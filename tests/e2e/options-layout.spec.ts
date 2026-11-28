@@ -1,7 +1,20 @@
-import { expect, test } from './fixtures'
+import { acceptOwnedPermission, expect, test } from './fixtures'
 import { readFile } from 'node:fs/promises'
 
 test.use({ headless: false })
+
+test('跨来源档案在模型页打开独立草稿，放弃后保留原连接', async ({ page, extensionId, extension }) => {
+  const profile = { id: 'second', name: 'Second', baseUrl: 'https://second.example/v1', model: 'target-model', apiType: 'responses', temperature: 0.4 }
+  await extension.setTranslationConfig({ baseUrl: 'https://first.example/v1', model: 'original-model', modelProfiles: [profile] })
+  await page.goto(`chrome-extension://${extensionId}/options.html#wt-tools-title`)
+  await page.locator('[data-test="wt-profile-apply-second"]').click()
+  await expect(page).toHaveURL(/options\.html#wt-title$/)
+  const model = page.locator('[data-test="wt-model-input"]')
+  await expect(model).toHaveValue('target-model')
+  await expect(page.locator('input[type="password"]')).toHaveValue('')
+  await page.locator('[data-test="wt-discard-draft"]').click()
+  await expect(model).toHaveValue('original-model')
+})
 
 test('翻译工具保存双语模式、风格与术语，并从实际导出的备份恢复', async ({ page, extensionId, extension }) => {
   await extension.setSettings({ uiLanguage: 'en' })
@@ -28,7 +41,39 @@ test('翻译工具保存双语模式、风格与术语，并从实际导出的�
   await entries.getByRole('button').click()
   await expect(entries).toHaveCount(0)
   await page.locator('[data-test="wt-backup-file"]').setInputFiles({ name: 'settings.json', mimeType: 'application/json', buffer })
+  await expect(entries).toHaveCount(0)
+  await page.getByRole('button', { name: 'Restore backup', exact: true }).click()
   await expect(entries).toContainText('窗口句柄')
+  // 全新来源的实际主机授权只在用户确认时申请。先跳过，并验证连接未被修改。
+  const backup = JSON.parse(buffer.toString())
+  const endpoint = 'https://backup-model.fixture.test'
+  Object.assign(backup.config, {
+    baseUrl: endpoint, model: 'backup-model', promptGlossary: [{ source: 'fixture', target: '夹具' }],
+  })
+  const file = { name: 'new-install.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(backup)) }
+  const selectBackup = () => page.locator('[data-test="wt-backup-file"]').setInputFiles(file)
+  const storedModel = () => page.evaluate(async () => {
+    const { chrome } = globalThis as unknown as {
+      chrome: { storage: { local: { get(key: string): Promise<{ translationConfig: { model: string } }> } } }
+    }
+    return (await chrome.storage.local.get('translationConfig')).translationConfig.model
+  })
+  await selectBackup()
+  const preview = page.locator('[data-test="wt-backup-preview"]')
+  await expect(preview).toContainText('backup-model.fixture.test')
+  await expect(entries).not.toContainText('夹具')
+  await page.locator('[data-test="wt-backup-skip"]').click()
+  await expect(entries).toContainText('夹具')
+  await expect(page.locator('[data-test="wt-backup-partial"]')).toContainText('backup-model.fixture.test')
+  await expect.poll(storedModel).toBe('')
+  if (['win32', 'linux'].includes(process.platform)) {
+    await selectBackup()
+    await page.locator('[data-test="wt-backup-confirm"]').click()
+    await acceptOwnedPermission(page, [endpoint + '/*'])
+    await expect(preview).toHaveCount(0)
+    await expect.poll(storedModel).toBe('backup-model')
+    await expect(entries).toContainText('夹具')
+  }
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
 })
 

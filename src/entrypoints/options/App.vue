@@ -34,7 +34,11 @@
       </div>
       <DictionarySection v-if="translationSupported" v-show="currentNav === 'wt-dictionary-title'" />
       <TranslationSection v-if="translationSupported" v-show="showTranslation" ref="translationSection" :view="translationView" />
-      <ToolsSection v-if="translationSupported && currentNav === 'wt-tools-title'" @saved="translationSection?.refreshSavedSettings()" />
+      <ToolsSection
+        v-if="translationSupported && currentNav === 'wt-tools-title'"
+        @saved="translationSection?.refreshSavedSettings()"
+        @configure-profile="configureProfile"
+      />
       <div v-show="currentNav === 'github-title'" id="github-title" class="wt-github-group" role="region" :aria-label="t('navGithub')">
         <div class="section wt-github-preferences">
           <h2 id="github-preferences-title" class="section-title">{{ t('navGithub') }}</h2>
@@ -71,6 +75,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import AppearanceSection from './AppearanceSection.vue'
 import CustomEntriesSection from './CustomEntriesSection.vue'
 import type { MessageKey } from '../../i18n'
+import type { ModelProfile } from '../../translation/config'
 import DictionarySection from './DictionarySection.vue'
 import ExcludedPathsSection from './ExcludedPathsSection.vue'
 import GeneralSection from '../popup/GeneralSection.vue'
@@ -154,6 +159,13 @@ function scrollToSection(target: string, event: Event): void {
 function onHashChange(): void {
   currentNav.value = resolveNav(window.location.hash)
   void focusSection(currentNav.value)
+}
+
+async function configureProfile(profile: ModelProfile): Promise<void> {
+  currentNav.value = 'wt-title'
+  window.location.hash = currentNav.value
+  await focusSection(currentNav.value)
+  translationSection.value?.prepareProfile(profile)
 }
 
 onMounted(() => {

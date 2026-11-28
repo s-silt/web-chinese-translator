@@ -311,6 +311,7 @@ async function startPageTranslation(tab: PageTarget): Promise<TranslationReply<'
 }
 
 interface DispatchPolicy {
+  hover?: boolean
   origin?: string
   auto?: boolean
   feature?: 'input'
@@ -335,6 +336,7 @@ async function assertDispatchAllowed(
     await manualPageAllowed(policy.pageSender)
   checkCurrent(snapshot, signal)
   if (config.baseUrl === '' || config.model === '') throw new TranslationError('请先配置接口地址与模型')
+  if (policy.hover && !config.hoverTranslateEnabled) throw new TranslationError('未开启悬停翻译')
   if (policy.feature !== undefined) {
     if (policy.pageSender?.frameId !== 0) {
       if (
@@ -717,7 +719,11 @@ async function saveConfig(
       reply = { ok: false, error: '模型档案包含无效地址、模型名称或重复标识' }
       return
     }
-    const activeProfileId = patch.activeProfileId ?? previous.activeProfileId
+    const currentProfile = profiles.find(profile => profile.id === previous.activeProfileId)
+    const matchesCurrent = currentProfile?.baseUrl === nextBase && currentProfile.model === nextModel &&
+      currentProfile.apiType === (patch.apiType ?? previous.apiType) &&
+      currentProfile.temperature === (patch.temperature !== undefined ? patch.temperature : previous.temperature)
+    const activeProfileId = patch.activeProfileId ?? (matchesCurrent ? previous.activeProfileId : '')
     const selectionProfileId = patch.selectionProfileId ?? previous.selectionProfileId
     if ([activeProfileId, selectionProfileId].some(id => id !== '' && !profiles.some(profile => profile.id === id))) {
       reply = { ok: false, error: '所选模型档案不存在，请刷新后重试' }
@@ -953,7 +959,7 @@ async function handleTextTranslation(
   const scope = assistScope(sender)
   const key = `${scope}:${message.requestId}`
   if (requests.has(key)) return { ok: false, error: '请求 ID 重复' }
-  const controller = new TrackedRequest('test', '', pageSession)
+  const controller = new TrackedRequest('text', '', pageSession)
   const cancel = (): void => controller.abort()
   if (stream?.signal.aborted) return failureReply(new CompletionCancelledError())
   stream?.signal.addEventListener('abort', cancel)
@@ -1027,7 +1033,8 @@ async function handleTranslate(
   }
   const feature = message.mode === 'input' ? message.mode : undefined
   const manualInput = feature === 'input' && message.manualInput === true
-  const isInteractive = message.mode === 'selection'
+  const isHover = message.mode === 'hover'
+  const isInteractive = message.mode === 'selection' || isHover
   if (feature !== undefined) {
     for (const [other, existing] of requests) {
       if (other !== key && other.startsWith(`${scope}:`) && existing.kind === feature) {
@@ -1064,7 +1071,7 @@ async function handleTranslate(
     const origin = normalizeOrigin(sourceUrl)
     const rawSnapshot = await modelSnapshot().catch(() => undefined)
     const snapshot =
-      rawSnapshot !== undefined && message.mode === 'selection'
+      rawSnapshot !== undefined && isInteractive
         ? resolveSceneSnapshot(rawSnapshot, 'selection')
         : rawSnapshot
     if (controller.signal.aborted) {
@@ -1089,6 +1096,7 @@ async function handleTranslate(
       await assertDispatchAllowed(snapshot, controller.signal, {
         origin,
         pageSender: sender,
+        hover: isHover,
         auto: message.mode === 'auto',
         feature,
         manualInput,
@@ -1100,6 +1108,15 @@ async function handleTranslate(
     }
     const stillAllowed = async (snap: ModelSnapshot): Promise<boolean> => {
       try {
+        if (isHover) {
+          const tabId = sender.tab!.id!
+          if (sender.documentId) {
+            if (!(await verifiedRouteSender(sender, sourceUrl))) throw new CompletionCancelledError()
+          } else {
+            const active = await browser.tabs.get(tabId)
+            if (typeof active.url !== 'string' || !matchesBrowserUrl(sourceUrl, active.url)) throw new CompletionCancelledError()
+          }
+        }
         let currentGrant: ManualGrant | undefined
         if (ticketId !== undefined) {
           currentGrant = await verifyManualTicket(sender, message.texts[0] ?? '', ticketId, key)
@@ -1109,6 +1126,7 @@ async function handleTranslate(
         await assertDispatchAllowed(snap, controller.signal, {
           origin,
           pageSender: sender,
+          hover: isHover,
           auto: message.mode === 'auto',
           feature,
           manualInput,
@@ -1137,7 +1155,7 @@ async function handleTranslate(
               sender.url ?? '',
               message.page,
               message.pageId ?? sender.documentId,
-              config.proactiveAssistEnabled,
+              !isHover && config.proactiveAssistEnabled,
               sender.tab?.id ?? -1,
               config,
               message.mode === 'auto',
@@ -1159,7 +1177,7 @@ async function handleTranslate(
               targetLanguage: snapshot.config.inputTargetLanguage,
             },
           }
-    const queueMode = message.mode === 'input' ? 'selection' : message.mode
+    const queueMode = message.mode === 'auto' ? 'auto' : 'selection'
     const outcome = await requestTranslation(
       requestSnapshot,
       queueMode,
@@ -1223,7 +1241,8 @@ async function handleAssist(
   const scope = assistScope(sender)
   const key = `${scope}:${message.requestId}`
   if (requests.has(key)) return { ok: false, error: '请求 ID 重复' }
-  const controller = new TrackedRequest('assist', sender.url ?? '', pageSession)
+  const selection = message.input.trigger === 'selection'
+  const controller = new TrackedRequest(selection ? 'selection-assist' : 'assist', sender.url ?? '', pageSession)
   for (const other of interactive) {
     if (other !== key && other.startsWith(`${scope}:`)) {
       requests.get(other)?.abort()
@@ -1242,10 +1261,11 @@ async function handleAssist(
     }
     const senderUrl = sender.url ?? ''
     await restoreAutomaticPause()
-    const snapshot = await modelSnapshot().catch(() => undefined)
-    if (snapshot === undefined || controller.signal.aborted) {
-      return unavailableReply(snapshot)
+    const baseSnapshot = await modelSnapshot().catch(() => undefined)
+    if (baseSnapshot === undefined || controller.signal.aborted) {
+      return unavailableReply(baseSnapshot)
     }
+    const snapshot = selection ? resolveSceneSnapshot(baseSnapshot, 'selection') : baseSnapshot
     const origin = normalizeOrigin(senderUrl)
     const host = origin === '' ? '' : new URL(origin).hostname
     if (host === '' || message.input.site !== host) return { ok: false, error: '站点不匹配' }
@@ -1825,7 +1845,7 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
       let removed: number | undefined
       await serializeMutation(async () => {
         for (const request of requests.values()) {
-          if (request.kind !== 'auto' && request.kind !== 'selection') continue
+          if (request.kind !== 'auto' && request.kind !== 'selection' && request.kind !== 'hover') continue
           const origin = normalizeOrigin(request.sourceUrl ?? request.url)
           if (origin && new URL(origin).hostname === host) request.abort()
         }
