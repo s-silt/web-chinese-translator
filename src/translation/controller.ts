@@ -17,6 +17,7 @@ import {
 import { translationOutputChanged } from './config-impact'
 import { createAssistance } from './assistance'
 import { createDomEngine, type AutoBatchOutcome, type DomEngine } from './dom'
+import { createHoverTranslator, type HoverTranslator } from './hover-translate'
 import { closePageSession, sendTranslationMessage } from './client'
 import {
   isContentTranslationMessage,
@@ -85,6 +86,7 @@ function createInstance(inputOnly = false): Instance {
   let config: TranslationConfig | undefined
   let modes: PageModes = { enabled: false, fixed: false, auto: false, selection: false, smart: false }
   let engine: DomEngine | undefined
+  let hoverTranslator: HoverTranslator | undefined
   type ToolbarSelection = {
     readonly text: string
     readonly anchor: SelectionAnchor
@@ -627,6 +629,8 @@ function createInstance(inputOnly = false): Instance {
   }
 
   function disposeLiveFeatures(): void {
+    hoverTranslator?.dispose()
+    hoverTranslator = undefined
     inputTranslation?.dispose()
     inputTranslation = undefined
     documentInput?.dispose()
@@ -643,6 +647,28 @@ function createInstance(inputOnly = false): Instance {
 
   function syncWatchers(): void {
     if (disposed || suspended) return
+    if (hoverOn() && !hoverTranslator) {
+      hoverTranslator = createHoverTranslator({
+        isEnabled: hoverOn,
+        isPageTranslated: node => engine?.isModelTranslated(node) === true,
+        displayMode: () => config?.displayMode ?? 'replace',
+        translateText: async (text, signal) => {
+          const requestId = createId()
+          const abort = () => { void sendTranslationMessage({ type: 'wt:cancel-assist', requestId }) }
+          signal.addEventListener('abort', abort, { once: true })
+          const identity = pageIdentity(location.href)
+          try {
+            const reply = await sendMessage({ type: 'wt:translate', mode: 'hover', requestId, pageId, texts: [text] })
+            return reply.ok && identity === pageIdentity(location.href) ? reply.texts[0] : undefined
+          } finally {
+            signal.removeEventListener('abort', abort)
+          }
+        },
+      })
+    } else if (!hoverOn() && hoverTranslator) {
+      hoverTranslator.dispose()
+      hoverTranslator = undefined
+    }
     if (selectionOn()) ensureWatcher()
     else if (watcher !== undefined) {
       watcher.dispose()
@@ -670,6 +696,7 @@ function createInstance(inputOnly = false): Instance {
       fixedEnabled: fixedOn,
       autoEnabled: autoOn,
       targetLanguage: () => config?.targetLanguage ?? 'zh-CN',
+      displayMode: () => config?.displayMode ?? 'replace',
       autoBudget: () => config?.pageCharLimit ?? DEFAULT_PAGE_CHAR_LIMIT,
       sourceLanguage: () => config?.sourceLanguage ?? 'auto',
       translateFixed: (text) =>
@@ -786,6 +813,7 @@ function createInstance(inputOnly = false): Instance {
     if (action === 'restore') {
       // 由悬浮菜单触发时保留菜单：恢复后的状态与可能的错误要在菜单里看到，焦点也不丢
       cancelAll(true)
+      hoverTranslator?.restoreAll()
       pageRestored = true
       engine?.restore()
       lastError = ''
@@ -917,6 +945,7 @@ function createInstance(inputOnly = false): Instance {
         pageRestored = false
       }
       const connectionChanged = translationOutputChanged(previousConfig, nextConfig)
+      if (!connectionChanged && previousConfig.displayMode !== nextConfig.displayMode) engine?.setDisplayMode(nextConfig.displayMode)
       if (
         connectionChanged ||
         nextConfig.inputTranslationEnabled !== previousConfig.inputTranslationEnabled ||
@@ -1106,6 +1135,12 @@ function createInstance(inputOnly = false): Instance {
       dispose()
     },
   })
+
+  function hoverOn(): boolean {
+    if (inputOnly || disposed || suspended || !modes.enabled || !modes.hover || !config?.hoverTranslateEnabled || !modelConfigured()) return false
+    const url = location.href
+    return isSiteScopeAllowed(url, config) && !isExcludedSite(url, config.excludedHosts) && !isSensitivePage(url)
+  }
 
   const unwatchConfig = watchTranslationConfig((next) => {
     const url = location.href

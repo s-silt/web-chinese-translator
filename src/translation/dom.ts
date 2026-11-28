@@ -20,6 +20,8 @@ import {
 } from './sites'
 import { inlineUnitFor, inlineUnitKey, isInlineUnitCurrent, parseInlineResult, type InlineUnit } from './inline-units'
 import type { PageTranslationProgress } from './messages'
+import { attachBilingualBlock, attachBilingualNode, inlineTranslationText, removeBilingualNode } from './bilingual'
+import type { TranslationDisplayMode } from './preferences-extra'
 import type { SourceLanguage, TargetLanguage } from './target-language'
 
 export interface DomEngine {
@@ -28,6 +30,8 @@ export interface DomEngine {
   start(): void
   stop(): void
   restore(): void
+  setDisplayMode(mode: TranslationDisplayMode): void
+  isModelTranslated(node: Text): boolean
   dispose(): void
   invalidate(): void
   pauseAuto(): void
@@ -66,6 +70,7 @@ export interface DomEngineOptions {
   /** 当前翻译目标语言；engine 每次判定时调用，允许设置热更新。 */
   targetLanguage(): TargetLanguage
   sourceLanguage?: () => SourceLanguage
+  displayMode?: () => TranslationDisplayMode
   translateFixed?: (text: string) => string | undefined
   onAutoBatch(texts: string[], apply: AutoBatchApply): void
   onCapped?(): void
@@ -83,6 +88,12 @@ interface NodeRecord {
   applied: string
   generation: number
   location: string
+}
+
+interface ModelRendering {
+  readonly changes: readonly TextReplacement[]
+  readonly text: string
+  readonly block?: Element
 }
 
 interface ReplayEntry {
@@ -202,7 +213,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   const attrRecords = new WeakMap<Element, Map<string, AttrRecord>>()
   const modifiedTexts = new Set<Text>()
   /** 只含模型译文写入的节点：固定词典写入也进 modifiedTexts，不计入翻译进度。 */
-  const modelTexts = new Set<Text>()
+  const modelTexts = new Map<Text, ModelRendering>()
   const modifiedElements = new Set<Element>()
   const pending = new Map<Text, AutoEntry>()
   /** 网站在已译文本末尾追加原文时，记下已译前缀，只翻译新增部分 */
@@ -278,7 +289,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     let visible = 0
     for (const [node, source] of map) {
       const parent = node.parentElement
-      const stale = !node.isConnected || textValue(node) !== source || records.has(node) || parent === null ||
+      const stale = !node.isConnected || textValue(node) !== source || (records.has(node) && !layoutHidden.has(node)) || parent === null ||
         (layout && !wasRejected(node, source)) || isExcludedElement(parent)
       if (stale) map.delete(node)
       else if (isVisible(parent)) visible += 1
@@ -406,6 +417,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
 
   /** 行内单元按原样重绘：逐节点原文与有序标签结构都一致才整体回放，任一成员放不下就全部回滚。 */
   function replayUnit(node: Text): ReplayResult {
+    if (options.displayMode?.() === 'bilingual') return 'miss'
     if (unitReplayTexts.size === 0 || !options.autoEnabled()) return 'miss'
     const source = textValue(node)
     if (!unitReplayTexts.has(source) || unitFallback.has(node) || pageIdentity(location.href) !== lastLocation) return 'miss'
@@ -448,9 +460,9 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       for (const member of unit.nodes) dropEntry(member)
       return 'rejected'
     }
+    rememberRendering({ changes, block: unit.block, text: entry.applied.join('') })
     for (const change of changes) {
       rememberWrite(change)
-      modelTexts.add(change.node)
       const anchored = unitMembers.get(change.node)
       if (anchored !== undefined) {
         clearUnit(anchored)
@@ -470,11 +482,90 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     modifiedTexts.add(change.node)
   }
 
+  const bilingualNodes = new Map<Text, { line: HTMLElement; members: readonly Text[] }>()
+  const bilingualBlocks = new WeakMap<Element, Text>()
+  /** 原位替换被布局拒绝的模型译文仍在原有记录预算内，能回到双语但不计作已展示。 */
+  const layoutHidden = new Map<Text, Element | null>()
+
+  function rememberRendering(rendering: ModelRendering): void {
+    for (const { node } of rendering.changes) modelTexts.set(node, rendering)
+  }
+
+  function showBilingual(rendering: ModelRendering): boolean {
+    const { block, changes, text } = rendering
+    const anchor = changes[0]!.node
+    const line = block ? attachBilingualBlock(block, text) : attachBilingualNode(anchor, text)
+    if (!line) return false
+    if (block) bilingualBlocks.set(block, anchor)
+    const group = { line, members: changes.map(change => change.node) }
+    for (const { node, source } of changes) {
+      const original = records.get(node)?.original ?? source
+      if (node.data !== original) node.data = original
+      layoutHidden.delete(node)
+      bilingualNodes.set(node, group)
+      layoutSkips.delete(node)
+      redrawSkips.delete(node)
+      records.set(node, { original, applied: original, generation, location: lastLocation })
+      ownership.release(node, 'web')
+      modifiedTexts.add(node)
+      modelTexts.set(node, rendering)
+    }
+    return true
+  }
+
+  function displayRendering(mode: TranslationDisplayMode, rendering: ModelRendering): void {
+    const { changes, block } = rendering
+    const anchor = changes[0]!.node
+    const bilingual = bilingualNodes.get(anchor)
+    const hidden = layoutHidden.has(anchor)
+    if (!hidden && (mode === 'bilingual') === (bilingual !== undefined)) return
+    const current = changes.filter(({ node }) => node.isConnected && modelTexts.get(node) === rendering &&
+      records.get(node)?.applied === node.data && (!block || block.contains(node)) &&
+      (!hidden || (layoutHidden.get(node) === node.parentElement && node.parentElement && !isExcludedElement(node.parentElement))))
+    if (hidden && current.length !== changes.length) {
+      forgetNode(anchor)
+      return
+    }
+    if (mode === 'bilingual') {
+      if (current.length === changes.length) showBilingual(rendering)
+      else for (const change of current) showBilingual({ changes: [change], text: change.translated })
+    } else if (bilingual && current.length === changes.length) {
+      const replacements = changes.map(change => ({ ...change, source: records.get(change.node)!.original }))
+      removeBilingualNode(bilingual.line)
+      const measurable = current.every(({ node }) => node.parentElement !== null && isVisible(node.parentElement, node))
+      if (!measurable || !tryReplaceTextUnit(replacements)) {
+        noteLayoutSkips(replacements)
+        for (const { node } of replacements) layoutHidden.set(node, node.parentElement)
+        return
+      }
+      if (block) bilingualBlocks.delete(block)
+      for (const change of replacements) {
+        bilingualNodes.delete(change.node)
+        layoutHidden.delete(change.node)
+        rememberWrite(change)
+      }
+    }
+  }
+
+  function setDisplayMode(mode: TranslationDisplayMode): void {
+    for (const rendering of new Set(modelTexts.values())) displayRendering(mode, rendering)
+  }
+
   function forgetNode(node: Text): void {
-    records.delete(node)
-    modifiedTexts.delete(node)
-    modelTexts.delete(node)
-    ownership.release(node, 'web')
+    const group = bilingualNodes.get(node)
+    const block = modelTexts.get(node)?.block
+    if (group && block && bilingualBlocks.get(block) === group.members[0]) {
+      bilingualBlocks.delete(block)
+    }
+    removeBilingualNode(group?.line)
+    for (const member of group?.members ?? [node]) {
+      bilingualNodes.delete(member)
+      layoutHidden.delete(member)
+      records.delete(member)
+      modifiedTexts.delete(member)
+      modelTexts.delete(member)
+      ownership.release(member, 'web')
+    }
   }
 
   function writeNode(node: Text, source: string, translated: string): number {
@@ -483,12 +574,18 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       markCapped('records')
       return 0
     }
+    if ((options.displayMode?.() ?? 'replace') === 'bilingual') {
+      if (textValue(node) !== source) return 0
+      if (bilingualNodes.has(node)) forgetNode(node)
+      return showBilingual({ changes: [{ node, source, translated }], text: translated }) ? 1 : 0
+    }
     if (!tryReplaceText(node, source, translated)) {
       if (wasRejected(node, source)) noteSkip(layoutSkips, node, source)
       return 0
     }
-    rememberWrite({ node, source, translated })
-    modelTexts.add(node)
+    const change = { node, source, translated }
+    rememberWrite(change)
+    rememberRendering({ changes: [change], text: translated })
     return 1
   }
 
@@ -1342,12 +1439,21 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
               const trail = source.slice(source.trimEnd().length)
               return { node: member, source, translated: `${lead}${segments[i]!}${trail}` }
             })
+            const rendering = { changes, block: unit.block, text: inlineTranslationText(translated) }
+            if ((options.displayMode?.() ?? 'replace') === 'bilingual') {
+              const anchor = unit.nodes[0]
+              if (anchor !== undefined && rendering.text !== '') {
+                if (bilingualNodes.has(anchor)) forgetNode(anchor)
+                if (showBilingual(rendering)) {
+                  clearUnit(entry)
+                  continue
+                }
+              }
+            }
             const flags = tryReplaceTexts(changes)
             if (flags.every(Boolean)) {
-              changes.forEach((change) => {
-                rememberWrite({ node: change.node, source: change.source, translated: change.translated })
-                modelTexts.add(change.node)
-              })
+              changes.forEach(rememberWrite)
+              rememberRendering(rendering)
               rememberUnitReplay(unit, changes)
             } else {
               // 任一成员写回失败：整单元回滚；不写 failedItems，成员退到逐节点路径
@@ -1415,6 +1521,9 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     visitText(node) {
       if (disposed || suspended) return 0
       if (!node.isConnected) return 0
+      if (layoutHidden.has(node) && !wasRejected(node, node.data)) {
+        displayRendering(options.displayMode?.() ?? 'replace', modelTexts.get(node)!)
+      }
       const failedSource = failedItems.get(node)
       if (failedSource !== undefined && failedSource !== textValue(node)) {
         failedItems.delete(node)
@@ -1460,7 +1569,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       if (!node.isConnected) {
         if (record !== undefined && textValue(node) === record.applied) node.nodeValue = record.original
         forgetNode(node)
-      } else if (record === undefined || textValue(node) !== record.applied) {
+      } else if (record === undefined || textValue(node) !== record.applied ||
+        (layoutHidden.has(node) && layoutHidden.get(node) !== node.parentElement)) {
         forgetNode(node)
       }
       releaseRecordCap()
@@ -1579,6 +1689,20 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
         break
       }
       if (mutation.type === 'childList') {
+        if (bilingualNodes.size && [...mutation.addedNodes, ...mutation.removedNodes].some(
+          item => !(item instanceof Element && item.hasAttribute('data-wt-bilingual')),
+        )) {
+          let block = mutation.target instanceof Element ? mutation.target : null
+          while (block) {
+            const member = bilingualBlocks.get(block)
+            if (member) {
+              forgetNode(member)
+              roots.add(block)
+              break
+            }
+            block = block.parentElement
+          }
+        }
         removed ||= mutation.removedNodes.length > 0
         for (const added of mutation.addedNodes) {
           if (added instanceof Element && added.closest('[data-wt-root]') !== null) continue
@@ -1596,7 +1720,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
         if (record !== undefined) {
           // 诗歌逐句出现、聊天回复逐字输出：网站在译文后面接着写原文
           const value = textValue(node)
-          if (value.length > record.applied.length && value.startsWith(record.applied)) {
+          if (!bilingualNodes.has(node) && value.length > record.applied.length && value.startsWith(record.applied)) {
             appendedTails.set(node, { applied: record.applied, original: record.original })
           } else {
             appendedTails.delete(node)
@@ -1678,7 +1802,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   function revealTarget(target: EventTarget | null, force = false): void {
     if (!(target instanceof Element)) return
     // 原生弹层打开时可能没有可观察的属性变化；模型暂停或封顶仍允许本地回贴。
-    const canReplay = force && !disposed && !suspended && replay.size > 0 && options.autoEnabled()
+    const canReplay = force && !disposed && !suspended && (replay.size > 0 || layoutHidden.size > 0) && options.autoEnabled()
     if (!autoActive() && !canReplay) return
     if (target.closest('[data-wt-root]') !== null || isExcludedElement(target)) return
     if (force || observationOverflow) {
@@ -1726,6 +1850,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
   function syncPageIdentity(): void {
     const current = pageIdentity(location.href)
     if (current === lastLocation) return
+    for (const node of layoutHidden.keys()) forgetNode(node)
     lastLocation = current
     releaseBatchReservation()
     spent = 0
@@ -1817,6 +1942,8 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
 
   return {
     syncPageIdentity,
+    setDisplayMode,
+    isModelTranslated(node) { return modelTexts.has(node) && !layoutHidden.has(node) && records.get(node)?.applied === node.data },
     start() {
       if (disposed || document.body === null) return
       syncPageIdentity()
@@ -1913,7 +2040,7 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
       return {
         spent: Math.max(0, Math.trunc(spent)),
         budget: Number.isFinite(limit) ? Math.trunc(limit) : 0,
-        translated: modelTexts.size,
+        translated: modelTexts.size - layoutHidden.size,
         queued,
         ...(layoutSkipped > 0 ? { layoutSkipped } : {}),
         ...(redrawSkipped > 0 ? { redrawSkipped } : {}),

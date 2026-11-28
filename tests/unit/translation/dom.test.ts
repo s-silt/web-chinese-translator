@@ -59,11 +59,12 @@ function stubGeometry(): void {
   )
 }
 
-function makeEngine(options: { fixed?: boolean; auto?: boolean; debounceMs?: number; recordBudget?: number; autoBudget?: number }): DomEngine {
+function makeEngine(options: { fixed?: boolean; auto?: boolean; debounceMs?: number; recordBudget?: number; autoBudget?: number; displayMode?: 'bilingual' | 'replace' }): DomEngine {
   return createDomEngine({
     targetLanguage: () => 'zh-CN',
     fixedEnabled: () => options.fixed === true,
     autoEnabled: () => options.auto === true,
+    displayMode: () => options.displayMode ?? 'replace',
     autoBudget: options.autoBudget,
     translateFixed: (text) => fixedTranslationWith(DEVIN_ENTRIES, text),
     debounceMs: options.debounceMs ?? 10,
@@ -2535,6 +2536,131 @@ it('review5 失败记录和已译记录共享上限，移除节点释放容量',
 })
 
 describe('行内单元翻译', () => {
+  it.each([
+    { html: '<a href="#">Read the guide today.</a>', input: 'Read the guide today.', output: '阅读指南。', members: 1 },
+    { html: '<p>Read <a href="#">the guide</a> today.</p>', input: 'Read <1>the guide</1> today.', output: '阅读<1>指南</1>。', members: 3 },
+  ])('双语切换为替换时若容器放不下译文，保留原文并跳过重发（$members 个节点）', async ({ html, input, output, members }) => {
+    document.body.innerHTML = html
+    const link = document.querySelector('a')!
+    const label = link.firstChild as Text
+    const originalLabel = label.data
+    const settings: { auto: boolean; displayMode: 'bilingual' | 'replace' } = { auto: true, displayMode: 'bilingual' }
+    engine = makeEngine(settings)
+    engine.start()
+    await settle()
+    expect(batches[0]?.texts).toEqual([input])
+    batches[0]!.apply([output])
+    await settle()
+    expect(document.querySelectorAll('[data-wt-bilingual]')).toHaveLength(1)
+    expect(engine.isModelTranslated(label)).toBe(true)
+    const used = engine.progress().spent
+    let tooNarrow = true
+    Object.defineProperty(link, 'clientWidth', { get: () => 10 })
+    Object.defineProperty(link, 'scrollWidth', { get: () => tooNarrow && label.data.includes('指南') ? 999 : 10 })
+    settings.displayMode = 'replace'
+    engine.setDisplayMode(settings.displayMode)
+    engine.start()
+    await settle(400)
+    expect(document.body.innerHTML).toBe(html)
+    expect(engine.isModelTranslated(label)).toBe(false)
+    expect(engine.progress()).toMatchObject({ translated: 0, layoutSkipped: members, spent: used })
+    link.className = 'site-rerender'
+    await settle(500)
+    expect(batches).toHaveLength(1)
+    for (let turn = 0; turn < 2; turn++) {
+      settings.displayMode = 'bilingual'
+      engine.setDisplayMode(settings.displayMode)
+      await settle()
+      expect(document.querySelectorAll('[data-wt-bilingual]')).toHaveLength(1)
+      expect(document.querySelector('[data-wt-bilingual]')?.textContent).toBe('阅读指南。')
+      expect(engine.progress()).toMatchObject({ translated: members, spent: used })
+      settings.displayMode = 'replace'
+      engine.setDisplayMode(settings.displayMode)
+      await settle()
+      expect(document.querySelector('[data-wt-bilingual]')).toBeNull()
+      expect(engine.progress()).toMatchObject({ translated: 0, layoutSkipped: members, spent: used })
+      expect(batches).toHaveLength(1)
+    }
+    tooNarrow = false
+    link.style.display = 'none'
+    window.dispatchEvent(new Event('resize'))
+    await settle(650)
+    expect(label.data).toBe(originalLabel)
+    expect(document.querySelector('[data-wt-bilingual]')).toBeNull()
+    expect(engine.progress()).toMatchObject({ translated: 0, spent: used })
+    expect(batches).toHaveLength(1)
+    link.style.display = ''
+    await settle(650)
+    expect(label.data).toContain('指南')
+    expect(engine.progress()).toMatchObject({ translated: members, spent: used })
+    expect(batches).toHaveLength(1)
+    settings.displayMode = 'bilingual'
+    engine.setDisplayMode('bilingual')
+    tooNarrow = true
+    settings.displayMode = 'replace'
+    engine.setDisplayMode('replace')
+    expect(engine.progress().translated).toBe(0)
+    engine.restore()
+    engine.setDisplayMode('bilingual')
+    expect(document.querySelector('[data-wt-bilingual]')).toBeNull()
+    expect(engine.progress().translated).toBe(0)
+  })
+
+  it.each(['edit', 'move', 'route', 'recreate'] as const)('替换被布局拒绝后，%s 使旧双语译文失效', async (change) => {
+    document.body.innerHTML = '<a href="#">Read the guide today.</a><aside></aside>'
+    const link = document.querySelector('a')!
+    const source = link.firstChild as Text
+    const settings: { auto: boolean; displayMode: 'bilingual' | 'replace' } = { auto: true, displayMode: 'bilingual' }
+    engine = makeEngine(settings)
+    engine.start()
+    await settle()
+    batches[0]!.apply(['旧译文'])
+    Object.defineProperty(link, 'clientWidth', { get: () => 10 })
+    Object.defineProperty(link, 'scrollWidth', { get: () => source.data === '旧译文' ? 999 : 10 })
+    settings.displayMode = 'replace'
+    engine.setDisplayMode('replace')
+    settings.auto = false
+    if (change === 'edit') source.data = 'Updated article today.'
+    if (change === 'move') document.querySelector('aside')!.append(source)
+    if (change === 'recreate') link.replaceChildren(document.createTextNode(source.data))
+    if (change === 'route') {
+      vi.stubGlobal('location', new URL('https://new.fixture.test/other'))
+      engine.syncPageIdentity()
+    }
+    settings.displayMode = 'bilingual'
+    engine.setDisplayMode('bilingual')
+    await settle()
+    expect(document.querySelector('[data-wt-bilingual]')).toBeNull()
+    expect(engine.progress().translated).toBe(0)
+    expect(batches).toHaveLength(1)
+  })
+
+  it('双语行保留链接，网站改写内部链接文字后更新整行，移除段落后也能完整恢复', async () => {
+    document.body.innerHTML = '<p>Read <a href="/guide">the guide</a> today.</p>'
+    const paragraph = document.querySelector('p')!
+    const link = paragraph.querySelector('a')!
+    engine = makeEngine({ auto: true, displayMode: 'bilingual' })
+    engine.start()
+    await settle()
+    batches[0]!.apply(['阅读 <1>指南</1>。'])
+    await settle()
+    const line = '[data-wt-bilingual]'
+    expect(paragraph.querySelector(line)?.textContent).toBe('阅读 指南。')
+    expect(link.textContent).toBe('the guide')
+    link.textContent = 'the manual'
+    await settle(300)
+    expect(batches.at(-1)!.texts).toEqual(['Read <1>the manual</1> today.'])
+    batches.at(-1)!.apply(['阅读<1>手册</1>。'])
+    await settle()
+    expect(paragraph.querySelectorAll(line)).toHaveLength(1)
+    expect(paragraph.querySelector(line)?.textContent).toBe('阅读手册。')
+    paragraph.remove()
+    engine.restore()
+    expect(paragraph.querySelector(line)).toBeNull()
+    expect(paragraph.querySelector('a')).toBe(link)
+    expect(paragraph.textContent).toBe('Read the manual today.')
+  })
+
   it.each(['changed-tag', 'layout'] as const)(
     '整句回贴遇到 %s 时不留下半段译文',
     async (reason) => {

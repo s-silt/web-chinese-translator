@@ -1,5 +1,5 @@
 import { getTranslationConfig, type TranslationConfig, type TranslationModelConfig } from './config'
-import { readApiKey, readCustomHeaders } from './secrets'
+import { credentialOrigin, readApiKey, readCustomHeaders } from './secrets'
 
 export interface ModelSnapshot {
   readonly config: TranslationConfig
@@ -71,4 +71,31 @@ export function modelSnapshot(): Promise<ModelSnapshot> {
         : await readCustomHeaders(config.baseUrl, config.customHeadersRevision),
     revision,
   }))
+}
+
+/** 划词和独立窗口使用选定的配置档；凭据仅在来源相同的接口间复用。 */
+export function resolveSceneSnapshot(
+  snapshot: ModelSnapshot,
+  scene: 'page' | 'selection' | 'text',
+): ModelSnapshot {
+  if (scene === 'page') return snapshot
+  const targetId = snapshot.config.selectionProfileId
+  if (targetId === '') return snapshot
+  const profile = snapshot.config.modelProfiles.find((item) => item.id === targetId)
+  if (!profile) return snapshot
+  const sameOrigin = credentialOrigin(profile.baseUrl) === credentialOrigin(snapshot.config.baseUrl)
+  // 本机只保存一套来源绑定的凭据。其他来源的配置档可以使用匿名接口。
+  return {
+    ...snapshot,
+    apiKey: sameOrigin ? snapshot.apiKey : '',
+    customHeaders: sameOrigin ? snapshot.customHeaders ?? {} : {},
+    config: {
+      ...snapshot.config,
+      baseUrl: profile.baseUrl,
+      model: profile.model,
+      apiType: profile.apiType,
+      temperature: profile.temperature,
+      ...(sameOrigin ? {} : { customHeadersRevision: '', requestParams: {} }),
+    },
+  }
 }

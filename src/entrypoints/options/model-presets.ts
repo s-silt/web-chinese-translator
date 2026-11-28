@@ -10,5 +10,8 @@ export const MODEL_PRESETS: readonly ModelPreset[] = [
   { id: 'deepseek', key: 'wtPresetDeepSeek', url: 'https://api.deepseek.com' },
   { id: 'openai', key: 'wtPresetOpenAI', url: 'https://api.openai.com/v1' },
   { id: 'claude', key: 'wtPresetClaude', url: 'https://api.anthropic.com/v1' },
+  { id: 'gemini', key: 'wtPresetGemini', url: 'https://generativelanguage.googleapis.com/v1beta/openai' },
+  { id: 'ollama', key: 'wtPresetOllama', url: 'http://localhost:11434/v1' },
+  { id: 'lmstudio', key: 'wtPresetLmStudio', url: 'http://localhost:1234/v1' },
   { id: 'custom', key: 'wtPresetCustom', url: '' },
 ]

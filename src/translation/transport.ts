@@ -1,6 +1,24 @@
 import { completionUrl, isModelId, MAX_DISCOVERED_MODELS, modelsUrl, type CompletionConfig } from './config'
 import { parseRetryAfter, requestTimeoutMs, type FailureCode } from './failure'
 import { completionBody, normalizeCustomHeaders } from './request-options'
+import { extractCompletionUsage, type CompletionUsage } from './usage-stats'
+
+type UsageObserver = (usage: CompletionUsage | undefined, chars: number) => void
+let usageObserver: UsageObserver | undefined
+
+/** 注册全局模型用量观察者（由后台脚本挂载，用于本地 BYOK 统计）。 */
+export function setCompletionUsageObserver(observer: UsageObserver | undefined): void {
+  usageObserver = observer
+}
+
+function notifyUsage(payload: unknown, chars: number): void {
+  if (!usageObserver) return
+  try {
+    usageObserver(extractCompletionUsage(payload), chars)
+  } catch {
+    void 0
+  }
+}
 
 export class TranslationError extends Error {
   readonly code: FailureCode
@@ -151,6 +169,7 @@ export async function requestCompletion(
     const parsed = parseJson(body)
     const content = config.apiType === 'responses' ? readResponseContent(parsed) : readMessageContent(parsed)
     if (signal?.aborted) throw new CompletionCancelledError()
+    notifyUsage(parsed, userContent.length)
     return content
   } catch (error) {
     if (error instanceof TranslationError || error instanceof CompletionCancelledError) throw error
@@ -281,5 +300,167 @@ export async function requestModelList(
   } finally {
     clearTimeout(timer)
     signal?.removeEventListener('abort', onAbort)
+  }
+}
+
+function extractStreamDelta(payload: unknown, apiType: CompletionConfig['apiType']): string {
+  if (!isRecord(payload)) return ''
+  // Anthropic 原生 SSE: content_block_delta -> delta.type === 'text_delta'
+  if (payload.type === 'content_block_delta' && isRecord(payload.delta) && payload.delta.type === 'text_delta') {
+    return typeof payload.delta.text === 'string' ? payload.delta.text : ''
+  }
+  if (apiType === 'responses') {
+    if (payload.type === 'response.output_text.delta' && typeof payload.delta === 'string') {
+      return payload.delta
+    }
+    return ''
+  }
+  const choices = payload.choices
+  if (!Array.isArray(choices) || choices.length === 0) return ''
+  const first = choices[0]
+  if (!isRecord(first)) return ''
+  const delta = first.delta
+  if (!isRecord(delta)) return ''
+  return typeof delta.content === 'string' ? delta.content : ''
+}
+
+/**
+ * 流式请求模型补全（SSE）。兼容 OpenAI Chat Completions 与 Responses 流式事件；
+ * 若服务端忽略 stream 参数直接返回 JSON，则自动降级解析完整响应并触发一次 onDelta。
+ */
+export async function requestCompletionStream(
+  config: CompletionConfig,
+  systemPrompt: string,
+  userContent: string,
+  apiKey: string,
+  onDelta: (delta: string, accumulated: string) => void,
+  signal?: AbortSignal,
+  fetcher: typeof fetch = fetch,
+  timeoutMs: number = requestTimeoutMs(userContent.length),
+): Promise<string> {
+  const url = completionUrl(config.baseUrl, config.apiType)
+  if (url === '') throw new TranslationError('请先配置接口地址')
+  if (signal?.aborted) throw new CompletionCancelledError()
+  let headers: Record<string, string>
+  let requestBody: string
+  try {
+    headers = {
+      ...normalizeCustomHeaders(config.customHeaders ?? {}),
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream, application/json',
+    }
+    if (apiKey !== '') headers.Authorization = 'Bearer ' + apiKey
+    const payload = completionBody(config, systemPrompt, userContent, {
+      includeUsageByDefault: new URL(url).origin === 'https://api.openai.com',
+    })
+    requestBody = JSON.stringify(payload)
+  } catch {
+    throw new TranslationError('模型请求设置无效，请检查高级设置')
+  }
+  const controller = new AbortController()
+  const onExternalAbort = (): void => {
+    controller.abort()
+  }
+  signal?.addEventListener('abort', onExternalAbort)
+  const timer = setTimeout(() => {
+    controller.abort()
+  }, timeoutMs)
+  try {
+    const response = await fetcher(url, {
+      method: 'POST',
+      headers,
+      body: requestBody,
+      credentials: 'omit',
+      redirect: 'error',
+      referrerPolicy: 'no-referrer',
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'))
+      await cancelBody(response)
+      throw httpError(response.status, retryAfterMs)
+    }
+    const contentType = (response.headers.get('content-type') ?? '').toLowerCase()
+    if (!contentType.includes('text/event-stream') || response.body === null || typeof response.body.getReader !== 'function') {
+      const body = await readLimitedText(response)
+      const parsed = parseJson(body)
+      const content = config.apiType === 'responses' ? readResponseContent(parsed) : readMessageContent(parsed)
+      if (signal?.aborted) throw new CompletionCancelledError()
+      if (!content.trim() || content.length > 18_000) throw invalidCompletion()
+      notifyUsage(parsed, userContent.length)
+      onDelta(content, content)
+      return content
+    }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    let accumulated = ''
+    let received = 0
+    let lastUsagePayload: unknown
+    let completed = false
+    let chatFinished = false
+    function consumeLine(line: string): void {
+      if (!line.startsWith('data:')) return
+      const data = line.slice(5).trim()
+      if (data === '[DONE]') {
+        completed = true
+        return
+      }
+      if (data === '') return
+      const parsed = parseJson(data)
+      if (!isRecord(parsed)) throw invalidCompletion()
+      const firstChoice: unknown = Array.isArray(parsed.choices) ? parsed.choices[0] : undefined
+      const finishReason = isRecord(firstChoice) ? firstChoice.finish_reason : undefined
+      const stopReason = parsed.type === 'message_delta' && isRecord(parsed.delta) ? parsed.delta.stop_reason : undefined
+      if (parsed.error || parsed.type === 'error' || parsed.type === 'response.failed' || parsed.type === 'response.incomplete' ||
+        (finishReason != null && finishReason !== 'stop') ||
+        (stopReason != null && stopReason !== 'end_turn' && stopReason !== 'stop_sequence')) {
+        throw new TranslationError('模型未完成翻译，请重试', 'bad_output')
+      }
+      // Chat 的用量可能在 finish_reason 之后的独立块中，继续读取到 [DONE] 或正常 EOF。
+      if (finishReason === 'stop') chatFinished = true
+      const usageSource = isRecord(parsed.response) ? parsed.response : parsed
+      if (usageSource.usage !== undefined) lastUsagePayload = usageSource
+      const delta = extractStreamDelta(parsed, config.apiType)
+      if (delta !== '') {
+        accumulated += delta
+        if (accumulated.length > 18_000) throw invalidCompletion()
+        if (signal?.aborted) throw new CompletionCancelledError()
+        onDelta(delta, accumulated)
+      }
+      if (parsed.type === 'message_stop' || parsed.type === 'response.completed') completed = true
+    }
+    try {
+      while (!completed) {
+        const chunk = await reader.read()
+        if (chunk.done) {
+          consumeLine((buffer + decoder.decode()).trim())
+          break
+        }
+        received += chunk.value.byteLength
+        if (received > MAX_RESPONSE_BYTES) throw new TranslationError('响应过大', 'bad_output')
+        const lines = (buffer + decoder.decode(chunk.value, { stream: true })).split('\n')
+        buffer = lines.pop()!
+        for (const line of lines) {
+          consumeLine(line.trim())
+          if (completed) break
+        }
+      }
+      if (signal?.aborted) throw new CompletionCancelledError()
+      if ((!completed && !chatFinished) || accumulated.trim() === '') throw invalidCompletion()
+      notifyUsage(lastUsagePayload, userContent.length)
+      return accumulated
+    } finally {
+      void reader.cancel().catch(() => undefined)
+      reader.releaseLock()
+    }
+  } catch (error) {
+    if (error instanceof TranslationError || error instanceof CompletionCancelledError) throw error
+    if (signal?.aborted) throw new CompletionCancelledError()
+    if (isAbortError(error)) throw new TranslationError('请求超时，请稍后重试', 'timeout')
+    throw new TranslationError('无法连接翻译服务', 'network')
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', onExternalAbort)
   }
 }

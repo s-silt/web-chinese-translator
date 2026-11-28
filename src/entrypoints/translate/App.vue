@@ -182,10 +182,10 @@ import { useI18n, useUiPreferencesSync } from '../../components/ui-preferences'
 import { useSettings } from '../../components/useSettings'
 import { copySelectionText } from '../../translation/clipboard'
 import { closePageSession, sendTranslationMessage } from '../../translation/client'
+import { isTranslationReply, TEXT_STREAM_PORT, type TranslationFailure, type TranslationMessage, type TranslationReply } from '../../translation/messages'
 import type { TranslationConfig } from '../../translation/config'
-import type { FailureCode } from '../../translation/failure'
+import { MAX_REQUEST_TIMEOUT_MS, QUEUE_WAIT_LIMIT_MS, type FailureCode } from '../../translation/failure'
 import { createId } from '../../translation/id'
-import type { TranslationFailure } from '../../translation/messages'
 import {
   TARGET_LANGUAGES,
   TARGET_LANGUAGE_NATIVE_LABEL,
@@ -246,6 +246,7 @@ const cancelButton = useTemplateRef<ComponentPublicInstance>('cancelButton')
 let epoch = 0
 let configEpoch = 0
 let requestId: string | undefined
+let stopStream: (() => void) | undefined
 let disposed = false
 let languagesDirty = false
 let defaultsApplied = false
@@ -294,7 +295,8 @@ function invalidate(): void {
   epoch += 1
   const id = requestId
   requestId = undefined
-  if (id !== undefined) void sendTranslationMessage({ type: 'wt:cancel-assist', requestId: id })
+  if (stopStream) stopStream()
+  else if (id !== undefined) void sendTranslationMessage({ type: 'wt:cancel-assist', requestId: id })
   busy.value = false
   result.value = ''
   error.value = ''
@@ -374,22 +376,70 @@ async function submit(): Promise<void> {
   error.value = ''
   requestFailed.value = false
   result.value = ''
-  const reply = await sendTranslationMessage({
-    type: 'wt:translate-text',
+  const message = {
+    type: 'wt:translate-text' as const,
     text: value,
     sourceLanguage: source.value,
     targetLanguage: target.value,
     requestId: id,
-  })
+  }
+  const reply = await (tryStreamTranslate(message, generation) ?? sendTranslationMessage(message))
   if (disposed || generation !== epoch) return
   busy.value = false
   requestId = undefined
   if (reply.ok) result.value = reply.texts[0] ?? ''
   else {
+    result.value = ''
     error.value = failureText(reply)
     errorHintKey.value = (reply.code === undefined ? undefined : RECOVERY_KEYS[reply.code]) ?? 'textTranslateErrorHint'
     requestFailed.value = true
   }
+}
+
+type TextRequest = Extract<TranslationMessage, { type: 'wt:translate-text' }>
+
+function tryStreamTranslate(message: TextRequest, generation: number): Promise<TranslationReply<'wt:translate-text'>> | undefined {
+  let port: ReturnType<typeof browser.runtime.connect>
+  try {
+    port = browser.runtime.connect({ name: TEXT_STREAM_PORT })
+    if (!port?.onMessage?.addListener || !port.onDisconnect?.addListener || !port.postMessage) {
+      port?.disconnect()
+      return undefined
+    }
+  } catch {
+    return undefined
+  }
+
+  return new Promise((resolve) => {
+    const disconnected: TranslationFailure = { ok: false, error: '无法连接扩展后台，请重试或刷新页面', code: 'disconnected' }
+    const timeout = setTimeout(() => finish(disconnected), QUEUE_WAIT_LIMIT_MS.interactive + MAX_REQUEST_TIMEOUT_MS + 7000)
+    const stop = (): void => finish({ ok: false, error: '已取消', code: 'cancelled' })
+    const finish = (reply: TranslationReply<'wt:translate-text'>): void => {
+      if (stopStream !== stop) return
+      stopStream = undefined
+      clearTimeout(timeout)
+      try { port.disconnect() } catch { /* 后台可能已在端口另一端关闭。 */ }
+      resolve(reply)
+    }
+    stopStream = stop
+    port.onDisconnect.addListener(() => {
+      void browser.runtime.lastError
+      finish(disconnected)
+    })
+    port.onMessage.addListener((raw: unknown) => {
+      if (stopStream !== stop || disposed || generation !== epoch || typeof raw !== 'object' || !raw) return
+      const msg = raw as Record<string, unknown>
+      if (msg.requestId !== message.requestId) return
+      if (msg.type === 'delta' && typeof msg.text === 'string') result.value = msg.text
+      else if (msg.type === 'result' && isTranslationReply(msg.reply, message)) finish(msg.reply)
+      else finish(disconnected)
+    })
+    try {
+      port.postMessage(message)
+    } catch {
+      finish(disconnected)
+    }
+  })
 }
 
 async function copy(): Promise<void> {

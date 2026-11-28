@@ -74,6 +74,7 @@ import {
   currentRevision,
   invalidateModelState,
   modelRequestConfig,
+  resolveSceneSnapshot,
   modelSnapshot,
   readConsistentModelState,
   serializeMutation,
@@ -118,8 +119,9 @@ import {
   writeStoredCustomHeaders,
   type BoundCustomHeaders,
 } from './secrets'
-import { clearPersistentTranslations } from './persistent-cache'
-import { clearTranslationCache, requestTranslation } from './queue'
+import { clearPersistentTranslations, clearPersistentTranslationsForHost, getPersistentCacheStats } from './persistent-cache'
+import { getUsageStats, recordUsageDelta, resetUsageStats } from './usage-stats'
+import { clearTranslationCache, clearTranslationCacheForHost, requestTranslation } from './queue'
 import {
   cancelModelTasks,
   clearAutomaticPause,
@@ -127,7 +129,8 @@ import {
   restoreAutomaticPause,
   scheduleModelTask,
 } from './scheduler'
-import { CompletionCancelledError, requestModelList } from './transport'
+import { CompletionCancelledError, requestModelList, setCompletionUsageObserver } from './transport'
+import { installTextStreamPort, streamTranslatedText, type TextStream } from './background-stream'
 import {
   installSiteScriptSync,
   SITE_SCRIPT_FILES,
@@ -308,6 +311,7 @@ async function startPageTranslation(tab: PageTarget): Promise<TranslationReply<'
 }
 
 interface DispatchPolicy {
+  hover?: boolean
   origin?: string
   auto?: boolean
   feature?: 'input'
@@ -332,6 +336,7 @@ async function assertDispatchAllowed(
     await manualPageAllowed(policy.pageSender)
   checkCurrent(snapshot, signal)
   if (config.baseUrl === '' || config.model === '') throw new TranslationError('请先配置接口地址与模型')
+  if (policy.hover && !config.hoverTranslateEnabled) throw new TranslationError('未开启悬停翻译')
   if (policy.feature !== undefined) {
     if (policy.pageSender?.frameId !== 0) {
       if (
@@ -649,6 +654,7 @@ async function saveConfig(
     const proactiveOn = selectionOn && !toolbarOn && (patch.proactiveAssistEnabled ?? previous.proactiveAssistEnabled)
     if (
       patch.selectionPopupEnabled === true ||
+      patch.hoverTranslateEnabled === true ||
       patch.inputTranslationEnabled === true
     ) {
       const allowed = await Promise.all(['http://*/*', 'https://*/*'].map(patternAllowed))
@@ -707,6 +713,22 @@ async function saveConfig(
       }
     }
     const nextMode = patch.siteScopeMode ?? previous.siteScopeMode
+    const profiles = patch.modelProfiles === undefined ? previous.modelProfiles
+      : sanitizeTranslationConfig({ ...previous, modelProfiles: patch.modelProfiles }).modelProfiles
+    if (patch.modelProfiles && profiles.length !== patch.modelProfiles.length) {
+      reply = { ok: false, error: '模型档案包含无效地址、模型名称或重复标识' }
+      return
+    }
+    const currentProfile = profiles.find(profile => profile.id === previous.activeProfileId)
+    const matchesCurrent = currentProfile?.baseUrl === nextBase && currentProfile.model === nextModel &&
+      currentProfile.apiType === (patch.apiType ?? previous.apiType) &&
+      currentProfile.temperature === (patch.temperature !== undefined ? patch.temperature : previous.temperature)
+    const activeProfileId = patch.activeProfileId ?? (matchesCurrent ? previous.activeProfileId : '')
+    const selectionProfileId = patch.selectionProfileId ?? previous.selectionProfileId
+    if ([activeProfileId, selectionProfileId].some(id => id !== '' && !profiles.some(profile => profile.id === id))) {
+      reply = { ok: false, error: '所选模型档案不存在，请刷新后重试' }
+      return
+    }
     Object.assign(next, {
       baseUrl: nextBase,
       model: nextModel,
@@ -717,6 +739,13 @@ async function saveConfig(
       ...(patch.disabledDictionaries !== undefined ? { disabledDictionaries: [...patch.disabledDictionaries] } : {}),
       ...(patch.targetLanguage !== undefined ? { targetLanguage: patch.targetLanguage } : {}),
       ...(patch.sourceLanguage !== undefined ? { sourceLanguage: patch.sourceLanguage } : {}),
+      displayMode: patch.displayMode ?? previous.displayMode,
+      translationStyle: patch.translationStyle ?? previous.translationStyle,
+      promptGlossary: patch.promptGlossary ?? previous.promptGlossary,
+      modelProfiles: profiles,
+      activeProfileId,
+      selectionProfileId,
+      hoverTranslateEnabled: patch.hoverTranslateEnabled ?? previous.hoverTranslateEnabled,
       selectionPopupEnabled: selectionOn,
       selectionToolbarEnabled: toolbarOn,
       proactiveAssistEnabled: proactiveOn,
@@ -923,18 +952,23 @@ async function handleTest(sender: MessageSender): Promise<TranslationReply<'wt:t
 async function handleTextTranslation(
   message: Extract<TranslationMessage, { type: 'wt:translate-text' }>,
   sender: MessageSender,
+  stream?: TextStream,
 ): Promise<TranslationReply<'wt:translate-text'>> {
   const pageSession = pageSessionKey(sender, message.pageSession)
   if (pageSessionEnded(pageSession)) return failureReply(new CompletionCancelledError())
   const scope = assistScope(sender)
   const key = `${scope}:${message.requestId}`
   if (requests.has(key)) return { ok: false, error: '请求 ID 重复' }
-  const controller = new TrackedRequest('test', '', pageSession)
+  const controller = new TrackedRequest('text', '', pageSession)
+  const cancel = (): void => controller.abort()
+  if (stream?.signal.aborted) return failureReply(new CompletionCancelledError())
+  stream?.signal.addEventListener('abort', cancel)
   requests.set(key, controller)
   interactive.add(key)
   try {
-    const snapshot = await modelSnapshot().catch(() => undefined)
-    if (snapshot === undefined) return unavailableReply(snapshot)
+    const rawSnapshot = await modelSnapshot().catch(() => undefined)
+    if (rawSnapshot === undefined) return unavailableReply(rawSnapshot)
+    const snapshot = resolveSceneSnapshot(rawSnapshot, 'text')
     const texts = await scheduleModelTask(
       'interactive',
       async (signal) => {
@@ -944,7 +978,12 @@ async function handleTextTranslation(
           sourceLanguage: message.sourceLanguage,
           targetLanguage: message.targetLanguage,
         }
-        const result = await translateTexts(model, [message.text], snapshot.apiKey, fetch, signal)
+        const result = stream
+          ? [await streamTranslatedText(model, message.text, snapshot.apiKey, signal, (text) => {
+              checkCurrent(snapshot, signal)
+              stream.onText(text)
+            })]
+          : await translateTexts(model, [message.text], snapshot.apiKey, fetch, signal)
         checkCurrent(snapshot, signal)
         await assertDispatchAllowed(snapshot, signal)
         return result
@@ -955,6 +994,7 @@ async function handleTextTranslation(
   } catch (error) {
     return failureReply(error)
   } finally {
+    stream?.signal.removeEventListener('abort', cancel)
     if (requests.get(key) === controller) {
       requests.delete(key)
       interactive.delete(key)
@@ -993,7 +1033,8 @@ async function handleTranslate(
   }
   const feature = message.mode === 'input' ? message.mode : undefined
   const manualInput = feature === 'input' && message.manualInput === true
-  const isInteractive = message.mode === 'selection'
+  const isHover = message.mode === 'hover'
+  const isInteractive = message.mode === 'selection' || isHover
   if (feature !== undefined) {
     for (const [other, existing] of requests) {
       if (other !== key && other.startsWith(`${scope}:`) && existing.kind === feature) {
@@ -1028,7 +1069,11 @@ async function handleTranslate(
     const settings = await getSettings()
     if (!settings.enabled) return { ok: false, error: '总开关已关闭' }
     const origin = normalizeOrigin(sourceUrl)
-    const snapshot = await modelSnapshot().catch(() => undefined)
+    const rawSnapshot = await modelSnapshot().catch(() => undefined)
+    const snapshot =
+      rawSnapshot !== undefined && isInteractive
+        ? resolveSceneSnapshot(rawSnapshot, 'selection')
+        : rawSnapshot
     if (controller.signal.aborted) {
       return failed(new CompletionCancelledError())
     }
@@ -1051,6 +1096,7 @@ async function handleTranslate(
       await assertDispatchAllowed(snapshot, controller.signal, {
         origin,
         pageSender: sender,
+        hover: isHover,
         auto: message.mode === 'auto',
         feature,
         manualInput,
@@ -1062,6 +1108,15 @@ async function handleTranslate(
     }
     const stillAllowed = async (snap: ModelSnapshot): Promise<boolean> => {
       try {
+        if (isHover) {
+          const tabId = sender.tab!.id!
+          if (sender.documentId) {
+            if (!(await verifiedRouteSender(sender, sourceUrl))) throw new CompletionCancelledError()
+          } else {
+            const active = await browser.tabs.get(tabId)
+            if (typeof active.url !== 'string' || !matchesBrowserUrl(sourceUrl, active.url)) throw new CompletionCancelledError()
+          }
+        }
         let currentGrant: ManualGrant | undefined
         if (ticketId !== undefined) {
           currentGrant = await verifyManualTicket(sender, message.texts[0] ?? '', ticketId, key)
@@ -1071,6 +1126,7 @@ async function handleTranslate(
         await assertDispatchAllowed(snap, controller.signal, {
           origin,
           pageSender: sender,
+          hover: isHover,
           auto: message.mode === 'auto',
           feature,
           manualInput,
@@ -1099,7 +1155,7 @@ async function handleTranslate(
               sender.url ?? '',
               message.page,
               message.pageId ?? sender.documentId,
-              config.proactiveAssistEnabled,
+              !isHover && config.proactiveAssistEnabled,
               sender.tab?.id ?? -1,
               config,
               message.mode === 'auto',
@@ -1121,7 +1177,7 @@ async function handleTranslate(
               targetLanguage: snapshot.config.inputTargetLanguage,
             },
           }
-    const queueMode = message.mode === 'input' ? 'selection' : message.mode
+    const queueMode = message.mode === 'auto' ? 'auto' : 'selection'
     const outcome = await requestTranslation(
       requestSnapshot,
       queueMode,
@@ -1185,7 +1241,8 @@ async function handleAssist(
   const scope = assistScope(sender)
   const key = `${scope}:${message.requestId}`
   if (requests.has(key)) return { ok: false, error: '请求 ID 重复' }
-  const controller = new TrackedRequest('assist', sender.url ?? '', pageSession)
+  const selection = message.input.trigger === 'selection'
+  const controller = new TrackedRequest(selection ? 'selection-assist' : 'assist', sender.url ?? '', pageSession)
   for (const other of interactive) {
     if (other !== key && other.startsWith(`${scope}:`)) {
       requests.get(other)?.abort()
@@ -1204,10 +1261,11 @@ async function handleAssist(
     }
     const senderUrl = sender.url ?? ''
     await restoreAutomaticPause()
-    const snapshot = await modelSnapshot().catch(() => undefined)
-    if (snapshot === undefined || controller.signal.aborted) {
-      return unavailableReply(snapshot)
+    const baseSnapshot = await modelSnapshot().catch(() => undefined)
+    if (baseSnapshot === undefined || controller.signal.aborted) {
+      return unavailableReply(baseSnapshot)
     }
+    const snapshot = selection ? resolveSceneSnapshot(baseSnapshot, 'selection') : baseSnapshot
     const origin = normalizeOrigin(senderUrl)
     const host = origin === '' ? '' : new URL(origin).hostname
     if (host === '' || message.input.site !== host) return { ok: false, error: '站点不匹配' }
@@ -1690,6 +1748,7 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
           selection,
           smart: selection && !config.selectionToolbarEnabled && config.proactiveAssistEnabled,
           floating: interactiveAllowed && config.floatingButtonEnabled,
+          ...(modelAllowed && config.hoverTranslateEnabled ? { hover: true } : {}),
           input: modelAllowed && config.inputTranslationEnabled,
           ...(fixed ? { fixedEntries: merged } : {}),
         },
@@ -1779,6 +1838,36 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
         cleared = await clearPersistentTranslations()
       }, invalidateModelWork)
       return (cleared ? { ok: true } : { ok: false, error: '清除失败' }) satisfies TranslationReply<'wt:clear-cache'>
+    }
+    case 'wt:clear-site-cache': {
+      if (!fromExtensionPage(sender)) return { ok: false, error: '无权访问' }
+      const host = message.host.toLowerCase()
+      let removed: number | undefined
+      await serializeMutation(async () => {
+        for (const request of requests.values()) {
+          if (request.kind !== 'auto' && request.kind !== 'selection' && request.kind !== 'hover') continue
+          const origin = normalizeOrigin(request.sourceUrl ?? request.url)
+          if (origin && new URL(origin).hostname === host) request.abort()
+        }
+        clearTranslationCacheForHost(host)
+        removed = await clearPersistentTranslationsForHost(host)
+      })
+      return (removed === undefined ? { ok: false, error: '清除失败' } : { ok: true }) satisfies TranslationReply<'wt:clear-site-cache'>
+    }
+    case 'wt:get-cache-stats': {
+      if (!fromExtensionPage(sender)) return { ok: false, error: '无权访问' }
+      const cacheStats = await getPersistentCacheStats()
+      return { ok: true, cacheStats } satisfies TranslationReply<'wt:get-cache-stats'>
+    }
+    case 'wt:get-usage-stats': {
+      if (!fromExtensionPage(sender)) return { ok: false, error: '无权访问' }
+      const usageStats = await getUsageStats()
+      return { ok: true, usageStats } satisfies TranslationReply<'wt:get-usage-stats'>
+    }
+    case 'wt:reset-usage-stats': {
+      if (!fromExtensionPage(sender)) return { ok: false, error: '无权访问' }
+      const usageStats = await resetUsageStats()
+      return { ok: true, usageStats } satisfies TranslationReply<'wt:reset-usage-stats'>
     }
     case 'wt:test':
       if (!fromExtensionPage(sender)) return { ok: false, error: '无权访问' }
@@ -2423,7 +2512,16 @@ export function installTranslationBackground(): void {
     )
     return true
   })
+  installTextStreamPort(handleTextTranslation)
   installPageSessions()
+  setCompletionUsageObserver((usage, chars) => {
+    void recordUsageDelta({
+      requests: 1,
+      inputTokens: usage?.inputTokens ?? 0,
+      outputTokens: usage?.outputTokens ?? 0,
+      translatedChars: chars,
+    }).catch(() => undefined)
+  })
   installMenuClickListener()
   installCommandListener()
   browser.runtime.onInstalled.addListener(() => {

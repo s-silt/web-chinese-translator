@@ -182,6 +182,55 @@ describe('选项页真实挂载', () => {
     }
   })
 
+  it('跨来源档案先填入草稿，显式保存提交新密钥并清除旧接口的自定义数据', async () => {
+    const profile = { id: 'second', name: 'Second', baseUrl: 'https://second.example/v1', model: 'other', apiType: 'responses' as const, temperature: null }
+    const original = { ...CONFIG, requestParams: { fixture: 'old' }, customHeadersRevision: '11111111-2222-3333-4444-555555555555', modelProfiles: [profile] }
+    const save = vi.fn(() => ({ ok: true, config: { ...original, ...profile, requestParams: {} }, keyState: 'ready' }))
+    replies({
+      'wt:get-config': () => ({ ok: true, config: original, keyState: 'ready', customHeadersState: 'ready' }),
+      'wt:save-config': save,
+      'wt:test': () => ({ ok: true, texts: ['ok'] }),
+    })
+    vi.spyOn(fakeBrowser.permissions, 'request').mockImplementation(async () => true)
+    const wrapper = mount(TranslationSection)
+    try {
+      await flushPromises()
+      wrapper.vm.prepareProfile(profile)
+      await flushPromises()
+      expect(save).not.toHaveBeenCalled()
+      expect(wrapper.get('[data-test="wt-model-input"]').element).toHaveProperty('value', 'other')
+      expect(wrapper.get('[data-test="wt-custom-headers"]').element).toHaveProperty('value', '{}')
+      await wrapper.get('input[type="password"]').setValue('fixture-second-key')
+      await wrapper.get('[data-test="wt-save"]').trigger('click')
+      await flushPromises()
+      expect(save).toHaveBeenCalledWith(expect.objectContaining({
+        patch: expect.objectContaining({ baseUrl: profile.baseUrl, model: profile.model, activeProfileId: profile.id, requestParams: {} }),
+        apiKey: 'fixture-second-key', customHeaders: {},
+      }))
+    } finally { wrapper.unmount() }
+  })
+
+  it('工具页切换模型后连接徽章要求重测', async () => {
+    let config = CONFIG
+    replies({
+      'wt:get-config': () => ({ ok: true, config, keyState: 'ready', endpointAuthorized: true }),
+      'wt:test': () => ({ ok: true, texts: ['ok'] }),
+    })
+    const wrapper = mount(TranslationSection)
+    try {
+      await flushPromises()
+      const badge = wrapper.get('[data-test="wt-connection"]')
+      const initial = badge.text()
+      await wrapper.get('[data-test="wt-test-connection"]').trigger('click')
+      await flushPromises()
+      expect(badge.text()).not.toBe(initial)
+      config = { ...CONFIG, model: 'other' }
+      await wrapper.vm.refreshSavedSettings()
+      await flushPromises()
+      expect(badge.text()).toBe(initial)
+    } finally { wrapper.unmount() }
+  })
+
   it('模式切换回复不覆盖未保存的接口/密钥草稿', async () => {
     const saved: Record<string, unknown>[] = []
     replies({

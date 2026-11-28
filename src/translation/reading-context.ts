@@ -17,13 +17,15 @@ const HEADING_MAX = 120
 const INSPECT_CAP = 200
 const TIME_CAP_MS = 8
 
-export function isReadableElement(element: Element): boolean {
+export function isReadableElement(element: Element, text?: Text): boolean {
   if (isExcludedElement(element)) return false
   if (element instanceof HTMLElement && element.isContentEditable) return false
   const root = element.getRootNode()
   if (root instanceof ShadowRoot && root.host.closest('[data-wt-root]') !== null) return false
   if (closestComposed(element, '[hidden],[aria-hidden="true"]') !== null) return false
-  if (typeof element.checkVisibility === 'function') {
+  // display:contents 本身没有盒子；仅当调用方提供直属文字时，按文字实际占据的范围测量。
+  const measureText = text?.parentElement === element && getComputedStyle(element).display === 'contents'
+  if (!measureText && typeof element.checkVisibility === 'function') {
     if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false
   } else {
     let ancestor: Element | null = element
@@ -39,6 +41,12 @@ export function isReadableElement(element: Element): boolean {
       ancestor = ancestor.parentElement ?? (ancestorRoot instanceof ShadowRoot ? ancestorRoot.host : null)
     }
     if (ancestor !== null) return false
+  }
+  if (measureText) {
+    const range = element.ownerDocument.createRange()
+    range.selectNodeContents(text)
+    const rect = range.getBoundingClientRect()
+    return rect.width > 0 && rect.height > 0
   }
   return element.getClientRects().length > 0
 }

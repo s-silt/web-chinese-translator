@@ -74,6 +74,13 @@ vi.mock('../../../src/translation/config', () => ({
 
 function scopeConfig(mode: SiteScopeMode, hosts: readonly string[]): TranslationConfig {
   return {
+    displayMode: 'replace',
+    translationStyle: 'natural',
+    promptGlossary: [],
+    modelProfiles: [],
+    activeProfileId: '',
+    selectionProfileId: '',
+    hoverTranslateEnabled: false,
     baseUrl: '',
     model: '',
     apiType: 'chat-completions',

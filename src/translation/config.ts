@@ -17,6 +17,33 @@ import {
   isInputAutoReplaceDelay,
   type InputReplaceMode,
 } from './input-replace-mode'
+import {
+  DEFAULT_DISPLAY_MODE,
+  DEFAULT_TRANSLATION_STYLE,
+  isDisplayMode,
+  isTranslationStyle,
+  sanitizeModelProfiles,
+  sanitizePromptGlossary,
+  type ModelProfile,
+  type PromptGlossaryEntry,
+  type TranslationDisplayMode,
+  type TranslationStyle,
+} from './preferences-extra'
+
+export {
+  DEFAULT_DISPLAY_MODE,
+  DEFAULT_TRANSLATION_STYLE,
+  DISPLAY_MODES,
+  isDisplayMode,
+  isModelProfileList,
+  isPromptGlossaryList,
+  isTranslationStyle,
+  TRANSLATION_STYLES,
+  type ModelProfile,
+  type PromptGlossaryEntry,
+  type TranslationDisplayMode,
+  type TranslationStyle,
+} from './preferences-extra'
 
 export {
   INPUT_AUTO_REPLACE_DELAY_DEFAULT,
@@ -55,6 +82,13 @@ export interface TranslationConfig {
   readonly excludedHosts: readonly string[]
   readonly siteScopeMode: SiteScopeMode
   readonly siteScopeHosts: readonly string[]
+  readonly displayMode: TranslationDisplayMode
+  readonly translationStyle: TranslationStyle
+  readonly promptGlossary: readonly PromptGlossaryEntry[]
+  readonly modelProfiles: readonly ModelProfile[]
+  readonly activeProfileId: string
+  readonly selectionProfileId: string
+  readonly hoverTranslateEnabled: boolean
 }
 
 /** 单页字符上限的可选档位（0 为不限）。旧版固定 20000，长文常在中途停住 */
@@ -91,6 +125,13 @@ export const DEFAULT_TRANSLATION_CONFIG: TranslationConfig = {
   excludedHosts: [],
   siteScopeMode: 'all',
   siteScopeHosts: [],
+  displayMode: DEFAULT_DISPLAY_MODE,
+  translationStyle: DEFAULT_TRANSLATION_STYLE,
+  promptGlossary: [],
+  modelProfiles: [],
+  activeProfileId: '',
+  selectionProfileId: '',
+  hoverTranslateEnabled: false,
 }
 
 export type CompletionConfig = Pick<TranslationConfig, 'baseUrl' | 'model'> & RequestOptions & {
@@ -99,7 +140,7 @@ export type CompletionConfig = Pick<TranslationConfig, 'baseUrl' | 'model'> & Re
 
 export type TranslationModelConfig = CompletionConfig &
   Pick<TranslationConfig, 'targetLanguage'> &
-  Partial<Pick<TranslationConfig, 'sourceLanguage'>>
+  Partial<Pick<TranslationConfig, 'sourceLanguage' | 'translationStyle' | 'promptGlossary'>>
 
 export const translationConfigItem = storage.defineItem<TranslationConfig>('local:translationConfig', {
   fallback: DEFAULT_TRANSLATION_CONFIG,
@@ -246,6 +287,8 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
   if (!isConfigRecord(value)) return DEFAULT_TRANSLATION_CONFIG
   const selectionOn = value.selectionPopupEnabled === true
   const toolbarOn = selectionOn && value.selectionToolbarEnabled === true
+  const modelProfiles = sanitizeModelProfiles(value.modelProfiles, normalizeBaseUrl, clampModel)
+  const savedProfile = (id: unknown): string => modelProfiles.find(profile => profile.id === id)?.id ?? ''
   return {
     baseUrl: typeof value.baseUrl === 'string' ? normalizeBaseUrl(value.baseUrl) : '',
     model: typeof value.model === 'string' ? clampModel(value.model) : '',
@@ -277,6 +320,13 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
     excludedHosts: sanitizeExcludedHosts(value.excludedHosts),
     siteScopeMode: isSiteScopeMode(value.siteScopeMode) ? value.siteScopeMode : 'all',
     siteScopeHosts: sanitizeExcludedHosts(value.siteScopeHosts),
+    displayMode: isDisplayMode(value.displayMode) ? value.displayMode : DEFAULT_DISPLAY_MODE,
+    translationStyle: isTranslationStyle(value.translationStyle) ? value.translationStyle : DEFAULT_TRANSLATION_STYLE,
+    promptGlossary: sanitizePromptGlossary(value.promptGlossary),
+    modelProfiles,
+    activeProfileId: savedProfile(value.activeProfileId),
+    selectionProfileId: savedProfile(value.selectionProfileId),
+    hoverTranslateEnabled: value.hoverTranslateEnabled === true,
   }
 }
 

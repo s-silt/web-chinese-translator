@@ -248,6 +248,7 @@ export function closestComposed(element: Element, selector: string): Element | n
 }
 
 export function isExcludedElement(element: Element): boolean {
+  if (closestComposed(element, '[data-wt-bilingual="1"]') !== null) return true
   if (closestComposed(element, GENERAL_EXCLUDE_SELECTOR) !== null) return true
   if (element instanceof HTMLElement && element.isContentEditable) return true
   return false

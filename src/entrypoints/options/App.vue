@@ -33,7 +33,12 @@
         <UiButton size="sm" data-test="wt-notice-dismiss" @click="noticeDismissed = true">{{ t('wtNoticeDismiss') }}</UiButton>
       </div>
       <DictionarySection v-if="translationSupported" v-show="currentNav === 'wt-dictionary-title'" />
-      <TranslationSection v-if="translationSupported" v-show="showTranslation" :view="translationView" />
+      <TranslationSection v-if="translationSupported" v-show="showTranslation" ref="translationSection" :view="translationView" />
+      <ToolsSection
+        v-if="translationSupported && currentNav === 'wt-tools-title'"
+        @saved="translationSection?.refreshSavedSettings()"
+        @configure-profile="configureProfile"
+      />
       <div v-show="currentNav === 'github-title'" id="github-title" class="wt-github-group" role="region" :aria-label="t('navGithub')">
         <div class="section wt-github-preferences">
           <h2 id="github-preferences-title" class="section-title">{{ t('navGithub') }}</h2>
@@ -70,13 +75,16 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import AppearanceSection from './AppearanceSection.vue'
 import CustomEntriesSection from './CustomEntriesSection.vue'
 import type { MessageKey } from '../../i18n'
+import type { ModelProfile } from '../../translation/config'
 import DictionarySection from './DictionarySection.vue'
 import ExcludedPathsSection from './ExcludedPathsSection.vue'
 import GeneralSection from '../popup/GeneralSection.vue'
 import LanguageSection from '../popup/LanguageSection.vue'
+import ToolsSection from './ToolsSection.vue'
 import TranslationSection from './TranslationSection.vue'
 
 const translationSupported = !isFirefoxBuild()
+const translationSection = ref<InstanceType<typeof TranslationSection>>()
 
 /** 扩展图标（public/ 下的文件）。用绑定而非静态属性：模板里静态的绝对路径会被编译成模块导入 */
 const LOGO_URL = '/icon/96.png'
@@ -93,6 +101,7 @@ const navLinks: readonly { target: string; key: MessageKey; group: NavGroupKey }
   { target: 'wt-general-title', key: 'navGeneral', group: 'navGroupGeneral' },
   { target: 'appearance-title', key: 'navAppearance', group: 'navGroupGeneral' },
   { target: 'wt-title', key: 'navModel', group: 'navGroupTranslation' },
+  { target: 'wt-tools-title', key: 'navTools', group: 'navGroupTranslation' },
   { target: 'wt-dictionary-title', key: 'navSites', group: 'navGroupDictionary' },
   { target: 'github-title', key: 'navGithub', group: 'navGroupAdvanced' },
   { target: 'about-title', key: 'navAbout', group: 'navGroupAdvanced' },
@@ -150,6 +159,13 @@ function scrollToSection(target: string, event: Event): void {
 function onHashChange(): void {
   currentNav.value = resolveNav(window.location.hash)
   void focusSection(currentNav.value)
+}
+
+async function configureProfile(profile: ModelProfile): Promise<void> {
+  currentNav.value = 'wt-title'
+  window.location.hash = currentNav.value
+  await focusSection(currentNav.value)
+  translationSection.value?.prepareProfile(profile)
 }
 
 onMounted(() => {

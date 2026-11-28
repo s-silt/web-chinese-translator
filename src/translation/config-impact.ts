@@ -1,9 +1,10 @@
 import { normalizeOrigin, type TranslationConfig } from './config'
 import { isExcludedSite } from './page-policy'
-import { requestOptionsKey } from './request-options'
+import { translationRequestOptionsKey } from './request-options'
 import { isSiteScopeAllowed } from './site-scope'
+import { glossarySignature } from './preferences-extra'
 
-export type RequestKind = 'auto' | 'selection' | 'input' | 'assist' | 'test' | 'catalog'
+export type RequestKind = 'auto' | 'selection' | 'hover' | 'input' | 'assist' | 'selection-assist' | 'text' | 'test' | 'catalog'
 
 export interface RequestScope {
   readonly kind: RequestKind
@@ -23,7 +24,9 @@ export function translationOutputChanged(previous: TranslationConfig, next: Tran
     previous.model !== next.model ||
     previous.targetLanguage !== next.targetLanguage ||
     previous.sourceLanguage !== next.sourceLanguage ||
-    requestOptionsKey(previous) !== requestOptionsKey(next)
+    previous.translationStyle !== next.translationStyle ||
+    glossarySignature(previous.promptGlossary) !== glossarySignature(next.promptGlossary) ||
+    translationRequestOptionsKey(previous) !== translationRequestOptionsKey(next)
   )
 }
 
@@ -41,7 +44,13 @@ export function readingPolicyChanged(previous: TranslationConfig, next: Translat
 
 /** 连接不变时，这次配置变更是否影响该请求所在站点的模式或它携带的语境。其他站点的规则不算。 */
 export function requestAffected(request: RequestScope, previous: TranslationConfig, next: TranslationConfig): boolean {
-  if (request.kind === 'test' || request.kind === 'catalog') return false
+  if (request.kind === 'selection' || request.kind === 'selection-assist' || request.kind === 'text' || request.kind === 'hover') {
+    const before = previous.modelProfiles.find((profile) => profile.id === previous.selectionProfileId) ?? previous
+    const after = next.modelProfiles.find((profile) => profile.id === next.selectionProfileId) ?? next
+    if (before.baseUrl !== after.baseUrl || before.model !== after.model || before.apiType !== after.apiType || before.temperature !== after.temperature) return true
+  }
+  if (request.kind === 'test' || request.kind === 'catalog' || request.kind === 'text') return false
+  if (request.kind === 'hover' && previous.hoverTranslateEnabled !== next.hoverTranslateEnabled) return true
   if (isExcludedSite(request.url, previous.excludedHosts) !== isExcludedSite(request.url, next.excludedHosts)) return true
   if (isSiteScopeAllowed(request.url, previous) !== isSiteScopeAllowed(request.url, next)) return true
   if (request.kind === 'input') {
@@ -51,7 +60,7 @@ export function requestAffected(request: RequestScope, previous: TranslationConf
       previous.inputTargetLanguage !== next.inputTargetLanguage ||
       previous.inputSourceLanguage !== next.inputSourceLanguage
   }
-  if (request.kind === 'assist') return readingPolicyChanged(previous, next)
+  if (request.kind === 'assist' || request.kind === 'selection-assist') return readingPolicyChanged(previous, next)
   if (request.kind === 'auto') {
     const origin = normalizeOrigin(request.url)
     if (previous.autoOrigins.includes(origin) !== next.autoOrigins.includes(origin)) return true

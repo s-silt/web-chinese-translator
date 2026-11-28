@@ -236,6 +236,26 @@ describe('页面额度上限', () => {
     return chipShadow().querySelector('.pause-resume') as HTMLButtonElement
   }
 
+  it('达到字符上限后可本地切换双语和替换，保持全部译文、额度与暂停状态', async () => {
+    const paragraphs = await capPage()
+    const before = await pageStatus()
+    for (const displayMode of ['bilingual', 'replace'] as const) {
+      await translationConfigItem.setValue({ ...CONFIG, displayMode })
+      await settle(1200)
+      const lines = document.querySelectorAll('[data-wt-bilingual]')
+      if (displayMode === 'bilingual') {
+        expect(lines).toHaveLength(PARAGRAPHS - 1)
+        expect(paragraphs[0]!.firstChild?.textContent).toContain('Paragraph 0')
+        expect(lines[0]?.textContent).toBe('译文')
+      } else {
+        expect(lines).toHaveLength(0)
+        expect(translated(paragraphs)).toBe(PARAGRAPHS - 1)
+      }
+      expect(await translateCalls()).toBe(PARAGRAPHS - 1)
+      expect(await pageStatus()).toEqual(before)
+    }
+  })
+
   it('恢复原文保留已结算额度，继续时才追加额度', async () => {
     const paragraphs = await capPage()
     await triggerMessage({ type: 'wt:page-action', action: 'restore' })

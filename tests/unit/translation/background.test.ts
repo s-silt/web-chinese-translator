@@ -179,6 +179,21 @@ beforeEach(() => {
 })
 
 describe('模型隐私边界真实消息入口', () => {
+  it('工具页七项翻译偏好从后台写入并可重新读取，悬停需要站点授权', async () => {
+    vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [] as never)
+    const profile = { id: 'terms', name: 'Terms', baseUrl: 'https://model.example/v1', model: 'sample', apiType: 'responses', temperature: null }
+    const patch = {
+      displayMode: 'bilingual', translationStyle: 'technical', promptGlossary: [{ source: 'Tab', target: '标签页' }],
+      modelProfiles: [profile], activeProfileId: profile.id, selectionProfileId: profile.id, hoverTranslateEnabled: true,
+    }
+    vi.mocked(fakeBrowser.permissions.contains).mockImplementation(async () => false)
+    expect(await trigger({ type: 'wt:save-config', patch }, extSender)).toMatchObject({ ok: false })
+    vi.mocked(fakeBrowser.permissions.contains).mockImplementation(async () => true)
+    expect(await trigger({ type: 'wt:save-config', patch }, extSender)).toMatchObject({ ok: true, config: patch })
+    expect(await translationConfigItem.getValue()).toMatchObject(patch)
+    expect(await trigger({ type: 'wt:get-config' }, extSender)).toMatchObject({ ok: true, config: patch })
+  })
+
   it('保存自动弹窗偏好经真实消息入口持久化，不改连接、语言和其他开关', async () => {
     vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [] as never)
     const original = { ...DEFAULT_TRANSLATION_CONFIG, baseUrl: 'https://api.example.com/v1', model: 'synthetic-model', targetLanguage: 'ja' as const, sourceLanguage: 'en' as const, temperature: 0.2, selectionPopupEnabled: true, proactiveAssistEnabled: true }
@@ -851,6 +866,24 @@ describe('模型隐私边界真实消息入口', () => {
     expect(autoCall.body).toContain('SAME_SITE_TITLE')
     expect(autoCall.body).not.toContain('OTHER_SITE_TITLE')
 
+    const hoverRequest = { type: 'wt:translate', mode: 'hover', texts: ['Public hovered sentence.'], pageId: 'hover-page', requestId: 'hover-request' }
+    expect(await trigger(hoverRequest, contentSender)).toMatchObject({ ok: false })
+    const current = await translationConfigItem.getValue()
+    await translationConfigItem.setValue({ ...current, hoverTranslateEnabled: true })
+    const top = vi.spyOn(fakeBrowser.scripting, 'executeScript').mockImplementation(async () =>
+      [{ frameId: 0, documentId: contentSender.documentId, result: contentSender.url }] as never)
+    expect(await trigger(hoverRequest, contentSender)).toMatchObject({ ok: true })
+    expect(lastCall().context.recentPages).toEqual([])
+    expect(lastCall().body).not.toContain('OTHER_SITE_TITLE')
+    expect(lastCall().body).not.toContain('SAME_SITE_TITLE')
+    fetcher.mockClear()
+    top.mockImplementation(async () => [{ frameId: 0, documentId: contentSender.documentId, result: sensitiveSender.url }] as never)
+    expect(await trigger(hoverRequest, contentSender)).toMatchObject({ ok: false })
+    expect(fetcher).not.toHaveBeenCalled()
+    top.mockRestore()
+    for (const fields of [{ page: { site: 'app.devin.ai', title: 'extra', heading: '' } }, { manualSelectionId: 'ticket' }, { texts: ['a'.repeat(2001)] }]) {
+      expect(isTranslationMessage({ ...hoverRequest, ...fields })).toBe(false)
+    }
     // mode=selection：结果只进扩展面板，保留跨站线索
     fetcher.mockClear()
     expect(await trigger({
@@ -872,6 +905,30 @@ describe('模型隐私边界真实消息入口', () => {
       type: 'wt:assist', requestId: 'cross-site', input,
     }, contentSender)).toMatchObject({ ok: true })
     expect(lastCall().context.recentPages).toEqual([sameEntry, otherEntry])
+  })
+
+  it('划词释义/解释按专用档案授权并发送，主动陪读仍走主接口', async () => {
+    await enableSmart()
+    const profile = { id: 'selection', name: 'Alt', baseUrl: 'https://selection.example/v1', model: 'select-m', apiType: 'chat-completions' as const, temperature: null }
+    await translationConfigItem.setValue({ ...(await translationConfigItem.getValue()), modelProfiles: [profile], selectionProfileId: profile.id })
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] }
+      const source = JSON.parse(body.messages[1]!.content) as { requestedIntent?: string }
+      const content = JSON.stringify({ decision: 'show', intent: source.requestedIntent ?? 'define', translation: '译文', explanation: '说明' })
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }))
+    })
+    const ask = (id: string, change: object) => trigger({ type: 'wt:assist', requestId: id, input: { ...input, ...change } }, contentSender)
+    const permission = vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (query) =>
+      !(query.origins ?? []).some((pattern) => pattern.includes('selection.example')))
+    expect(await ask('denied-selection', {})).toMatchObject({ ok: false })
+    expect(fetcher).not.toHaveBeenCalled()
+    permission.mockImplementation(async () => true)
+    expect(await ask('selection-define', { requestedIntent: 'define' })).toMatchObject({ ok: true })
+    expect(await ask('selection-explain', { requestedIntent: 'explain' })).toMatchObject({ ok: true })
+    expect(await ask('revisit', { trigger: 'revisit' })).toMatchObject({ ok: true })
+    expect(fetcher.mock.calls.map(([url, init]) => [new URL(String(url)).hostname, JSON.parse(String(init?.body)).model])).toEqual([
+      ['selection.example', profile.model], ['selection.example', profile.model], ['api.example.com', VALID_CONFIG.model],
+    ])
   })
 
   it('页面动作校验接受 retry-failed，拒绝未知动作', () => {
@@ -1602,6 +1659,7 @@ describe('配置变更的作废范围', () => {
     ['不匹配本页的排除网站', { type: 'wt:save-config', patch: { excludedHosts: ['unrelated.example'] } }],
     ['固定词库开关', { type: 'wt:save-config', patch: { disabledDictionaries: ['cursor'] } }],
     ['划词辅助开关', { type: 'wt:save-config', patch: { selectionPopupEnabled: true } }],
+    ['流式用量开关', { type: 'wt:save-config', patch: { requestParams: { stream_options: { include_usage: true } } } }],
     ['连接字段原样重新保存', { type: 'wt:save-config', patch: { baseUrl: VALID_CONFIG.baseUrl, model: VALID_CONFIG.model } }],
   ])('无关保存（%s）不中止在途请求，也不清缓存', async (name, message) => {
     const text = `Unrelated ${name}`
@@ -1620,6 +1678,48 @@ describe('配置变更的作废范围', () => {
     await vi.waitFor(() => expect(signals[0]!.aborted).toBe(false))
     release[0]!()
     expect(await pending).toMatchObject({ ok: true })
+  })
+
+  it('切换流式用量时保留先前的划词缓存和正在翻译的划词', async () => {
+    const select = (text: string) => trigger({ type: 'wt:translate', mode: 'selection', texts: [text] }, contentSender)
+    const cached = 'Usage preference cached selection'
+    const warm = select(cached)
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1))
+    release[0]!()
+    expect(await warm).toMatchObject({ ok: true })
+    const pending = select('Usage preference active selection')
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2))
+    expect(await trigger({ type: 'wt:save-config', patch: { requestParams: { stream_options: { include_usage: false } } } }, extSender)).toMatchObject({ ok: true })
+    expect(signals[1]!.aborted).toBe(false)
+    release[1]!()
+    expect(await pending).toMatchObject({ ok: true })
+    expect(await select(cached)).toMatchObject({ ok: true, cachedChars: cached.length })
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('切换专用模型中止旧划词请求，保留在途整页请求和已有页面缓存', async () => {
+    const warmText = 'Warm page cache for profile change'
+    const warm = await inFlight(warmText)
+    release[0]!()
+    expect(await warm.reply).toMatchObject({ ok: true })
+    const page = translateAuto('Page work during profile switch')
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2))
+    const selected = trigger({ type: 'wt:translate', mode: 'selection', texts: ['Selected word'], requestId: 'profile-selection' }, otherSender)
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3))
+    const profile = { id: 'secondary', name: 'Secondary', baseUrl: VALID_CONFIG.baseUrl, model: 'next', apiType: 'chat-completions', temperature: null }
+    try {
+      expect(await trigger({ type: 'wt:save-config', patch: { modelProfiles: [profile], selectionProfileId: profile.id } }, extSender)).toMatchObject({ ok: true })
+      expect(signals[1]!.aborted).toBe(false)
+      expect(signals[2]!.aborted).toBe(true)
+      expect(await selected).toMatchObject({ ok: false, code: 'cancelled' })
+      release[1]!()
+      expect(await page).toMatchObject({ ok: true })
+      expect(await translateAuto(warmText)).toMatchObject({ ok: true, cachedChars: warmText.length })
+      expect(fetcher).toHaveBeenCalledTimes(3)
+    } finally {
+      release.forEach((finish) => finish())
+      await Promise.all([page, selected])
+    }
   })
 
   it.each([
@@ -3420,6 +3520,15 @@ describe('高级接口设置与自定义请求头事务边界', () => {
     expect((await translationConfigItem.getValue()).temperature).toBe(0.5)
   })
 
+  it('单独保存流式用量偏好后，旧窗口仍不能用原配置键覆盖它', async () => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    const expectedConnection = { baseUrl: VALID_CONFIG.baseUrl, model: VALID_CONFIG.model, requestOptionsKey: requestOptionsKey(VALID_CONFIG) }
+    const requestParams = { stream_options: { include_usage: true } }
+    expect(await trigger({ type: 'wt:save-config', patch: { requestParams }, expectedConnection }, extSender)).toMatchObject({ ok: true })
+    expect(await trigger({ type: 'wt:save-config', patch: { requestParams: {} }, expectedConnection }, extSender)).toMatchObject({ ok: false, error: '接口配置已在其他窗口更改，请重新加载' })
+    expect((await translationConfigItem.getValue()).requestParams).toEqual(requestParams)
+  })
+
   it('请求头记录缺失或修订号不匹配时允许无关阅读策略保存，但阻止无重填的连接变更并阻断模型调用', async () => {
     const rev = '11111111-1111-4111-8111-111111111111'
     await translationConfigItem.setValue({
@@ -4671,6 +4780,79 @@ describe('wt:translate-text 文本翻译窗口', () => {
   function textMessage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return { ...message, ...overrides }
   }
+
+  function openTextPort(sender: object = textSender) {
+    let receive: ((value: unknown) => void) | undefined
+    const port = {
+      name: 'wt:text-stream', sender, postMessage: vi.fn(), disconnect: vi.fn(),
+      onMessage: { addListener: (fn: (value: unknown) => void) => { receive = fn } },
+      onDisconnect: { addListener: vi.fn() },
+    }
+    for (const [listener] of vi.mocked(fakeBrowser.runtime.onConnect.addListener).mock.calls) {
+      listener(port as never)
+    }
+    return { ...port, send: (value: unknown) => receive?.(value) }
+  }
+
+  it('流式端口只接受独立窗口且沿用正文长度、语言及请求 ID 校验', () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+    for (const sender of [popupSender, contentSender, pageSender]) {
+      const port = openTextPort(sender)
+      expect(port.disconnect).toHaveBeenCalledOnce()
+      expect(port.onDisconnect.addListener).not.toHaveBeenCalled()
+    }
+    for (const override of [{ text: 'a'.repeat(6001) }, { targetLanguage: 'unknown' }, { requestId: '' }]) {
+      const port = openTextPort()
+      port.send(textMessage(override))
+      expect(port.disconnect).toHaveBeenCalledOnce()
+    }
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('流式请求中途撤销授权会停止网络与后续输出', async () => {
+    await translationConfigItem.setValue(VALID_CONFIG)
+    const encoder = new TextEncoder()
+    let body!: ReadableStreamDefaultController<Uint8Array>
+    let signal!: AbortSignal
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      signal = init!.signal!
+      const stream = new ReadableStream<Uint8Array>({ start(c) { body = c } })
+      signal.addEventListener('abort', () => body.error(new DOMException('Aborted', 'AbortError')))
+      return new Response(stream, { headers: { 'content-type': 'text/event-stream' } })
+    })
+    const port = openTextPort()
+    port.send(textMessage())
+    await vi.waitFor(() => expect(body).toBeDefined())
+    body.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"片段"}}]}\n\n'))
+    await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'delta', text: '片段' })))
+    removedListeners.forEach((listener) => listener({ origins: ['https://api.example.com/*'] }))
+    expect(signal.aborted).toBe(true)
+    await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'result', reply: expect.objectContaining({ ok: false, code: 'cancelled' }),
+    })))
+    expect(port.postMessage).toHaveBeenCalledTimes(2)
+  })
+
+  it('按配置档的实际接口核验授权，仅同源接口复用连接凭据', async () => {
+    const profile = { id: 'secondary', name: 'Secondary', baseUrl: 'https://second.example/v1', model: 'other', apiType: 'chat-completions' as const, temperature: null }
+    customHeadersStore = { headers: { 'X-Fixture': 'A-only' }, origin: 'https://api.example.com', revision: 'r1' }
+    await translationConfigItem.setValue({ ...VALID_CONFIG, customHeadersRevision: 'r1', modelProfiles: [profile], selectionProfileId: profile.id })
+    const contains = vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async (query) =>
+      !(query.origins ?? []).some((pattern) => pattern.includes('second.example')))
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ choices: [{ message: { content: '译文' } }] })))
+    let port = openTextPort()
+    port.send(textMessage())
+    await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ reply: expect.objectContaining({ ok: false }) })))
+    expect(fetcher).not.toHaveBeenCalled()
+    contains.mockImplementation(async () => true)
+    port = openTextPort()
+    port.send(textMessage())
+    await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ reply: { ok: true, texts: ['译文'] } })))
+    const [url, init] = fetcher.mock.calls[0]!
+    expect(url).toBe('https://second.example/v1/chat/completions')
+    expect(new Headers(init?.headers).has('authorization')).toBe(false)
+    expect(new Headers(init?.headers).has('x-fixture')).toBe(false)
+  })
 
   it.each([
     ['内容脚本', contentSender],

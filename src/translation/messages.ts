@@ -1,18 +1,24 @@
 import { isGitHubPageState, type GitHubPageAction, type GitHubPageState } from '../shared/messages'
 import {
+  isDisplayMode,
   isInputAutoReplaceDelay,
   isInputReplaceMode,
   isModelList,
+  isModelProfileList,
   isPageCharLimit,
+  isPromptGlossaryList,
+  isTranslationStyle,
   type TranslationConfig,
 } from './config'
+import { isPersistentCacheStats, type PersistentCacheStats } from './persistent-cache'
+import { isUsageStatsSnapshot, type UsageStatsSnapshot } from './usage-stats'
 import { BUILTIN_DICTIONARY_META, MAX_FIXED_ENTRIES } from './dictionaries/index'
 import { normalizeHotkey } from './input-hotkey'
 import { isSiteScopeMode } from './site-scope'
 import { isSourceLanguage, isTargetLanguage, type SourceLanguage, type TargetLanguage } from './target-language'
 import { isPageContext, isPageId, type PageContext } from './reading-context'
 import { documentFormOfBrowserUrl } from './page-lifecycle'
-import { isAssistInput, parseAssistResult, type AssistInput, type AssistResult } from './intent'
+import { isAssistInput, isSiteHost, parseAssistResult, type AssistInput, type AssistResult } from './intent'
 import { isFailureCode, type FailureCode } from './failure'
 import type { ChatReplacementStatus } from './chat-input'
 import type { DiscordReplacementStatus } from './discord-input'
@@ -30,6 +36,7 @@ export type TranslationConfigPatch = Partial<
 
 /** 页面生命周期端口的名称前缀，后接会话 ID。 */
 export const PAGE_PORT_PREFIX = 'wt:page:'
+export const TEXT_STREAM_PORT = 'wt:text-stream'
 
 export const NO_SELECTION_ERROR = '请先选中要翻译的文字'
 export const SENSITIVE_FRAME_ERROR = '敏感页面中的嵌入内容暂不支持翻译'
@@ -40,6 +47,7 @@ export const NOTHING_TO_TOGGLE_ERROR = '本页没有可切换的翻译'
 
 export interface PageModes {
   readonly enabled: boolean
+  readonly hover?: boolean
   readonly fixed: boolean
   readonly auto: boolean
   readonly selection: boolean
@@ -67,10 +75,14 @@ export type TranslationMessage =
   | { type: 'wt:set-site-scope-host'; host: string; listed: boolean }
   | { type: 'wt:clear-key' }
   | { type: 'wt:clear-cache' }
+  | { type: 'wt:clear-site-cache'; host: string }
+  | { type: 'wt:get-cache-stats' }
+  | { type: 'wt:get-usage-stats' }
+  | { type: 'wt:reset-usage-stats' }
   | { type: 'wt:test' }
   | {
       type: 'wt:translate'
-      mode: 'selection' | 'auto' | 'input'
+      mode: 'selection' | 'auto' | 'input' | 'hover'
       texts: string[]
       requestId?: string
       page?: PageContext
@@ -143,6 +155,8 @@ interface ReplyFields {
   legacy?: GitHubPageState
   inputReplacement?: DiscordReplacementStatus
   editor?: DocumentEditorResult
+  cacheStats?: PersistentCacheStats
+  usageStats?: UsageStatsSnapshot
 }
 
 type AckPayload = Record<never, never>
@@ -169,6 +183,10 @@ interface TranslationPayloads {
   'wt:assist': { result: AssistResult }
   'wt:clear-key': { hasKey: false; keyState?: 'none' }
   'wt:clear-cache': AckPayload
+  'wt:clear-site-cache': AckPayload
+  'wt:get-cache-stats': { cacheStats: PersistentCacheStats }
+  'wt:get-usage-stats': { usageStats: UsageStatsSnapshot }
+  'wt:reset-usage-stats': { usageStats: UsageStatsSnapshot }
   'wt:page-action': AckPayload
   'wt:cancel-assist': AckPayload
   'wt:list-models': { models: string[] }
@@ -306,6 +324,13 @@ const PATCH_KEYS = new Set([
   'pageCharLimit',
   'excludedHosts',
   'siteScopeMode',
+  'displayMode',
+  'translationStyle',
+  'promptGlossary',
+  'modelProfiles',
+  'activeProfileId',
+  'selectionProfileId',
+  'hoverTranslateEnabled',
 ])
 
 function isSaveConfig(value: unknown): boolean {
@@ -327,10 +352,16 @@ function isSaveConfig(value: unknown): boolean {
     if (key === 'pageCharLimit' && !isPageCharLimit((patch as Record<string, unknown>)[key])) return false
     if (key === 'temperature' && !isTemperature((patch as Record<string, unknown>)[key])) return false
     if (key === 'requestParams' && !isValidRequestParams((patch as Record<string, unknown>)[key])) return false
+    if (key === 'displayMode' && !isDisplayMode((patch as Record<string, unknown>)[key])) return false
+    if (key === 'translationStyle' && !isTranslationStyle((patch as Record<string, unknown>)[key])) return false
+    if (key === 'promptGlossary' && !isPromptGlossaryList((patch as Record<string, unknown>)[key])) return false
+    if (key === 'modelProfiles' && !isModelProfileList((patch as Record<string, unknown>)[key])) return false
   }
   if (patch.baseUrl !== undefined && (typeof patch.baseUrl !== 'string' || patch.baseUrl.length > 2048)) return false
   if (patch.model !== undefined && (typeof patch.model !== 'string' || patch.model.length > 200)) return false
-  for (const key of ['selectionPopupEnabled', 'selectionToolbarEnabled', 'proactiveAssistEnabled', 'floatingButtonEnabled', 'autoInteractionEnabled', 'inputTranslationEnabled'] as const) {
+  if (patch.activeProfileId !== undefined && (typeof patch.activeProfileId !== 'string' || patch.activeProfileId.length > 64)) return false
+  if (patch.selectionProfileId !== undefined && (typeof patch.selectionProfileId !== 'string' || patch.selectionProfileId.length > 64)) return false
+  for (const key of ['selectionPopupEnabled', 'selectionToolbarEnabled', 'proactiveAssistEnabled', 'floatingButtonEnabled', 'autoInteractionEnabled', 'inputTranslationEnabled', 'hoverTranslateEnabled'] as const) {
     if (patch[key] !== undefined && typeof patch[key] !== 'boolean') return false
   }
   if (!isOptionalApiKey(value.apiKey)) return false
@@ -383,12 +414,20 @@ function isTranslateTexts(value: unknown): value is string[] {
 }
 
 const FEATURE_TRANSLATE_KEYS = new Set(['type', 'mode', 'texts', 'requestId', 'pageSession', 'manualInput'])
+const HOVER_TRANSLATE_KEYS = new Set(['type', 'mode', 'texts', 'requestId', 'pageSession', 'pageId'])
 
 function isInputTexts(value: unknown): value is string[] {
   return Array.isArray(value) && value.length === 1 && typeof value[0] === 'string' && value[0].length >= 1 && value[0].length <= 6000
 }
 
 function isTranslateMessage(value: Record<string, unknown>): boolean {
+  if (value.mode === 'hover') {
+    return Object.keys(value).every((key) => HOVER_TRANSLATE_KEYS.has(key)) &&
+      isRequestId(value.requestId) && isPageId(value.pageId) &&
+      (value.pageSession === undefined || isPageId(value.pageSession)) &&
+      Array.isArray(value.texts) && value.texts.length === 1 &&
+      typeof value.texts[0] === 'string' && value.texts[0].trim() !== '' && value.texts[0].length <= 2000
+  }
   if ('targetLanguage' in value || 'sourceLanguage' in value) return false
   if (value.mode !== 'input' && 'manualInput' in value) return false
   if ('manualInput' in value && typeof value.manualInput !== 'boolean') return false
@@ -449,10 +488,15 @@ export function isTranslationMessage(value: unknown): value is TranslationMessag
     case 'wt:page-modes':
     case 'wt:clear-key':
     case 'wt:clear-cache':
+    case 'wt:get-cache-stats':
+    case 'wt:get-usage-stats':
+    case 'wt:reset-usage-stats':
     case 'wt:test':
       return true
     case 'wt:save-config':
       return isSaveConfig(value)
+    case 'wt:clear-site-cache':
+      return isSiteHost(value.host)
     case 'wt:set-site-auto':
       return isSetSiteAuto(value)
     case 'wt:set-site-excluded':
@@ -614,7 +658,7 @@ export function isPageTranslationStatus(value: unknown): value is PageTranslatio
   )
 }
 
-function isConfigShape(value: unknown): value is TranslationConfig {
+export function isConfigShape(value: unknown): value is TranslationConfig {
   if (!isRecord(value)) return false
   if ('apiKey' in value || 'customHeaders' in value) return false
   if (typeof value.baseUrl !== 'string' || value.baseUrl.length > 2048) return false
@@ -644,7 +688,14 @@ function isConfigShape(value: unknown): value is TranslationConfig {
     isPageCharLimit(value.pageCharLimit) &&
     isExcludedHosts(value.excludedHosts) &&
     isSiteScopeMode(value.siteScopeMode) &&
-    isExcludedHosts(value.siteScopeHosts)
+    isExcludedHosts(value.siteScopeHosts) &&
+    (value.displayMode === undefined || isDisplayMode(value.displayMode)) &&
+    (value.translationStyle === undefined || isTranslationStyle(value.translationStyle)) &&
+    (value.promptGlossary === undefined || isPromptGlossaryList(value.promptGlossary)) &&
+    (value.modelProfiles === undefined || isModelProfileList(value.modelProfiles)) &&
+    (value.activeProfileId === undefined || typeof value.activeProfileId === 'string') &&
+    (value.selectionProfileId === undefined || typeof value.selectionProfileId === 'string') &&
+    (value.hoverTranslateEnabled === undefined || typeof value.hoverTranslateEnabled === 'boolean')
   )
 }
 
@@ -662,6 +713,7 @@ function isModes(value: unknown): value is PageModes {
     typeof value.selection === 'boolean' &&
     typeof value.smart === 'boolean' &&
     (value.floating === undefined || typeof value.floating === 'boolean') &&
+    (value.hover === undefined || typeof value.hover === 'boolean') &&
     (value.input === undefined || typeof value.input === 'boolean') &&
     (value.fixedEntries === undefined ||
       (isRecord(value.fixedEntries) &&
@@ -750,7 +802,7 @@ export function isTranslationReply(value: unknown, message?: TranslationMessage)
       if (!Array.isArray(value.texts) || value.texts.length !== message.texts.length) return false
       const texts = value.texts as string[]
       if (
-        message.mode === 'selection' || message.mode === 'input'
+        message.mode !== 'auto'
           ? texts.some((text) => text.trim() === '')
           : !texts.some((text) => text.trim() !== '')
       ) {
@@ -761,6 +813,12 @@ export function isTranslationReply(value: unknown, message?: TranslationMessage)
         (value.cachedChars as number) <= message.texts.reduce((sum, text) => sum + text.length, 0)
       )
     }
+    case 'wt:get-cache-stats':
+      return isPersistentCacheStats(value.cacheStats)
+    case 'wt:get-usage-stats':
+    case 'wt:reset-usage-stats':
+      return isUsageStatsSnapshot(value.usageStats)
+    case 'wt:clear-site-cache':
     case 'wt:clear-cache':
     case 'wt:page-action':
     case 'wt:cancel-assist':

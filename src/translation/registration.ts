@@ -59,6 +59,7 @@ export async function siteScriptMatches(config: TranslationConfig): Promise<stri
   }
   if (
     config.selectionPopupEnabled ||
+    config.hoverTranslateEnabled ||
     config.floatingButtonEnabled ||
     config.inputTranslationEnabled
   ) {

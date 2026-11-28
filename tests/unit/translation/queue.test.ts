@@ -411,6 +411,11 @@ describe('高级请求参数与自定义请求头缓存隔离及转发', () => {
     const cached = await requestTranslation(reordered, 'selection', ['Hello'], allow, undefined, undefined, false)
     expect(cached).toEqual({ ok: true, texts: ['译1'], cachedChars: 5 })
     expect(fetcher).toHaveBeenCalledTimes(1)
+    for (const include_usage of [true, false]) {
+      const usageOnly = { ...snap1, config: { ...snap1.config, requestParams: { ...snap1.config.requestParams, stream_options: { include_usage } } } }
+      expect(await requestTranslation(usageOnly, 'selection', ['Hello'], allow, undefined, undefined, false)).toEqual(cached)
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    }
 
     const diffTemp: ModelSnapshot = { ...snap1, config: { ...snap1.config, temperature: 0.5 } }
     expect(await requestTranslation(diffTemp, 'selection', ['Hello'], allow, undefined, undefined, false)).toEqual({
