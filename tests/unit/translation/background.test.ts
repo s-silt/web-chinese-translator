@@ -1679,6 +1679,31 @@ describe('配置变更的作废范围', () => {
     expect(await pending).toMatchObject({ ok: true })
   })
 
+  it('切换专用模型中止旧划词请求，保留在途整页请求和已有页面缓存', async () => {
+    const warmText = 'Warm page cache for profile change'
+    const warm = await inFlight(warmText)
+    release[0]!()
+    expect(await warm.reply).toMatchObject({ ok: true })
+    const page = translateAuto('Page work during profile switch')
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2))
+    const selected = trigger({ type: 'wt:translate', mode: 'selection', texts: ['Selected word'], requestId: 'profile-selection' }, otherSender)
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3))
+    const profile = { id: 'secondary', name: 'Secondary', baseUrl: VALID_CONFIG.baseUrl, model: 'next', apiType: 'chat-completions', temperature: null }
+    try {
+      expect(await trigger({ type: 'wt:save-config', patch: { modelProfiles: [profile], selectionProfileId: profile.id } }, extSender)).toMatchObject({ ok: true })
+      expect(signals[1]!.aborted).toBe(false)
+      expect(signals[2]!.aborted).toBe(true)
+      expect(await selected).toMatchObject({ ok: false, code: 'cancelled' })
+      release[1]!()
+      expect(await page).toMatchObject({ ok: true })
+      expect(await translateAuto(warmText)).toMatchObject({ ok: true, cachedChars: warmText.length })
+      expect(fetcher).toHaveBeenCalledTimes(3)
+    } finally {
+      release.forEach((finish) => finish())
+      await Promise.all([page, selected])
+    }
+  })
+
   it.each([
     ['模型', { type: 'wt:save-config', patch: { model: 'replacement' } }],
     ['接口地址', { type: 'wt:save-config', patch: { baseUrl: 'https://api.example.com/v2' } }],

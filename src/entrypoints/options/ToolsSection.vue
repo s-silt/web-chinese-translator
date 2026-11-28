@@ -446,7 +446,11 @@ async function restoreBackup(requestAccess: boolean): Promise<void> {
   try {
     if (requestAccess && pending.missing.length) {
       // 直接使用确认按钮的浏览器用户手势；读取文件和权限预检在选文件时已完成。
-      await browser.permissions.request({ origins: pending.missing }).catch(() => false)
+      try {
+        await browser.permissions.request({ origins: [...pending.missing] })
+      } catch {
+        // 平台拒绝或无法弹窗时，按浏览器已授予的权限继续恢复。
+      }
     }
     const missing = await missingBackupOrigins(pending.config)
     pendingBackup.value = { ...pending, missing }

@@ -68,6 +68,8 @@ test('翻译工具保存双语模式、风格与术语，并从实际导出的�
   await expect.poll(storedModel).toBe('')
   if (['win32', 'linux'].includes(process.platform)) {
     await selectBackup()
+    // fixture 的控制页另占一个标签；原生权限提示只在前台设置页上可见。
+    await page.bringToFront()
     await page.locator('[data-test="wt-backup-confirm"]').click()
     await acceptOwnedPermission(page, [endpoint + '/*'])
     await expect(preview).toHaveCount(0)

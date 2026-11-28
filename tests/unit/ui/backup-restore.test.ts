@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { isProxy } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeBrowser } from 'wxt/testing/fake-browser'
 import ToolsSection from '../../../src/entrypoints/options/ToolsSection.vue'
@@ -18,7 +19,9 @@ describe('全新安装恢复备份', () => {
   it.each([false, true])('先预览，用户明确授权（%s）后分别恢复可用设置', async granted => {
     let allowed = false
     vi.spyOn(fakeBrowser.permissions, 'contains').mockImplementation(async () => allowed)
-    const request = vi.spyOn(fakeBrowser.permissions, 'request').mockImplementation(async () => {
+    const request = vi.spyOn(fakeBrowser.permissions, 'request').mockImplementation(async ({ origins }) => {
+      // Chrome 的原生类型校验将 Vue Proxy 数组视为普通对象。
+      if (isProxy(origins)) throw new TypeError('Expected native array')
       allowed = granted
       return allowed
     })
