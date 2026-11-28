@@ -119,6 +119,8 @@ export interface UseTranslationControls {
   translatePage(): Promise<void>
   setFloating(enabled: boolean): Promise<void>
   setAutoInteraction(enabled: boolean): Promise<void>
+  bilingualMode: ComputedRef<boolean>
+  setBilingualMode(enabled: boolean): Promise<void>
   setAuto(enabled: boolean): Promise<void>
   setInputTranslation(enabled: boolean): Promise<void>
   restore(): Promise<void>
@@ -211,6 +213,7 @@ export function useTranslationControls(): UseTranslationControls {
   const modelConfigured = computed(
     () => config.value !== undefined && config.value.baseUrl !== '' && config.value.model !== '',
   )
+  const bilingualMode = computed(() => config.value?.displayMode === 'bilingual')
   const modelName = computed(() => config.value?.model.trim() ?? '')
   const dictEnabled = computed(() => status.value?.fixed === true)
   const activePagePolicy = computed(() => {
@@ -617,6 +620,14 @@ export function useTranslationControls(): UseTranslationControls {
     translatePage,
     setFloating,
     setAutoInteraction,
+    bilingualMode,
+    setBilingualMode: async (enabled: boolean) => {
+      const reply = await sendTranslationMessage({
+        type: 'wt:save-config',
+        patch: { displayMode: enabled ? 'bilingual' : 'replace' },
+      })
+      if (reply.ok) config.value = reply.config
+    },
     setAuto,
     setInputTranslation: (enabled: boolean) => setRealtimeFeature('inputTranslationEnabled', enabled),
     restore: () => pageAction('restore'),

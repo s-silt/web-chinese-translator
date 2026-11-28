@@ -13,7 +13,9 @@ import { cancelModelTasks, describeFailure, modelSchedulerGeneration, scheduleMo
 import { CompletionCancelledError, invalidCompletion } from './transport'
 import { modelRequestConfig, type ModelSnapshot } from './model-state'
 import type { TranslationContext } from './reading-context'
+import { glossarySignature } from './preferences-extra'
 import { requestOptionsCacheKey } from './request-options'
+import { recordUsageDelta } from './usage-stats'
 
 export type TranslateOutcome =
   | {
@@ -217,7 +219,12 @@ export async function requestTranslation(
   try {
     checkActive(signal)
     const endpoint = completionUrl(snapshot.config.baseUrl, snapshot.config.apiType)
-    const optionsKey = await requestOptionsCacheKey(snapshot.config)
+    const baseOptionsKey = await requestOptionsCacheKey(snapshot.config)
+    const gSig = glossarySignature(snapshot.config.promptGlossary)
+    const optionsKey =
+      snapshot.config.translationStyle === 'natural' && gSig === ''
+        ? baseOptionsKey
+        : `${baseOptionsKey}|style:${snapshot.config.translationStyle}|g:${gSig}`
     checkActive(signal)
     const memory = texts.map((text) =>
       cacheGet(
@@ -238,10 +245,11 @@ export async function requestTranslation(
       ? {
           endpoint,
           model: snapshot.config.model,
-          prompt: translationPrompt(context, snapshot.config.targetLanguage, snapshot.config.sourceLanguage),
+          prompt: translationPrompt(context, snapshot.config.targetLanguage, snapshot.config.sourceLanguage, snapshot.config.translationStyle),
           targetLanguage: snapshot.config.targetLanguage,
           ...(context === undefined ? {} : { context }),
           requestOptionsKey: optionsKey,
+          ...(context?.currentPage.site ? { host: context.currentPage.site.toLowerCase() } : {}),
         }
       : undefined
     let persisted: ReadonlyMap<string, TranslationCacheEntry> = new Map()
@@ -273,6 +281,7 @@ export async function requestTranslation(
       checkActive(signal)
       if (cached.every((value) => liveEntry(value) !== undefined)) {
         const chars = texts.reduce((sum, text) => sum + text.length, 0)
+        void recordUsageDelta({ cacheHits: texts.length, translatedChars: chars }).catch(() => undefined)
         return { ok: true, texts: cached.map((value) => value.translation), ...cachedCharsField(chars) }
       }
     }

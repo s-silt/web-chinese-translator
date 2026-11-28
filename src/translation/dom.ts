@@ -20,6 +20,8 @@ import {
 } from './sites'
 import { inlineUnitFor, inlineUnitKey, isInlineUnitCurrent, parseInlineResult, type InlineUnit } from './inline-units'
 import type { PageTranslationProgress } from './messages'
+import { attachBilingualBlock, attachBilingualNode, removeBilingualNode } from './bilingual'
+import type { TranslationDisplayMode } from './preferences-extra'
 import type { SourceLanguage, TargetLanguage } from './target-language'
 
 export interface DomEngine {
@@ -66,6 +68,7 @@ export interface DomEngineOptions {
   /** 当前翻译目标语言；engine 每次判定时调用，允许设置热更新。 */
   targetLanguage(): TargetLanguage
   sourceLanguage?: () => SourceLanguage
+  displayMode?: () => TranslationDisplayMode
   translateFixed?: (text: string) => string | undefined
   onAutoBatch(texts: string[], apply: AutoBatchApply): void
   onCapped?(): void
@@ -470,7 +473,11 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     modifiedTexts.add(change.node)
   }
 
+  const bilingualNodes = new Map<Text, HTMLElement>()
+
   function forgetNode(node: Text): void {
+    removeBilingualNode(bilingualNodes.get(node))
+    bilingualNodes.delete(node)
     records.delete(node)
     modifiedTexts.delete(node)
     modelTexts.delete(node)
@@ -482,6 +489,19 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
     if (!modifiedTexts.has(node) && trackedCount() >= recordBudget) {
       markCapped('records')
       return 0
+    }
+    if ((options.displayMode?.() ?? 'replace') === 'bilingual') {
+      if (textValue(node) !== source) return 0
+      removeBilingualNode(bilingualNodes.get(node))
+      const el = attachBilingualNode(node, translated)
+      if (!el) return 0
+      bilingualNodes.set(node, el)
+      layoutSkips.delete(node)
+      redrawSkips.delete(node)
+      records.set(node, { original: source, applied: source, generation, location: lastLocation })
+      modifiedTexts.add(node)
+      modelTexts.add(node)
+      return 1
     }
     if (!tryReplaceText(node, source, translated)) {
       if (wasRejected(node, source)) noteSkip(layoutSkips, node, source)
@@ -1342,6 +1362,26 @@ export function createDomEngine(options: DomEngineOptions): DomEngine {
               const trail = source.slice(source.trimEnd().length)
               return { node: member, source, translated: `${lead}${segments[i]!}${trail}` }
             })
+            if ((options.displayMode?.() ?? 'replace') === 'bilingual') {
+              const anchor = unit.nodes[0]
+              const combined = segments.join('').trim()
+              if (anchor !== undefined && combined !== '') {
+                removeBilingualNode(bilingualNodes.get(anchor))
+                const el = attachBilingualBlock(unit.block, combined)
+                if (el !== undefined) {
+                  bilingualNodes.set(anchor, el)
+                  changes.forEach((change) => {
+                    layoutSkips.delete(change.node)
+                    redrawSkips.delete(change.node)
+                    records.set(change.node, { original: change.source, applied: change.source, generation, location: lastLocation })
+                    modifiedTexts.add(change.node)
+                    modelTexts.add(change.node)
+                  })
+                  clearUnit(entry)
+                  continue
+                }
+              }
+            }
             const flags = tryReplaceTexts(changes)
             if (flags.every(Boolean)) {
               changes.forEach((change) => {

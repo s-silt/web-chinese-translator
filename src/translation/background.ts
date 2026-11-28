@@ -74,6 +74,7 @@ import {
   currentRevision,
   invalidateModelState,
   modelRequestConfig,
+  resolveSceneSnapshot,
   modelSnapshot,
   readConsistentModelState,
   serializeMutation,
@@ -118,7 +119,8 @@ import {
   writeStoredCustomHeaders,
   type BoundCustomHeaders,
 } from './secrets'
-import { clearPersistentTranslations } from './persistent-cache'
+import { clearPersistentTranslations, clearPersistentTranslationsForHost, getPersistentCacheStats } from './persistent-cache'
+import { getUsageStats, recordUsageDelta, resetUsageStats } from './usage-stats'
 import { clearTranslationCache, requestTranslation } from './queue'
 import {
   cancelModelTasks,
@@ -127,7 +129,8 @@ import {
   restoreAutomaticPause,
   scheduleModelTask,
 } from './scheduler'
-import { CompletionCancelledError, requestModelList } from './transport'
+import { CompletionCancelledError, requestModelList, setCompletionUsageObserver } from './transport'
+import { installTextStreamPort } from './background-stream'
 import {
   installSiteScriptSync,
   SITE_SCRIPT_FILES,
@@ -933,8 +936,9 @@ async function handleTextTranslation(
   requests.set(key, controller)
   interactive.add(key)
   try {
-    const snapshot = await modelSnapshot().catch(() => undefined)
-    if (snapshot === undefined) return unavailableReply(snapshot)
+    const rawSnapshot = await modelSnapshot().catch(() => undefined)
+    if (rawSnapshot === undefined) return unavailableReply(rawSnapshot)
+    const snapshot = await resolveSceneSnapshot(rawSnapshot, 'text')
     const texts = await scheduleModelTask(
       'interactive',
       async (signal) => {
@@ -1028,7 +1032,11 @@ async function handleTranslate(
     const settings = await getSettings()
     if (!settings.enabled) return { ok: false, error: '总开关已关闭' }
     const origin = normalizeOrigin(sourceUrl)
-    const snapshot = await modelSnapshot().catch(() => undefined)
+    const rawSnapshot = await modelSnapshot().catch(() => undefined)
+    const snapshot =
+      rawSnapshot !== undefined && message.mode === 'selection'
+        ? await resolveSceneSnapshot(rawSnapshot, 'selection')
+        : rawSnapshot
     if (controller.signal.aborted) {
       return failed(new CompletionCancelledError())
     }
@@ -1780,6 +1788,28 @@ async function dispatch(message: TranslationMessage, sender: MessageSender): Pro
       }, invalidateModelWork)
       return (cleared ? { ok: true } : { ok: false, error: '清除失败' }) satisfies TranslationReply<'wt:clear-cache'>
     }
+    case 'wt:clear-site-cache': {
+      if (!fromExtensionPage(sender)) return { ok: false, error: '无权访问' }
+      await serializeMutation(async () => {
+        await clearPersistentTranslationsForHost(message.host)
+      }, invalidateModelWork)
+      return { ok: true } satisfies TranslationReply<'wt:clear-site-cache'>
+    }
+    case 'wt:get-cache-stats': {
+      if (!fromExtensionPage(sender)) return { ok: false, error: '无权访问' }
+      const cacheStats = await getPersistentCacheStats()
+      return { ok: true, cacheStats } satisfies TranslationReply<'wt:get-cache-stats'>
+    }
+    case 'wt:get-usage-stats': {
+      if (!fromExtensionPage(sender)) return { ok: false, error: '无权访问' }
+      const usageStats = await getUsageStats()
+      return { ok: true, usageStats } satisfies TranslationReply<'wt:get-usage-stats'>
+    }
+    case 'wt:reset-usage-stats': {
+      if (!fromExtensionPage(sender)) return { ok: false, error: '无权访问' }
+      const usageStats = await resetUsageStats()
+      return { ok: true, usageStats } satisfies TranslationReply<'wt:reset-usage-stats'>
+    }
     case 'wt:test':
       if (!fromExtensionPage(sender)) return { ok: false, error: '无权访问' }
       return handleTest(sender)
@@ -2423,7 +2453,21 @@ export function installTranslationBackground(): void {
     )
     return true
   })
+  installTextStreamPort({
+    fromTextWindow,
+    modelSnapshot,
+    assertDispatchAllowed,
+    failureReply,
+  })
   installPageSessions()
+  setCompletionUsageObserver((usage, chars) => {
+    void recordUsageDelta({
+      requests: 1,
+      inputTokens: usage?.inputTokens ?? 0,
+      outputTokens: usage?.outputTokens ?? 0,
+      translatedChars: chars,
+    }).catch(() => undefined)
+  })
   installMenuClickListener()
   installCommandListener()
   browser.runtime.onInstalled.addListener(() => {

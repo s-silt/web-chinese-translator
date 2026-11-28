@@ -1,11 +1,17 @@
 import { isGitHubPageState, type GitHubPageAction, type GitHubPageState } from '../shared/messages'
 import {
+  isDisplayMode,
   isInputAutoReplaceDelay,
   isInputReplaceMode,
   isModelList,
+  isModelProfileList,
   isPageCharLimit,
+  isPromptGlossaryList,
+  isTranslationStyle,
   type TranslationConfig,
 } from './config'
+import { isPersistentCacheStats, type PersistentCacheStats } from './persistent-cache'
+import { isUsageStatsSnapshot, type UsageStatsSnapshot } from './usage-stats'
 import { BUILTIN_DICTIONARY_META, MAX_FIXED_ENTRIES } from './dictionaries/index'
 import { normalizeHotkey } from './input-hotkey'
 import { isSiteScopeMode } from './site-scope'
@@ -30,6 +36,7 @@ export type TranslationConfigPatch = Partial<
 
 /** 页面生命周期端口的名称前缀，后接会话 ID。 */
 export const PAGE_PORT_PREFIX = 'wt:page:'
+export const TEXT_STREAM_PORT = 'wt:text-stream'
 
 export const NO_SELECTION_ERROR = '请先选中要翻译的文字'
 export const SENSITIVE_FRAME_ERROR = '敏感页面中的嵌入内容暂不支持翻译'
@@ -67,6 +74,10 @@ export type TranslationMessage =
   | { type: 'wt:set-site-scope-host'; host: string; listed: boolean }
   | { type: 'wt:clear-key' }
   | { type: 'wt:clear-cache' }
+  | { type: 'wt:clear-site-cache'; host: string }
+  | { type: 'wt:get-cache-stats' }
+  | { type: 'wt:get-usage-stats' }
+  | { type: 'wt:reset-usage-stats' }
   | { type: 'wt:test' }
   | {
       type: 'wt:translate'
@@ -143,6 +154,8 @@ interface ReplyFields {
   legacy?: GitHubPageState
   inputReplacement?: DiscordReplacementStatus
   editor?: DocumentEditorResult
+  cacheStats?: PersistentCacheStats
+  usageStats?: UsageStatsSnapshot
 }
 
 type AckPayload = Record<never, never>
@@ -169,6 +182,10 @@ interface TranslationPayloads {
   'wt:assist': { result: AssistResult }
   'wt:clear-key': { hasKey: false; keyState?: 'none' }
   'wt:clear-cache': AckPayload
+  'wt:clear-site-cache': AckPayload
+  'wt:get-cache-stats': { cacheStats: PersistentCacheStats }
+  'wt:get-usage-stats': { usageStats: UsageStatsSnapshot }
+  'wt:reset-usage-stats': { usageStats: UsageStatsSnapshot }
   'wt:page-action': AckPayload
   'wt:cancel-assist': AckPayload
   'wt:list-models': { models: string[] }
@@ -306,6 +323,13 @@ const PATCH_KEYS = new Set([
   'pageCharLimit',
   'excludedHosts',
   'siteScopeMode',
+  'displayMode',
+  'translationStyle',
+  'promptGlossary',
+  'modelProfiles',
+  'activeProfileId',
+  'selectionProfileId',
+  'hoverTranslateEnabled',
 ])
 
 function isSaveConfig(value: unknown): boolean {
@@ -327,10 +351,16 @@ function isSaveConfig(value: unknown): boolean {
     if (key === 'pageCharLimit' && !isPageCharLimit((patch as Record<string, unknown>)[key])) return false
     if (key === 'temperature' && !isTemperature((patch as Record<string, unknown>)[key])) return false
     if (key === 'requestParams' && !isValidRequestParams((patch as Record<string, unknown>)[key])) return false
+    if (key === 'displayMode' && !isDisplayMode((patch as Record<string, unknown>)[key])) return false
+    if (key === 'translationStyle' && !isTranslationStyle((patch as Record<string, unknown>)[key])) return false
+    if (key === 'promptGlossary' && !isPromptGlossaryList((patch as Record<string, unknown>)[key])) return false
+    if (key === 'modelProfiles' && !isModelProfileList((patch as Record<string, unknown>)[key])) return false
   }
   if (patch.baseUrl !== undefined && (typeof patch.baseUrl !== 'string' || patch.baseUrl.length > 2048)) return false
   if (patch.model !== undefined && (typeof patch.model !== 'string' || patch.model.length > 200)) return false
-  for (const key of ['selectionPopupEnabled', 'selectionToolbarEnabled', 'proactiveAssistEnabled', 'floatingButtonEnabled', 'autoInteractionEnabled', 'inputTranslationEnabled'] as const) {
+  if (patch.activeProfileId !== undefined && (typeof patch.activeProfileId !== 'string' || patch.activeProfileId.length > 64)) return false
+  if (patch.selectionProfileId !== undefined && (typeof patch.selectionProfileId !== 'string' || patch.selectionProfileId.length > 64)) return false
+  for (const key of ['selectionPopupEnabled', 'selectionToolbarEnabled', 'proactiveAssistEnabled', 'floatingButtonEnabled', 'autoInteractionEnabled', 'inputTranslationEnabled', 'hoverTranslateEnabled'] as const) {
     if (patch[key] !== undefined && typeof patch[key] !== 'boolean') return false
   }
   if (!isOptionalApiKey(value.apiKey)) return false
@@ -449,10 +479,15 @@ export function isTranslationMessage(value: unknown): value is TranslationMessag
     case 'wt:page-modes':
     case 'wt:clear-key':
     case 'wt:clear-cache':
+    case 'wt:get-cache-stats':
+    case 'wt:get-usage-stats':
+    case 'wt:reset-usage-stats':
     case 'wt:test':
       return true
     case 'wt:save-config':
       return isSaveConfig(value)
+    case 'wt:clear-site-cache':
+      return typeof value.host === 'string' && value.host.trim().length > 0 && value.host.length <= 255
     case 'wt:set-site-auto':
       return isSetSiteAuto(value)
     case 'wt:set-site-excluded':
@@ -644,7 +679,14 @@ function isConfigShape(value: unknown): value is TranslationConfig {
     isPageCharLimit(value.pageCharLimit) &&
     isExcludedHosts(value.excludedHosts) &&
     isSiteScopeMode(value.siteScopeMode) &&
-    isExcludedHosts(value.siteScopeHosts)
+    isExcludedHosts(value.siteScopeHosts) &&
+    (value.displayMode === undefined || isDisplayMode(value.displayMode)) &&
+    (value.translationStyle === undefined || isTranslationStyle(value.translationStyle)) &&
+    (value.promptGlossary === undefined || isPromptGlossaryList(value.promptGlossary)) &&
+    (value.modelProfiles === undefined || isModelProfileList(value.modelProfiles)) &&
+    (value.activeProfileId === undefined || typeof value.activeProfileId === 'string') &&
+    (value.selectionProfileId === undefined || typeof value.selectionProfileId === 'string') &&
+    (value.hoverTranslateEnabled === undefined || typeof value.hoverTranslateEnabled === 'boolean')
   )
 }
 
@@ -761,6 +803,12 @@ export function isTranslationReply(value: unknown, message?: TranslationMessage)
         (value.cachedChars as number) <= message.texts.reduce((sum, text) => sum + text.length, 0)
       )
     }
+    case 'wt:get-cache-stats':
+      return isPersistentCacheStats(value.cacheStats)
+    case 'wt:get-usage-stats':
+    case 'wt:reset-usage-stats':
+      return isUsageStatsSnapshot(value.usageStats)
+    case 'wt:clear-site-cache':
     case 'wt:clear-cache':
     case 'wt:page-action':
     case 'wt:cancel-assist':

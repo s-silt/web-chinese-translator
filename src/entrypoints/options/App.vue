@@ -34,6 +34,7 @@
       </div>
       <DictionarySection v-if="translationSupported" v-show="currentNav === 'wt-dictionary-title'" />
       <TranslationSection v-if="translationSupported" v-show="showTranslation" :view="translationView" />
+      <ToolsSection v-if="translationSupported && currentNav === 'wt-tools-title'" />
       <div v-show="currentNav === 'github-title'" id="github-title" class="wt-github-group" role="region" :aria-label="t('navGithub')">
         <div class="section wt-github-preferences">
           <h2 id="github-preferences-title" class="section-title">{{ t('navGithub') }}</h2>
@@ -74,6 +75,7 @@ import DictionarySection from './DictionarySection.vue'
 import ExcludedPathsSection from './ExcludedPathsSection.vue'
 import GeneralSection from '../popup/GeneralSection.vue'
 import LanguageSection from '../popup/LanguageSection.vue'
+import ToolsSection from './ToolsSection.vue'
 import TranslationSection from './TranslationSection.vue'
 
 const translationSupported = !isFirefoxBuild()
@@ -93,6 +95,7 @@ const navLinks: readonly { target: string; key: MessageKey; group: NavGroupKey }
   { target: 'wt-general-title', key: 'navGeneral', group: 'navGroupGeneral' },
   { target: 'appearance-title', key: 'navAppearance', group: 'navGroupGeneral' },
   { target: 'wt-title', key: 'navModel', group: 'navGroupTranslation' },
+  { target: 'wt-tools-title', key: 'navTools', group: 'navGroupTranslation' },
   { target: 'wt-dictionary-title', key: 'navSites', group: 'navGroupDictionary' },
   { target: 'github-title', key: 'navGithub', group: 'navGroupAdvanced' },
   { target: 'about-title', key: 'navAbout', group: 'navGroupAdvanced' },

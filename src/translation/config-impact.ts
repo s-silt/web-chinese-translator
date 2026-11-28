@@ -2,6 +2,7 @@ import { normalizeOrigin, type TranslationConfig } from './config'
 import { isExcludedSite } from './page-policy'
 import { requestOptionsKey } from './request-options'
 import { isSiteScopeAllowed } from './site-scope'
+import { glossarySignature } from './preferences-extra'
 
 export type RequestKind = 'auto' | 'selection' | 'input' | 'assist' | 'test' | 'catalog'
 
@@ -23,6 +24,8 @@ export function translationOutputChanged(previous: TranslationConfig, next: Tran
     previous.model !== next.model ||
     previous.targetLanguage !== next.targetLanguage ||
     previous.sourceLanguage !== next.sourceLanguage ||
+    previous.translationStyle !== next.translationStyle ||
+    glossarySignature(previous.promptGlossary) !== glossarySignature(next.promptGlossary) ||
     requestOptionsKey(previous) !== requestOptionsKey(next)
   )
 }

@@ -47,6 +47,12 @@
               data-test="wt-auto"
               @change="setAuto"
             />
+            <UiSwitch
+              :checked="bilingualMode"
+              :label="t('wtDisplayModeBilingual')"
+              data-test="wt-bilingual"
+              @change="setBilingualMode"
+            />
             <p v-if="autoReason" id="wt-auto-reason" class="ui-hint">
               {{ t(autoReason) }}
               <button
@@ -165,6 +171,8 @@ const {
   busy,
   setFloating,
   setAutoInteraction,
+  bilingualMode,
+  setBilingualMode,
   setAuto,
   setInputTranslation,
   openOptionsAt,

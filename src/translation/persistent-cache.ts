@@ -4,7 +4,8 @@ const CACHE_DB = 'web-translator-cache'
 const CACHE_STORE = 'translations'
 const LRU_INDEX = 'lru'
 const CREATED_INDEX = 'createdAt'
-const DB_VERSION = 2
+const HOST_INDEX = 'by_host'
+const DB_VERSION = 3
 /** 协议和高级请求设置加入键布局；旧缓存按原有 TTL/LRU 规则淘汰。 */
 const KEY_VERSION = 3
 
@@ -29,6 +30,7 @@ interface CacheRecord {
   readonly createdAt: number
   readonly usedAt: number
   readonly bytes: number
+  readonly host?: string
 }
 
 export interface TranslationCacheEntry {
@@ -44,6 +46,7 @@ export interface PersistentCacheScope {
   readonly targetLanguage: string
   readonly context?: TranslationContext
   readonly requestOptionsKey?: string
+  readonly host?: string
 }
 
 let unavailableUntil = 0
@@ -88,6 +91,9 @@ function openCache(): Promise<IDBDatabase> {
       // 绝对 TTL 索引：清理时按 createdAt 精准淘汰过期项，避免命中刷新 usedAt 的条目滞留。
       if (!store.indexNames.contains(CREATED_INDEX)) {
         store.createIndex(CREATED_INDEX, 'createdAt')
+      }
+      if (!store.indexNames.contains(HOST_INDEX)) {
+        store.createIndex(HOST_INDEX, 'host')
       }
     }
     request.onsuccess = () => {
@@ -377,7 +383,7 @@ export async function writePersistentTranslations(
         if (generation !== clearGeneration) return () => undefined
         entries.forEach(([, translation], index) => {
           const bytes = translation.length * 2 + ENTRY_OVERHEAD_BYTES
-          const record: CacheRecord = { translation, createdAt: now, usedAt: now, bytes }
+          const record: CacheRecord = scope.host ? { translation, createdAt: now, usedAt: now, bytes, host: scope.host } : { translation, createdAt: now, usedAt: now, bytes }
           store.put(record, keys[index])
           added += bytes
         })
@@ -411,5 +417,94 @@ export async function clearPersistentTranslations(): Promise<boolean> {
   } catch {
     markFailed()
     return false
+  }
+}
+
+export interface PersistentCacheHostStat {
+  readonly host: string
+  readonly entries: number
+}
+
+export interface PersistentCacheStats {
+  readonly entries: number
+  readonly approxBytes: number
+  readonly expired: number
+  readonly hosts: readonly PersistentCacheHostStat[]
+}
+
+export function isPersistentCacheStats(value: unknown): value is PersistentCacheStats {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return (
+    typeof record.entries === 'number' &&
+    Number.isFinite(record.entries) &&
+    typeof record.approxBytes === 'number' &&
+    Number.isFinite(record.approxBytes) &&
+    typeof record.expired === 'number' &&
+    Number.isFinite(record.expired)
+  )
+}
+
+/** 读取持久译文缓存的条目数、估算体积与已过期条数。 */
+export async function getPersistentCacheStats(now: number = Date.now()): Promise<PersistentCacheStats> {
+  if (!usable()) return { entries: 0, approxBytes: 0, expired: 0, hosts: [] }
+  try {
+    let entries = 0
+    let approxBytes = 0
+    let expired = 0
+    const hostCounts = new Map<string, number>()
+    await withStore<void>('readonly', (store) => {
+      const request = store.openCursor()
+      request.onsuccess = () => {
+        const cursor = request.result
+        if (!cursor) return
+        const record = cursor.value as CacheRecord | undefined
+        if (record) {
+          entries += 1
+          approxBytes += typeof record.bytes === 'number' ? record.bytes : ENTRY_OVERHEAD_BYTES
+          const created = typeof record.createdAt === 'number' ? record.createdAt : record.usedAt
+          if (now - created > CACHE_TTL_MS) expired += 1
+          if (typeof record.host === 'string' && record.host !== '') {
+            hostCounts.set(record.host, (hostCounts.get(record.host) ?? 0) + 1)
+          }
+        }
+        cursor.continue()
+      }
+      return () => undefined
+    })
+    const hosts = [...hostCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([host, count]) => ({ host, entries: count }))
+    return { entries, approxBytes, expired, hosts }
+  } catch {
+    return { entries: 0, approxBytes: 0, expired: 0, hosts: [] }
+  }
+}
+
+/** 按站点 host 清空该站点的持久译文缓存，返回删除的条数。 */
+export async function clearPersistentTranslationsForHost(host: string): Promise<number> {
+  const normalized = host.trim().toLowerCase()
+  if (normalized === '' || !usable()) return 0
+  clearGeneration += 1
+  try {
+    let removed = 0
+    await withStore<void>('readwrite', (store) => {
+      if (!store.indexNames.contains(HOST_INDEX)) return () => undefined
+      const request = store.index(HOST_INDEX).openKeyCursor(IDBKeyRange.only(normalized))
+      request.onsuccess = () => {
+        const cursor = request.result
+        if (!cursor) return
+        store.delete(cursor.primaryKey)
+        removed += 1
+        cursor.continue()
+      }
+      return () => undefined
+    })
+    estimate = undefined
+    return removed
+  } catch {
+    markFailed()
+    return 0
   }
 }

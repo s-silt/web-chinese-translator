@@ -182,6 +182,7 @@ import { useI18n, useUiPreferencesSync } from '../../components/ui-preferences'
 import { useSettings } from '../../components/useSettings'
 import { copySelectionText } from '../../translation/clipboard'
 import { closePageSession, sendTranslationMessage } from '../../translation/client'
+import { TEXT_STREAM_PORT } from '../../translation/messages'
 import type { TranslationConfig } from '../../translation/config'
 import type { FailureCode } from '../../translation/failure'
 import { createId } from '../../translation/id'
@@ -374,6 +375,8 @@ async function submit(): Promise<void> {
   error.value = ''
   requestFailed.value = false
   result.value = ''
+  const streamed = await tryStreamTranslate(value, id, generation)
+  if (streamed) return
   const reply = await sendTranslationMessage({
     type: 'wt:translate-text',
     text: value,
@@ -390,6 +393,82 @@ async function submit(): Promise<void> {
     errorHintKey.value = (reply.code === undefined ? undefined : RECOVERY_KEYS[reply.code]) ?? 'textTranslateErrorHint'
     requestFailed.value = true
   }
+}
+
+
+async function tryStreamTranslate(value: string, id: string, generation: number): Promise<boolean> {
+  if (typeof browser.runtime?.connect !== 'function') return false
+  let port: ReturnType<typeof browser.runtime.connect>
+  try {
+    port = browser.runtime.connect({ name: TEXT_STREAM_PORT })
+  } catch {
+    return false
+  }
+  if (
+    !port ||
+    typeof port.onMessage?.addListener !== 'function' ||
+    typeof port.onDisconnect?.addListener !== 'function' ||
+    typeof port.postMessage !== 'function'
+  ) {
+    try {
+      port?.disconnect?.()
+    } catch {
+      void 0
+    }
+    return false
+  }
+  return await new Promise<boolean>((resolve) => {
+    let settled = false
+    const finish = (handled: boolean): void => {
+      if (settled) return
+      settled = true
+      try {
+        port.disconnect()
+      } catch {
+        void 0
+      }
+      resolve(handled)
+    }
+    port.onDisconnect.addListener(() => {
+      void browser.runtime.lastError
+      if (!settled) finish(false)
+    })
+    port.onMessage.addListener((raw: unknown) => {
+      if (disposed || generation !== epoch) {
+        finish(true)
+        return
+      }
+      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return
+      const msg = raw as Record<string, unknown>
+      if (msg.requestId !== id) return
+      if (msg.type === 'delta' && typeof msg.text === 'string') {
+        result.value = msg.text
+      } else if (msg.type === 'done' && typeof msg.text === 'string') {
+        result.value = msg.text
+        busy.value = false
+        requestId = undefined
+        finish(true)
+      } else if (msg.type === 'error' && typeof msg.error === 'string') {
+        busy.value = false
+        requestId = undefined
+        error.value = msg.error
+        errorHintKey.value = 'textTranslateErrorHint'
+        requestFailed.value = true
+        finish(true)
+      }
+    })
+    try {
+      port.postMessage({
+        type: 'translate',
+        requestId: id,
+        text: value,
+        sourceLanguage: source.value,
+        targetLanguage: target.value,
+      })
+    } catch {
+      finish(false)
+    }
+  })
 }
 
 async function copy(): Promise<void> {

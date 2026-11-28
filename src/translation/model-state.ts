@@ -72,3 +72,28 @@ export function modelSnapshot(): Promise<ModelSnapshot> {
     revision,
   }))
 }
+
+/** 若用户为划词/独立窗口指定了独立模型配置档且存在有效凭据，则返回覆盖后的快照。 */
+export async function resolveSceneSnapshot(
+  snapshot: ModelSnapshot,
+  scene: 'page' | 'selection' | 'text',
+): Promise<ModelSnapshot> {
+  if (scene === 'page') return snapshot
+  const targetId = snapshot.config.selectionProfileId
+  if (targetId === '') return snapshot
+  const profile = snapshot.config.modelProfiles.find((item) => item.id === targetId)
+  if (!profile) return snapshot
+  const sameOrigin = profile.baseUrl === snapshot.config.baseUrl
+  const apiKey = sameOrigin ? snapshot.apiKey : await readApiKey(profile.baseUrl)
+  return {
+    ...snapshot,
+    apiKey,
+    config: {
+      ...snapshot.config,
+      baseUrl: profile.baseUrl,
+      model: profile.model,
+      apiType: profile.apiType,
+      temperature: profile.temperature,
+    },
+  }
+}

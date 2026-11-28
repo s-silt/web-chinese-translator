@@ -17,6 +17,7 @@ import {
 import { translationOutputChanged } from './config-impact'
 import { createAssistance } from './assistance'
 import { createDomEngine, type AutoBatchOutcome, type DomEngine } from './dom'
+import { createHoverTranslator, type HoverTranslator } from './hover-translate'
 import { closePageSession, sendTranslationMessage } from './client'
 import {
   isContentTranslationMessage,
@@ -85,6 +86,7 @@ function createInstance(inputOnly = false): Instance {
   let config: TranslationConfig | undefined
   let modes: PageModes = { enabled: false, fixed: false, auto: false, selection: false, smart: false }
   let engine: DomEngine | undefined
+  let hoverTranslator: HoverTranslator | undefined
   type ToolbarSelection = {
     readonly text: string
     readonly anchor: SelectionAnchor
@@ -670,6 +672,7 @@ function createInstance(inputOnly = false): Instance {
       fixedEnabled: fixedOn,
       autoEnabled: autoOn,
       targetLanguage: () => config?.targetLanguage ?? 'zh-CN',
+      displayMode: () => config?.displayMode ?? 'replace',
       autoBudget: () => config?.pageCharLimit ?? DEFAULT_PAGE_CHAR_LIMIT,
       sourceLanguage: () => config?.sourceLanguage ?? 'auto',
       translateFixed: (text) =>
@@ -1107,7 +1110,23 @@ function createInstance(inputOnly = false): Instance {
     },
   })
 
-  const unwatchConfig = watchTranslationConfig((next) => {
+  if (!inputOnly) {
+    hoverTranslator = createHoverTranslator({
+      isEnabled: () => config?.hoverTranslateEnabled === true && config.baseUrl !== '' && config.model !== '',
+      displayMode: () => config?.displayMode ?? 'replace',
+      translateText: async (text) => {
+        const reply = await sendTranslationMessage({ type: 'wt:translate', mode: 'selection', texts: [text] })
+        return reply.ok ? reply.texts[0] : undefined
+      },
+    })
+  }
+
+  const unwatchConfig = watchTranslationConfig((next, previous) => {
+    if (previous.displayMode !== next.displayMode && engine !== undefined) {
+      engine.restore()
+      hoverTranslator?.restoreAll()
+      if (autoOn()) engine.start()
+    }
     const url = location.href
     disposeLiveFeatures()
     if (
@@ -1156,7 +1175,9 @@ function createInstance(inputOnly = false): Instance {
     reloadEpoch += 1
     domEpoch += 1
     try {
-      unwatchConfig()
+      hoverTranslator?.dispose()
+    hoverTranslator = undefined
+    unwatchConfig()
     } catch {
       void 0
     }
