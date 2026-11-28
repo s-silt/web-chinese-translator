@@ -75,6 +75,7 @@ function markFailed(): void {
 function openCache(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(CACHE_DB, DB_VERSION)
+    let abandoned = false
     request.onupgradeneeded = () => {
       const db = request.result
       const store = db.objectStoreNames.contains(CACHE_STORE)
@@ -90,12 +91,20 @@ function openCache(): Promise<IDBDatabase> {
       }
     }
     request.onsuccess = () => {
-      resolve(request.result)
+      const db = request.result
+      // blocked 不会取消 open；旧连接释放后仍可能返回一个已无人等待的句柄。
+      if (abandoned) {
+        db.close()
+        return
+      }
+      db.onversionchange = () => db.close()
+      resolve(db)
     }
     request.onerror = () => {
       reject(request.error ?? unavailable())
     }
     request.onblocked = () => {
+      abandoned = true
       reject(unavailable())
     }
   })

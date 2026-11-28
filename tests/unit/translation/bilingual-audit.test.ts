@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { translateTexts } from '../../../src/translation/provider'
+import { CompletionCancelledError } from '../../../src/translation/transport'
 import type { TranslationModelConfig } from '../../../src/translation/config'
 import type { TranslationContext } from '../../../src/translation/reading-context'
 
@@ -24,19 +25,15 @@ describe('双语场景样例核验（词库逐条核对 + 本地 Mock 上下文�
     const merged = { ...common, ...devin }
     expect(merged['Settings']).toBe('设置')
     expect(merged['Cancel']).toBe('取消')
-    if ('Apply' in merged) {
-      expect(merged['Apply']).toBe('应用')
-    }
+    expect(merged['Apply']).toBe('应用')
   })
 
   it('语境区分：设置面板中的 Apply 与招聘页中的 Apply 各自携带不同 currentPage 上下文发送', async () => {
-    const capturedBodies: Record<string, unknown>[] = []
+    const captured: Array<{ texts: string[]; currentPage: TranslationContext['currentPage'] }> = []
     const mockFetch: typeof fetch = vi.fn(async (_input, init) => {
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
-      capturedBodies.push(body)
-      const userMsg = JSON.parse(String((body.messages as { content: string }[])[1]?.content)) as {
-        currentPage?: { title?: string }
-      }
+      const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] }
+      const userMsg = JSON.parse(body.messages[1]!.content) as (typeof captured)[number]
+      captured.push(userMsg)
       const isJobs = userMsg.currentPage?.title?.includes('Careers') === true
       return new Response(
         JSON.stringify({
@@ -60,17 +57,15 @@ describe('双语场景样例核验（词库逐条核对 + 本地 Mock 上下文�
 
     expect(settingsOut).toBe('应用')
     expect(jobsOut).toBe('申请职位')
-    expect(capturedBodies).toHaveLength(2)
-    expect(String((capturedBodies[0]!.messages as { content: string }[])[1]?.content)).toContain('Workspace Settings')
-    expect(String((capturedBodies[1]!.messages as { content: string }[])[1]?.content)).toContain('Careers')
+    expect(captured).toEqual([
+      { texts: ['Apply'], ...settingsCtx },
+      { texts: ['Apply'], ...jobsCtx },
+    ])
   })
 
-  it('行内格式与输入翻译：保留 Markdown/换行与目标语言指令，并在中止时立即取消', async () => {
-    const controller = new AbortController()
-    const captured: string[] = []
-    const mockFetch: typeof fetch = vi.fn(async (_input, init) => {
-      const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] }
-      captured.push(body.messages[0]!.content)
+  it('输入翻译发送原文中的 Markdown 和换行，并指定源语言与目标语言', async () => {
+    const source = '第一行\n第二行含 `code`'
+    const mockFetch = vi.fn<typeof fetch>(async () => {
       return new Response(
         JSON.stringify({
           choices: [{ message: { content: JSON.stringify(['Line 1\nLine 2 with `code`']) } }],
@@ -84,9 +79,26 @@ describe('双语场景样例核验（词库逐条核对 + 本地 Mock 上下文�
       targetLanguage: 'en',
       sourceLanguage: 'zh-CN',
     }
-    const [translated] = await translateTexts(inputConfig, ['第一行\n第二行含 `code`'], 'sk-test', mockFetch, controller.signal)
+    const [translated] = await translateTexts(inputConfig, [source], 'sk-test', mockFetch)
+    const body = JSON.parse(String(mockFetch.mock.calls[0]?.[1]?.body)) as { messages: { content: string }[] }
+    expect(JSON.parse(body.messages[1]!.content)).toEqual([source])
+    expect(body.messages[0]!.content).toContain('English')
+    expect(body.messages[0]!.content).toContain('Simplified Chinese')
     expect(translated).toBe('Line 1\nLine 2 with `code`')
-    expect(captured[0]).toContain('English')
-    expect(captured[0]).toContain('Simplified Chinese')
+  })
+
+  it('中止进行中的输入翻译会取消对应请求', async () => {
+    const controller = new AbortController()
+    const pendingFetch: typeof fetch = vi.fn((_input, init) => {
+      const signal = init?.signal
+      if (!signal) throw new Error('Missing request signal')
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+    })
+    const pending = translateTexts(MOCK_CONFIG, ['Sample draft.'], '', pendingFetch, controller.signal)
+    expect(pendingFetch).toHaveBeenCalledTimes(1)
+    controller.abort()
+    await expect(pending).rejects.toBeInstanceOf(CompletionCancelledError)
   })
 })

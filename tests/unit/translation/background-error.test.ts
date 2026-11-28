@@ -19,8 +19,24 @@ describe('background-error', () => {
 
   it('rejects unsafe or arbitrary error names and falls back to UnknownError', () => {
     expect(formatSafeError({ name: 'Error: sk-secret-key', code: 'https://a.example' })).toBe('UnknownError')
+    expect(formatSafeError({ name: 'WorkspaceName', code: 'sk-synthetic-example' })).toBe('UnknownError')
+    expect(formatSafeError(new DOMException('ignored', 'sk-synthetic-example'))).toBe('DOMException')
     expect(formatSafeError('raw secret string')).toBe('UnknownError')
     expect(formatSafeError(null)).toBe('UnknownError')
+  })
+
+  it('logs only fixed categories even if an error name or code is overwritten', () => {
+    const error = new TranslationError('ignored', 'auth')
+    error.name = 'WorkspaceName'
+    expect(formatSafeError(error)).toBe('TranslationError(auth)')
+    Object.defineProperty(error, 'code', { value: 'sk-synthetic-example' })
+    expect(formatSafeError(error)).toBe('TranslationError')
+    const namedError = new Error('ignored')
+    namedError.name = 'WorkspaceName'
+    expect(formatSafeError(namedError)).toBe('Error')
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    reportBackgroundError('sk-synthetic-example', namedError)
+    expect(spy).toHaveBeenCalledWith('[网页汉化助手] 后台任务失败 (task): Error')
   })
 
   it('logs sanitized context and error summary via console.error', () => {

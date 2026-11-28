@@ -324,6 +324,48 @@ describe('淘汰', () => {
     const { values } = await rawRecords()
     expect(values.map((value) => value.translation).sort()).toEqual(['升级后', '有效旧条目'])
   })
+
+  it('v1 连接阻塞升级时先降级，随后关闭迟到的 v2 连接，保留数据并允许再次升级', async () => {
+    const legacy = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(DB, 1)
+      request.onupgradeneeded = () => {
+        const store = request.result.createObjectStore(STORE)
+        store.createIndex('lru', ['usedAt', 'bytes'])
+        store.put({ translation: '保留的译文', createdAt: NOW, usedAt: NOW, bytes: 300 }, 'legacy')
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const open = vi.spyOn(indexedDB, 'open')
+    let lateDb: IDBDatabase | undefined
+    try {
+      const cache = await restartWorker()
+      expect((await cache.readPersistentTranslations(scope, ['Hello'])).size).toBe(0)
+      const upgrade = open.mock.results[0]!.value as IDBOpenDBRequest
+      const lateSuccess = new Promise<IDBDatabase>((resolve, reject) => {
+        upgrade.addEventListener('success', () => resolve(upgrade.result), { once: true })
+        upgrade.addEventListener('error', () => reject(upgrade.error), { once: true })
+      })
+      legacy.close()
+      lateDb = await lateSuccess
+      const nextUpgrade = new Promise<boolean>((resolve, reject) => {
+        const request = indexedDB.open(DB, 3)
+        request.onblocked = () => resolve(false)
+        request.onerror = () => reject(request.error)
+        request.onsuccess = () => {
+          request.result.close()
+          resolve(true)
+        }
+      })
+      expect(() => lateDb!.transaction(STORE)).toThrow(expect.objectContaining({ name: 'InvalidStateError' }))
+      expect(await nextUpgrade).toBe(true)
+      expect(await withRawStore('readonly', store => store.get('legacy'))).toMatchObject({ translation: '保留的译文' })
+    } finally {
+      legacy.close()
+      lateDb?.close()
+      open.mockRestore()
+    }
+  })
 })
 
 describe('不可用时回退到仅内存', () => {
