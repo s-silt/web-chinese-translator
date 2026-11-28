@@ -356,10 +356,20 @@ describe('bilingualStyle variants & glossary bulk import/export', () => {
     expect(parseGlossaryBulkText('# header\ta\tb\nrelease =\t ')).toEqual({ ok: false, reason: 'invalid', line: 2 })
   })
 
+  it('preserves source punctuation and operators in the translation when entering terms by hand', () => {
+    for (const [row, source, target] of [
+      ['Washington, D.C. = 华盛顿', 'Washington, D.C.', '华盛顿'],
+      ['a=b -> A = B', 'a=b', 'A = B'],
+      ['pipeline= 阶段 A -> 阶段 B', 'pipeline', '阶段 A -> 阶段 B'],
+      ['flow-> A => B', 'flow', 'A => B'],
+      ['rule=> A = B', 'rule', 'A = B'],
+      ['compact=紧凑', 'compact', '紧凑'],
+    ] as const) {
+      expect(parseGlossaryBulkText(row)).toEqual({ ok: true, entries: [{ source, target }] })
+    }
+  })
+
   it('rejects invalid rows atomically and enforces the unique term limit without discarding excess input', () => {
-    expect(parseGlossaryBulkText('Washington, D.C. = 华盛顿\na=b -> A = B')).toEqual({ ok: true, entries: [
-      { source: 'Washington, D.C.', target: '华盛顿' }, { source: 'a=b', target: 'A = B' },
-    ] })
     for (const invalid of ['bad row', 'a = ', '["source", 3]', '["truncated', 'x = ' + 'y'.repeat(MAX_GLOSSARY_TERM_LENGTH + 1)]) {
       expect(parseGlossaryBulkText('A = B\r\n# a comment\r\n' + invalid)).toEqual({ ok: false, reason: 'invalid', line: 3 })
     }

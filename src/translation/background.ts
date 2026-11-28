@@ -740,6 +740,19 @@ async function saveConfig(
       reply = { ok: false, error: '所选模型档案不存在，请刷新后重试' }
       return
     }
+    const selectionProfile = profiles.find(profile => profile.id === selectionProfileId)
+    const previousSelection = sceneProfile(previous, 'selection')
+    const expectedInputProfile = message.type === 'wt:save-config' ? message.expectedInputProfile : undefined
+    if (expectedInputProfile && (selectionProfile?.id !== expectedInputProfile.id || selectionProfile.baseUrl !== expectedInputProfile.baseUrl)) {
+      reply = { ok: false, error: '模型档案已更改，请刷新后重试' }
+      return
+    }
+    const sameInputProfile = selectionProfile !== undefined && selectionProfile.id === previousSelection?.id &&
+      selectionProfile.baseUrl === previousSelection.baseUrl
+    if (patch.inputUsesSelectionProfile === true && (!selectionProfile || !(await endpointAllowed(selectionProfile.baseUrl)))) {
+      reply = { ok: false, error: '未授权访问该接口地址' }
+      return
+    }
     Object.assign(next, {
       baseUrl: nextBase,
       model: nextModel,
@@ -757,6 +770,7 @@ async function saveConfig(
       modelProfiles: profiles,
       activeProfileId,
       selectionProfileId,
+      inputUsesSelectionProfile: patch.inputUsesSelectionProfile ?? (sameInputProfile && previous.inputUsesSelectionProfile),
       hoverTranslateEnabled: patch.hoverTranslateEnabled ?? previous.hoverTranslateEnabled,
       selectionPopupEnabled: selectionOn,
       selectionToolbarEnabled: toolbarOn,

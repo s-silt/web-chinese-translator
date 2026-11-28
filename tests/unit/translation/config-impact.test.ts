@@ -25,8 +25,9 @@ describe('配置变更影响判定', () => {
     const profile = { id: 'custom', name: 'Custom', baseUrl: BASE.baseUrl, model: 'alt', apiType: 'chat-completions' as const, temperature: null }
     const next = { ...BASE, selectionProfileId: profile.id, modelProfiles: [profile] }
     expect(translationOutputChanged(BASE, next)).toBe(false)
-    for (const kind of ['selection', 'hover', 'selection-assist', 'text', 'input'] as const) expect(requestAffected(request(kind), BASE, next)).toBe(true)
-    for (const kind of ['auto', 'assist', 'test', 'catalog'] as const) expect(requestAffected(request(kind), BASE, next)).toBe(false)
+    for (const kind of ['selection', 'hover', 'selection-assist', 'text'] as const) expect(requestAffected(request(kind), BASE, next)).toBe(true)
+    for (const kind of ['auto', 'assist', 'test', 'catalog', 'input'] as const) expect(requestAffected(request(kind), BASE, next)).toBe(false)
+    expect(requestAffected(request('input'), next, { ...next, inputUsesSelectionProfile: true })).toBe(true)
     expect(requestAffected(request('hover'), next, { ...next, hoverTranslateEnabled: !next.hoverTranslateEnabled })).toBe(true)
     expect(requestAffected(request('text'), next, { ...next, modelProfiles: [{ ...profile, name: 'Renamed' }] })).toBe(false)
   })

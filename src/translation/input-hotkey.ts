@@ -212,6 +212,7 @@ export function hotkeyFromEvent(
 
 export function matchesHotkey(
   event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'> & {
+    readonly code?: string
     readonly isComposing?: boolean
     readonly keyCode?: number
     readonly repeat?: boolean
@@ -231,7 +232,13 @@ export function matchesHotkey(
     return false
   }
   const eventKey = canonicalKeyName(event.key)
-  return eventKey !== undefined && eventKey === parsed.key
+  if (eventKey === parsed.key) return true
+  // macOS Option 可把字母变成 Ω 等符号。普通字母仍按布局匹配，不拿物理位置覆盖。
+  if (!parsed.alt || parsed.ctrl || parsed.meta || !/^[A-Z]$/.test(parsed.key) ||
+    event.key.length !== 1 || event.key.charCodeAt(0) < 128 || !/^Mac/.test(globalThis.navigator?.platform ?? '')) return false
+  const layoutCode = event.keyCode ?? 0
+  if (layoutCode >= 65 && layoutCode <= 90) return String.fromCharCode(layoutCode) === parsed.key
+  return event.code === `Key${parsed.key}`
 }
 
 export function formatHotkey(hotkey: string, isMac = false): string {

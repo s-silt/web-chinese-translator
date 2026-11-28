@@ -5,8 +5,9 @@ test.use({ headless: false })
 test('手动输入翻译保留原稿，浮层可按次改语言，Alt+Z 无请求还原', async ({ context, extension, extensionId }, testInfo) => {
   const url = 'https://app.devin.ai/input-draft'
   const endpoint = 'https://fixture-metrics.devin.ai/v1'
+  const profileEndpoint = 'https://fixture-selection.devin.ai/v1'
   const original = '请核对这份草稿。'
-  const calls: { texts: string[]; language: string }[] = []
+  const calls: { texts: string[]; language: string; endpoint: string }[] = []
   await context.route('https://**/*', async route => {
     if (route.request().url() === url) {
       return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><html lang="zh-CN">
@@ -14,12 +15,13 @@ test('手动输入翻译保留原稿，浮层可按次改语言，Alt+Z 无请�
         <style>body{max-width:640px;margin:64px auto;font:16px system-ui;color:#1f2328}textarea{box-sizing:border-box;width:100%;height:100px;padding:12px;font:inherit}</style>
         <label for="draft">消息草稿</label><textarea id="draft"></textarea></html>` })
     }
-    if (route.request().url() !== endpoint + '/chat/completions') return route.abort()
+    const destination = [endpoint, profileEndpoint].find(base => route.request().url() === base + '/chat/completions')
+    if (!destination) return route.abort()
     const { messages } = route.request().postDataJSON() as { messages: { content: string }[] }
     const content = JSON.parse(messages[1]!.content)
     const texts: string[] = Array.isArray(content) ? content : content.texts
     const language = messages[0]!.content.includes('Japanese') ? 'ja' : 'en'
-    calls.push({ texts, language })
+    calls.push({ texts, language, endpoint: destination })
     return route.fulfill({ json: { choices: [{ message: {
       content: JSON.stringify(texts.map(() => language === 'ja' ? '下書きを確認してください。' : 'Please check this draft.')),
     } }] } })
@@ -28,6 +30,8 @@ test('手动输入翻译保留原稿，浮层可按次改语言，Alt+Z 无请�
   await extension.setTranslationConfig({
     baseUrl: endpoint, model: 'fixture', inputTranslationEnabled: true, inputReplaceMode: 'auto',
     inputAutoReplaceDelayMs: 500, inputTargetLanguage: 'en', floatingButtonEnabled: false,
+    modelProfiles: [{ id: 'selection', name: '划词专用', baseUrl: profileEndpoint, model: 'selection-model', apiType: 'chat-completions', temperature: 0.2 }],
+    selectionProfileId: 'selection',
   })
   const options = await context.newPage()
   await options.goto(`chrome-extension://${extensionId}/options.html#wt-general-title`)
@@ -62,5 +66,21 @@ test('手动输入翻译保留原稿，浮层可按次改语言，Alt+Z 无请�
   await draft.press('Alt+z')
   await expect(draft).toHaveValue(original)
   await expect(language).toBeHidden()
-  expect(calls).toEqual([{ texts: [original], language: 'en' }, { texts: [original], language: 'ja' }])
+  expect(calls).toEqual([{ texts: [original], language: 'en', endpoint }, { texts: [original], language: 'ja', endpoint }])
+
+  await options.goto(`chrome-extension://${extensionId}/options.html#wt-tools-title`)
+  const optIn = options.locator('[data-test="wt-input-use-selection-profile"]').getByRole('switch')
+  await expect(optIn).not.toBeChecked()
+  await optIn.click()
+  await expect(optIn).toBeChecked()
+  await options.reload()
+  await expect(optIn).toBeChecked()
+  await options.locator('#wt-tools-title > .section').first().screenshot({ path: testInfo.outputPath('input-profile-opt-in.png') })
+  await page.reload()
+  await waitForSiteContentReady(extension.page, page, { supported: true })
+  await draft.fill(original)
+  await draft.press('Alt+Enter')
+  await expect(draft).toHaveValue('Please check this draft.')
+  expect(calls).toHaveLength(3)
+  expect(calls[2]).toEqual({ texts: [original], language: 'en', endpoint: profileEndpoint })
 })

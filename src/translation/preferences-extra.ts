@@ -195,8 +195,8 @@ function parseGlossaryLine(line: string): PromptGlossaryEntry | undefined {
     } catch { /* Invalid JSON is reported with the original line number. */ }
     return undefined
   }
-  // A spaced operator marks the field boundary even when the source contains punctuation.
-  const match = /\s+(?:=>|->|=)\s+/.exec(line) ?? glossarySeparator.exec(line)
+  // The first operator followed by whitespace separates fields; later operators belong to the translation.
+  const match = /(?:=>|->|=)(?=\s)/.exec(line) ?? glossarySeparator.exec(line)
   if (!match) return undefined
   return { source: line.slice(0, match.index).trim(), target: line.slice(match.index + match[0].length).trim() }
 }

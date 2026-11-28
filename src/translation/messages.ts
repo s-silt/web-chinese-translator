@@ -70,6 +70,7 @@ export type TranslationMessage =
       type: 'wt:save-config'
       patch: TranslationConfigPatch
       expectedGlossary?: TranslationConfig['promptGlossary']
+      expectedInputProfile?: { id: string; baseUrl: string }
       apiKey?: string
       customHeaders?: Readonly<Record<string, string>>
       expectedConnection?: { baseUrl: string; model: string; requestOptionsKey?: string }
@@ -336,6 +337,7 @@ const PATCH_KEYS = new Set([
   'modelProfiles',
   'activeProfileId',
   'selectionProfileId',
+  'inputUsesSelectionProfile',
   'hoverTranslateEnabled',
   'inputTriggerMode',
   'inputTriggerHotkey',
@@ -372,11 +374,17 @@ function isSaveConfig(value: unknown): boolean {
   if (patch.model !== undefined && (typeof patch.model !== 'string' || patch.model.length > 200)) return false
   if (patch.activeProfileId !== undefined && (typeof patch.activeProfileId !== 'string' || patch.activeProfileId.length > 64)) return false
   if (patch.selectionProfileId !== undefined && (typeof patch.selectionProfileId !== 'string' || patch.selectionProfileId.length > 64)) return false
-  for (const key of ['selectionPopupEnabled', 'selectionToolbarEnabled', 'proactiveAssistEnabled', 'floatingButtonEnabled', 'autoInteractionEnabled', 'inputTranslationEnabled', 'hoverTranslateEnabled'] as const) {
+  for (const key of ['selectionPopupEnabled', 'selectionToolbarEnabled', 'proactiveAssistEnabled', 'floatingButtonEnabled', 'autoInteractionEnabled', 'inputTranslationEnabled', 'hoverTranslateEnabled', 'inputUsesSelectionProfile'] as const) {
     if (patch[key] !== undefined && typeof patch[key] !== 'boolean') return false
   }
   if (!isOptionalApiKey(value.apiKey)) return false
   if (value.expectedGlossary !== undefined && (patch.promptGlossary === undefined || !isPromptGlossaryList(value.expectedGlossary))) return false
+  if (value.expectedInputProfile !== undefined) {
+    const profile = value.expectedInputProfile
+    if (patch.inputUsesSelectionProfile !== true || !isRecord(profile) ||
+      typeof profile.id !== 'string' || !profile.id || profile.id.length > 64 ||
+      typeof profile.baseUrl !== 'string' || !profile.baseUrl || profile.baseUrl.length > 2048) return false
+  }
   if (value.customHeaders !== undefined && !isValidCustomHeaders(value.customHeaders)) return false
   const expected = value.expectedConnection
   if (expected !== undefined) {
@@ -708,6 +716,7 @@ export function isConfigShape(value: unknown): value is TranslationConfig {
     (value.modelProfiles === undefined || isModelProfileList(value.modelProfiles)) &&
     (value.activeProfileId === undefined || typeof value.activeProfileId === 'string') &&
     (value.selectionProfileId === undefined || typeof value.selectionProfileId === 'string') &&
+    (value.inputUsesSelectionProfile === undefined || typeof value.inputUsesSelectionProfile === 'boolean') &&
     (value.hoverTranslateEnabled === undefined || typeof value.hoverTranslateEnabled === 'boolean') &&
     (value.inputTriggerMode === undefined || isInputTriggerMode(value.inputTriggerMode)) &&
     (value.inputTriggerHotkey === undefined || normalizeInputTriggerHotkey(value.inputTriggerHotkey) !== undefined)

@@ -81,11 +81,18 @@ export function planConfigBackupRestore(
   const {
     baseUrl, model, apiType, temperature,
     selectionPopupEnabled, selectionToolbarEnabled, proactiveAssistEnabled, hoverTranslateEnabled,
-    inputTranslationEnabled, autoInteractionEnabled, ...other
+    inputTranslationEnabled, autoInteractionEnabled, inputUsesSelectionProfile, ...other
   } = settings
   const selection = selectionProfileOrigin(imported)
   const restoreSelection = imported.selectionProfileId === '' || (selection !== undefined && !missingOrigins.includes(selection))
   const { omittedProfiles, ...profiles } = restoreProfiles(imported, current, connectionAllowed, restoreSelection)
+  const restoreInput = connectionAllowed && siteAccess && (!inputUsesSelectionProfile || restoreSelection)
+  const oldSelection = current.modelProfiles.find(profile => profile.id === current.selectionProfileId)
+  const nextSelection = profiles.modelProfiles.find(profile => profile.id === profiles.selectionProfileId)
+  const retainInputProfile = current.inputUsesSelectionProfile && oldSelection !== undefined &&
+    oldSelection.id === nextSelection?.id && oldSelection.baseUrl === nextSelection.baseUrl
+  const oldInputUrl = current.inputUsesSelectionProfile && oldSelection ? oldSelection.baseUrl : current.baseUrl
+  const nextInputUrl = retainInputProfile ? oldInputUrl : connectionAllowed ? baseUrl : current.baseUrl
   const patch = {
     ...other,
     ...(connectionAllowed ? { baseUrl, model, apiType, temperature } : {}),
@@ -94,8 +101,11 @@ export function planConfigBackupRestore(
     // 避免将导入的主动功能指向另一份仍在使用的本机连接。
     ...(connectionAllowed && siteAccess ? {
       selectionPopupEnabled, selectionToolbarEnabled, proactiveAssistEnabled, hoverTranslateEnabled,
-      inputTranslationEnabled, autoInteractionEnabled,
+      autoInteractionEnabled,
     } : {}),
+    // 部分恢复不能把原来已启用的草稿翻译静默移至另一端点。
+    ...(restoreInput ? { inputTranslationEnabled, inputUsesSelectionProfile }
+      : current.inputTranslationEnabled && nextInputUrl !== oldInputUrl ? { inputTranslationEnabled: false } : {}),
   }
   return { patch, omittedProfiles }
 }

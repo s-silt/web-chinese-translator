@@ -64,7 +64,8 @@ export async function readConsistentModelState<T>(
 type ModelScene = 'page' | 'selection' | 'text' | 'input'
 
 export function sceneProfile(config: TranslationConfig, scene: ModelScene) {
-  return scene === 'page' ? undefined : config.modelProfiles.find((profile) => profile.id === config.selectionProfileId)
+  if (scene === 'page' || (scene === 'input' && !config.inputUsesSelectionProfile)) return undefined
+  return config.modelProfiles.find((profile) => profile.id === config.selectionProfileId)
 }
 
 export function modelSnapshot(scene: ModelScene = 'page'): Promise<ModelSnapshot> {
@@ -79,7 +80,7 @@ export function modelSnapshot(scene: ModelScene = 'page'): Promise<ModelSnapshot
   })
 }
 
-/** 划词、输入和独立窗口使用选定的配置档，凭据仅在来源相同的接口间复用。 */
+/** 输入草稿需单独选择使用划词档案。凭据仅在来源相同的接口间复用。 */
 export function resolveSceneSnapshot(
   snapshot: ModelSnapshot,
   scene: ModelScene,

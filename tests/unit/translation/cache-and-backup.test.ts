@@ -131,6 +131,23 @@ describe('可移植配置', () => {
   const denied = profile('denied', 'denied')
   const filler = Array.from({ length: MAX_MODEL_PROFILES - 2 }, (_, i) => profile(`imported-${i + 1}`, `extra-${i}`))
 
+  it('旧备份保持主接口，主动开启的输入档案只在所需授权齐全时恢复', () => {
+    const optedIn = { ...settings, baseUrl: remote.baseUrl, model: remote.model, modelProfiles: [denied],
+      selectionProfileId: denied.id, inputTranslationEnabled: true, inputUsesSelectionProfile: true }
+    const exported = exportConfigBackup(optedIn)
+    expect(parseConfigBackup(exported)).toMatchObject({ ok: true, config: { inputUsesSelectionProfile: true } })
+    const legacy = JSON.parse(exported)
+    delete legacy.config.inputUsesSelectionProfile
+    expect(parseConfigBackup(JSON.stringify(legacy))).toMatchObject({ ok: true, config: { inputUsesSelectionProfile: false } })
+    legacy.config.inputUsesSelectionProfile = 'true'
+    expect(parseConfigBackup(JSON.stringify(legacy))).toMatchObject({ ok: false })
+    const current = { ...settings, baseUrl: local.baseUrl, model: local.model, inputTranslationEnabled: true }
+    expect(planConfigBackupRestore(optedIn, current).patch).toMatchObject({ inputTranslationEnabled: true, inputUsesSelectionProfile: true })
+    const partial = planConfigBackupRestore(optedIn, current, ['https://denied.fixture.test/*']).patch
+    expect(partial.inputUsesSelectionProfile).toBeUndefined()
+    expect(partial.inputTranslationEnabled).toBe(false)
+  })
+
   it.each([true, false])('部分恢复保留未授权场景的本机端点（拒绝专用模型=%s），同 ID 和满档案表也不串用', denySelection => {
     const current = {
       ...settings, baseUrl: local.baseUrl, model: local.model, apiType: local.apiType, modelProfiles: [local],

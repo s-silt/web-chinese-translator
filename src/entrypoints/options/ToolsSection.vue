@@ -48,6 +48,14 @@
           @update:model-value="updateSelectionProfile"
         />
       </div>
+      <UiSwitch
+        v-if="config.selectionProfileId"
+        id="wt-input-use-selection-profile"
+        :checked="config.inputUsesSelectionProfile"
+        :label="t('wtProfileInputOptIn')"
+        data-test="wt-input-use-selection-profile"
+        @change="updateInputProfile"
+      />
     </div>
 
     <div class="section">
@@ -343,8 +351,8 @@ async function refreshStats(): Promise<void> {
   if (failure) showToast('danger', 'wtToolsFailed', { error: failure.error })
 }
 
-async function patchConfig(patch: TranslationConfigPatch, expectedGlossary?: readonly PromptGlossaryEntry[]): Promise<boolean> {
-  const reply = await sendTranslationMessage({ type: 'wt:save-config', patch, expectedGlossary })
+async function patchConfig(patch: TranslationConfigPatch, expectedGlossary?: readonly PromptGlossaryEntry[], expectedInputProfile?: Pick<ModelProfile, 'id' | 'baseUrl'>): Promise<boolean> {
+  const reply = await sendTranslationMessage({ type: 'wt:save-config', patch, expectedGlossary, expectedInputProfile })
   if (!reply.ok) {
     if (reply.code === 'glossary-conflict') {
       const latest = await sendTranslationMessage({ type: 'wt:get-config' })
@@ -412,6 +420,12 @@ async function updateSelectionProfile(value: string): Promise<void> {
   const profile = config.value.modelProfiles.find((item) => item.id === value)
   if (profile && !(await grantOrigins([hostPermissionPattern(profile.baseUrl)]))) return
   await patchConfig({ selectionProfileId: value })
+}
+
+async function updateInputProfile(enabled: boolean): Promise<void> {
+  const profile = config.value.modelProfiles.find(item => item.id === config.value.selectionProfileId)
+  if (!profile || (enabled && !(await grantOrigins([hostPermissionPattern(profile.baseUrl)])))) return
+  await patchConfig({ inputUsesSelectionProfile: enabled }, undefined, enabled ? { id: profile.id, baseUrl: profile.baseUrl } : undefined)
 }
 
 async function grantOrigins(origins: string[]): Promise<boolean> {

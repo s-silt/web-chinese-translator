@@ -4484,6 +4484,14 @@ describe('输入翻译自动处理边界与字幕移除', () => {
     const message = { type: 'wt:translate', mode: 'input', texts: ['输入草稿'], requestId: 'input-profile' }
     const permission = vi.mocked(fakeBrowser.permissions.contains)
     permission.mockImplementation(async (query) => !query.origins?.includes('https://input.example/*'))
+    expect(await trigger(message, contentSender)).toMatchObject({ ok: true })
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe('https://api.example.com/v1/chat/completions')
+    fetcher.mockClear()
+    const optIn = { type: 'wt:save-config', patch: { inputUsesSelectionProfile: true } }
+    expect(await trigger(optIn, extSender)).toMatchObject({ ok: false })
+    permission.mockImplementation(async () => true)
+    expect(await trigger(optIn, extSender)).toMatchObject({ ok: true, config: { inputUsesSelectionProfile: true } })
+    permission.mockImplementation(async (query) => !query.origins?.includes('https://input.example/*'))
     expect(await trigger({ type: 'wt:page-modes' }, contentSender)).toMatchObject({ modes: { input: false } })
     expect(await trigger(message, contentSender)).toMatchObject({ ok: false })
     expect(fetcher).not.toHaveBeenCalled()
@@ -4505,10 +4513,15 @@ describe('输入翻译自动处理边界与字幕移除', () => {
     expect(prompts[0]).toContain('into natural, accurate Japanese')
     expect(prompts[1]).toContain('into natural, accurate English')
     expect((await translationConfigItem.getValue()).inputTargetLanguage).toBe('en')
+    const replacement = { ...profile, baseUrl: 'https://another.example/v1' }
+    expect(await trigger({ type: 'wt:save-config', patch: { modelProfiles: [replacement] } }, extSender))
+      .toMatchObject({ ok: true, config: { inputUsesSelectionProfile: false } })
+    expect(await trigger({ ...optIn, expectedInputProfile: { id: profile.id, baseUrl: profile.baseUrl } }, extSender)).toMatchObject({ ok: false })
+    expect((await translationConfigItem.getValue()).inputUsesSelectionProfile).toBe(false)
   })
 
-  it.each(['mode', 'hotkey', 'profile', 'permission'])('输入在途时 %s 改变会立即取消', async (change) => {
-    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true, modelProfiles: [profile], selectionProfileId: profile.id })
+  it.each(['mode', 'hotkey', 'profile', 'opt-out', 'permission'])('输入在途时 %s 改变会立即取消', async (change) => {
+    await translationConfigItem.setValue({ ...VALID_CONFIG, inputTranslationEnabled: true, modelProfiles: [profile], selectionProfileId: profile.id, inputUsesSelectionProfile: true })
     let signal: AbortSignal | undefined
     vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
       signal = init?.signal as AbortSignal
@@ -4519,7 +4532,8 @@ describe('输入翻译自动处理边界与字幕移除', () => {
     if (change === 'permission') {
       for (const listener of removedListeners) listener({ origins: ['https://input.example/*'] })
     } else {
-      const patch = change === 'mode' ? { inputTriggerMode: 'manual' } : change === 'hotkey' ? { inputTriggerHotkey: 'Ctrl+Enter' } : { selectionProfileId: '' }
+      const patch = change === 'mode' ? { inputTriggerMode: 'manual' } : change === 'hotkey' ? { inputTriggerHotkey: 'Ctrl+Enter' }
+        : change === 'opt-out' ? { inputUsesSelectionProfile: false } : { selectionProfileId: '' }
       expect(await trigger({ type: 'wt:save-config', patch }, extSender)).toMatchObject({ ok: true })
     }
     expect(signal?.aborted).toBe(true)

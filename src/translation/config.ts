@@ -104,6 +104,7 @@ export interface TranslationConfig {
   readonly modelProfiles: readonly ModelProfile[]
   readonly activeProfileId: string
   readonly selectionProfileId: string
+  readonly inputUsesSelectionProfile: boolean
   readonly hoverTranslateEnabled: boolean
   readonly inputTriggerMode: InputTriggerMode
   readonly inputTriggerHotkey: string
@@ -156,6 +157,7 @@ export const DEFAULT_TRANSLATION_CONFIG: TranslationConfig = {
   modelProfiles: [],
   activeProfileId: '',
   selectionProfileId: '',
+  inputUsesSelectionProfile: false,
   hoverTranslateEnabled: false,
   inputTriggerMode: DEFAULT_INPUT_TRIGGER_MODE,
   inputTriggerHotkey: DEFAULT_INPUT_TRIGGER_HOTKEY,
@@ -316,6 +318,7 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
   const toolbarOn = selectionOn && value.selectionToolbarEnabled === true
   const modelProfiles = sanitizeModelProfiles(value.modelProfiles, normalizeBaseUrl, clampModel)
   const savedProfile = (id: unknown): string => modelProfiles.find(profile => profile.id === id)?.id ?? ''
+  const selectionProfileId = savedProfile(value.selectionProfileId)
   return {
     baseUrl: typeof value.baseUrl === 'string' ? normalizeBaseUrl(value.baseUrl) : '',
     model: typeof value.model === 'string' ? clampModel(value.model) : '',
@@ -353,7 +356,8 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
     promptGlossary: sanitizePromptGlossary(value.promptGlossary),
     modelProfiles,
     activeProfileId: savedProfile(value.activeProfileId),
-    selectionProfileId: savedProfile(value.selectionProfileId),
+    selectionProfileId,
+    inputUsesSelectionProfile: selectionProfileId !== '' && value.inputUsesSelectionProfile === true,
     hoverTranslateEnabled: value.hoverTranslateEnabled === true,
     inputTriggerMode: isInputTriggerMode(value.inputTriggerMode) ? value.inputTriggerMode : DEFAULT_INPUT_TRIGGER_MODE,
     inputTriggerHotkey: normalizeInputTriggerHotkey(value.inputTriggerHotkey) ?? DEFAULT_INPUT_TRIGGER_HOTKEY,

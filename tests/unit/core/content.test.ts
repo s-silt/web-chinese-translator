@@ -81,6 +81,7 @@ function scopeConfig(mode: SiteScopeMode, hosts: readonly string[]): Translation
     modelProfiles: [],
     activeProfileId: '',
     selectionProfileId: '',
+    inputUsesSelectionProfile: false,
     hoverTranslateEnabled: false,
     inputTriggerMode: 'auto',
     inputTriggerHotkey: 'Alt+Enter',
