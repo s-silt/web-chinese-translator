@@ -10,7 +10,7 @@
           v-if="dirty && canDiscard"
           size="sm"
           variant="invisible"
-          :disabled="testing"
+          :disabled="testing || saving || grantingEndpoint"
           data-test="wt-discard-draft"
           @click="emit('discardDraft')"
         >
@@ -64,6 +64,7 @@ const props = defineProps<{
   latencyMs?: number
   error?: string
   testing?: boolean
+  saving?: boolean
   disabled?: boolean
   disabledReason?: string
   canGrantEndpoint?: boolean
