@@ -1,6 +1,6 @@
-import { attachBilingualBlock, inlineTranslationText, isBilingualElement, removeBilingualNode } from './bilingual'
+import { attachBilingualBlock, inlineTranslationText, isBilingualElement, removeBilingualNode, updateBilingualVariant } from './bilingual'
 import { inlineUnitFor, isInlineUnitCurrent, parseInlineResult } from './inline-units'
-import type { TranslationDisplayMode } from './preferences-extra'
+import type { BilingualStyle, TranslationDisplayMode } from './preferences-extra'
 import { isReadableElement } from './reading-context'
 import { isExcludedElement } from './sites'
 
@@ -34,11 +34,13 @@ export interface HoverTranslatorOptions {
   readonly isEnabled: () => boolean
   readonly isPageTranslated?: (node: Text) => boolean
   readonly displayMode: () => TranslationDisplayMode
+  readonly bilingualStyle?: () => BilingualStyle
   readonly translateText: (text: string, signal: AbortSignal) => Promise<string | undefined>
 }
 
 export interface HoverTranslator {
   restoreAll(): void
+  setBilingualStyle(style: BilingualStyle): void
   dispose(): void
 }
 
@@ -118,7 +120,7 @@ export function createHoverTranslator(options: HoverTranslatorOptions): HoverTra
       const segments = unit ? parseInlineResult(result, unit) : [result.trim()]
       if (!segments) return
       if (options.displayMode() === 'bilingual') {
-        const bilingualEl = attachBilingualBlock(el, unit ? inlineTranslationText(result) : result)
+        const bilingualEl = attachBilingualBlock(el, unit ? inlineTranslationText(result) : result, options.bilingualStyle?.())
         if (!bilingualEl) return
         translated.set(el, { bilingualEl })
       } else {
@@ -195,5 +197,13 @@ export function createHoverTranslator(options: HoverTranslatorOptions): HoverTra
   document.addEventListener('mouseleave', clearPreview)
   window.addEventListener('blur', clearPreview)
 
-  return { restoreAll, dispose }
+  return {
+    restoreAll,
+    dispose,
+    setBilingualStyle(style) {
+      for (const { bilingualEl } of translated.values()) {
+        if (bilingualEl) updateBilingualVariant(bilingualEl, style)
+      }
+    },
+  }
 }

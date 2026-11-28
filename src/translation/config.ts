@@ -18,7 +18,9 @@ import {
   type InputReplaceMode,
 } from './input-replace-mode'
 import {
+  DEFAULT_BILINGUAL_STYLE,
   DEFAULT_DISPLAY_MODE,
+  isBilingualStyle,
   DEFAULT_TRANSLATION_STYLE,
   isDisplayMode,
   isTranslationStyle,
@@ -26,14 +28,18 @@ import {
   sanitizePromptGlossary,
   type ModelProfile,
   type PromptGlossaryEntry,
+  type BilingualStyle,
   type TranslationDisplayMode,
   type TranslationStyle,
 } from './preferences-extra'
 
 export {
+  BILINGUAL_STYLES,
+  DEFAULT_BILINGUAL_STYLE,
   DEFAULT_DISPLAY_MODE,
   DEFAULT_TRANSLATION_STYLE,
   DISPLAY_MODES,
+  isBilingualStyle,
   isDisplayMode,
   isModelProfileList,
   isPromptGlossaryList,
@@ -83,6 +89,7 @@ export interface TranslationConfig {
   readonly siteScopeMode: SiteScopeMode
   readonly siteScopeHosts: readonly string[]
   readonly displayMode: TranslationDisplayMode
+  readonly bilingualStyle: BilingualStyle
   readonly translationStyle: TranslationStyle
   readonly promptGlossary: readonly PromptGlossaryEntry[]
   readonly modelProfiles: readonly ModelProfile[]
@@ -126,6 +133,7 @@ export const DEFAULT_TRANSLATION_CONFIG: TranslationConfig = {
   siteScopeMode: 'all',
   siteScopeHosts: [],
   displayMode: DEFAULT_DISPLAY_MODE,
+  bilingualStyle: DEFAULT_BILINGUAL_STYLE,
   translationStyle: DEFAULT_TRANSLATION_STYLE,
   promptGlossary: [],
   modelProfiles: [],
@@ -321,6 +329,7 @@ export function sanitizeTranslationConfig(value: unknown): TranslationConfig {
     siteScopeMode: isSiteScopeMode(value.siteScopeMode) ? value.siteScopeMode : 'all',
     siteScopeHosts: sanitizeExcludedHosts(value.siteScopeHosts),
     displayMode: isDisplayMode(value.displayMode) ? value.displayMode : DEFAULT_DISPLAY_MODE,
+    bilingualStyle: isBilingualStyle(value.bilingualStyle) ? value.bilingualStyle : DEFAULT_BILINGUAL_STYLE,
     translationStyle: isTranslationStyle(value.translationStyle) ? value.translationStyle : DEFAULT_TRANSLATION_STYLE,
     promptGlossary: sanitizePromptGlossary(value.promptGlossary),
     modelProfiles,

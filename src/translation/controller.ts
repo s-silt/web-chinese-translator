@@ -652,6 +652,7 @@ function createInstance(inputOnly = false): Instance {
         isEnabled: hoverOn,
         isPageTranslated: node => engine?.isModelTranslated(node) === true,
         displayMode: () => config?.displayMode ?? 'replace',
+        bilingualStyle: () => config?.bilingualStyle ?? 'subtle',
         translateText: async (text, signal) => {
           const requestId = createId()
           const abort = () => { void sendTranslationMessage({ type: 'wt:cancel-assist', requestId }) }
@@ -697,6 +698,7 @@ function createInstance(inputOnly = false): Instance {
       autoEnabled: autoOn,
       targetLanguage: () => config?.targetLanguage ?? 'zh-CN',
       displayMode: () => config?.displayMode ?? 'replace',
+      bilingualStyle: () => config?.bilingualStyle ?? 'subtle',
       autoBudget: () => config?.pageCharLimit ?? DEFAULT_PAGE_CHAR_LIMIT,
       sourceLanguage: () => config?.sourceLanguage ?? 'auto',
       translateFixed: (text) =>
@@ -945,7 +947,6 @@ function createInstance(inputOnly = false): Instance {
         pageRestored = false
       }
       const connectionChanged = translationOutputChanged(previousConfig, nextConfig)
-      if (!connectionChanged && previousConfig.displayMode !== nextConfig.displayMode) engine?.setDisplayMode(nextConfig.displayMode)
       if (
         connectionChanged ||
         nextConfig.inputTranslationEnabled !== previousConfig.inputTranslationEnabled ||
@@ -971,6 +972,11 @@ function createInstance(inputOnly = false): Instance {
         : undefined
       config = nextConfig
       modes = nextModes
+      if (!connectionChanged && previousConfig.displayMode !== nextConfig.displayMode) engine?.setDisplayMode(nextConfig.displayMode)
+      if (previousConfig.bilingualStyle !== nextConfig.bilingualStyle) {
+        engine?.setBilingualStyle(nextConfig.bilingualStyle)
+        hoverTranslator?.setBilingualStyle(nextConfig.bilingualStyle)
+      }
       panel.setPreferences(surfacePreferences)
       // 词条表内容变化（词典开关/自定义词典编辑）后强制重扫：恢复旧替换再用新表写。
       if (nextModes.fixed && hadFixedEntries !== undefined && !sameFixedEntries(nextModes.fixedEntries, hadFixedEntries)) {
@@ -1142,9 +1148,12 @@ function createInstance(inputOnly = false): Instance {
     return isSiteScopeAllowed(url, config) && !isExcludedSite(url, config.excludedHosts) && !isSensitivePage(url)
   }
 
-  const unwatchConfig = watchTranslationConfig((next) => {
+  const unwatchConfig = watchTranslationConfig((next, previous) => {
+    // 纯外观变化保留悬停译文和在途请求；伴随的权限或连接变化仍立即撤销交互。
+    const styleOnly = previous.bilingualStyle !== next.bilingualStyle &&
+      JSON.stringify({ ...previous, bilingualStyle: next.bilingualStyle }) === JSON.stringify(next)
     const url = location.href
-    disposeLiveFeatures()
+    if (!styleOnly) disposeLiveFeatures()
     if (
       next.floatingButtonEnabled === false ||
       !isSiteScopeAllowed(url, next) ||

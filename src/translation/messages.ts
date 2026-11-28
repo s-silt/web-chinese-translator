@@ -1,5 +1,6 @@
 import { isGitHubPageState, type GitHubPageAction, type GitHubPageState } from '../shared/messages'
 import {
+  isBilingualStyle,
   isDisplayMode,
   isInputAutoReplaceDelay,
   isInputReplaceMode,
@@ -66,6 +67,7 @@ export type TranslationMessage =
   | {
       type: 'wt:save-config'
       patch: TranslationConfigPatch
+      expectedGlossary?: TranslationConfig['promptGlossary']
       apiKey?: string
       customHeaders?: Readonly<Record<string, string>>
       expectedConnection?: { baseUrl: string; model: string; requestOptionsKey?: string }
@@ -325,6 +327,7 @@ const PATCH_KEYS = new Set([
   'excludedHosts',
   'siteScopeMode',
   'displayMode',
+  'bilingualStyle',
   'translationStyle',
   'promptGlossary',
   'modelProfiles',
@@ -353,6 +356,7 @@ function isSaveConfig(value: unknown): boolean {
     if (key === 'temperature' && !isTemperature((patch as Record<string, unknown>)[key])) return false
     if (key === 'requestParams' && !isValidRequestParams((patch as Record<string, unknown>)[key])) return false
     if (key === 'displayMode' && !isDisplayMode((patch as Record<string, unknown>)[key])) return false
+    if (key === 'bilingualStyle' && !isBilingualStyle((patch as Record<string, unknown>)[key])) return false
     if (key === 'translationStyle' && !isTranslationStyle((patch as Record<string, unknown>)[key])) return false
     if (key === 'promptGlossary' && !isPromptGlossaryList((patch as Record<string, unknown>)[key])) return false
     if (key === 'modelProfiles' && !isModelProfileList((patch as Record<string, unknown>)[key])) return false
@@ -365,6 +369,7 @@ function isSaveConfig(value: unknown): boolean {
     if (patch[key] !== undefined && typeof patch[key] !== 'boolean') return false
   }
   if (!isOptionalApiKey(value.apiKey)) return false
+  if (value.expectedGlossary !== undefined && (patch.promptGlossary === undefined || !isPromptGlossaryList(value.expectedGlossary))) return false
   if (value.customHeaders !== undefined && !isValidCustomHeaders(value.customHeaders)) return false
   const expected = value.expectedConnection
   if (expected !== undefined) {
@@ -690,6 +695,7 @@ export function isConfigShape(value: unknown): value is TranslationConfig {
     isSiteScopeMode(value.siteScopeMode) &&
     isExcludedHosts(value.siteScopeHosts) &&
     (value.displayMode === undefined || isDisplayMode(value.displayMode)) &&
+    (value.bilingualStyle === undefined || isBilingualStyle(value.bilingualStyle)) &&
     (value.translationStyle === undefined || isTranslationStyle(value.translationStyle)) &&
     (value.promptGlossary === undefined || isPromptGlossaryList(value.promptGlossary)) &&
     (value.modelProfiles === undefined || isModelProfileList(value.modelProfiles)) &&

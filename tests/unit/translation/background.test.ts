@@ -179,11 +179,11 @@ beforeEach(() => {
 })
 
 describe('模型隐私边界真实消息入口', () => {
-  it('工具页七项翻译偏好从后台写入并可重新读取，悬停需要站点授权', async () => {
+    it('工具页翻译偏好从后台写入并可重新读取，悬停需要站点授权', async () => {
     vi.spyOn(fakeBrowser.tabs, 'query').mockImplementation(async () => [] as never)
     const profile = { id: 'terms', name: 'Terms', baseUrl: 'https://model.example/v1', model: 'sample', apiType: 'responses', temperature: null }
     const patch = {
-      displayMode: 'bilingual', translationStyle: 'technical', promptGlossary: [{ source: 'Tab', target: '标签页' }],
+        displayMode: 'bilingual', bilingualStyle: 'highlight', translationStyle: 'technical', promptGlossary: [{ source: 'Tab', target: '标签页' }],
       modelProfiles: [profile], activeProfileId: profile.id, selectionProfileId: profile.id, hoverTranslateEnabled: true,
     }
     vi.mocked(fakeBrowser.permissions.contains).mockImplementation(async () => false)
@@ -205,6 +205,26 @@ describe('模型隐私边界真实消息入口', () => {
   })
 
   const text = 'A deliberately selected synthetic sentence about physics.'
+  it('两个设置页同时编辑术语表时只接受基于最新内容的保存', async () => {
+    const first = { source: 'agent', target: '助手' }
+    const second = { source: 'tool', target: '工具' }
+    const edit = (term: typeof first) => ({
+      type: 'wt:save-config', expectedGlossary: [], patch: { promptGlossary: [term] },
+    })
+    const results = await Promise.all([trigger(edit(first), extSender), trigger(edit(second), extSender)])
+    expect(results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ok: true }),
+      expect.objectContaining({ ok: false, code: 'glossary-conflict' }),
+    ]))
+    const { promptGlossary } = await translationConfigItem.getValue()
+    expect(promptGlossary).toHaveLength(1)
+    const combined = [first, second]
+    expect(await trigger({
+      type: 'wt:save-config', expectedGlossary: promptGlossary, patch: { promptGlossary: combined },
+    }, extSender)).toMatchObject({ ok: true, config: { promptGlossary: combined } })
+    expect(isTranslationMessage({ ...edit(first), expectedGlossary: 'invalid' })).toBe(false)
+  })
+
   const sensitiveSender = { ...contentSender, url: 'https://app.devin.ai/#/settings/tokens' }
   const input = {
     text,

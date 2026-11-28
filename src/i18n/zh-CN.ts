@@ -498,6 +498,20 @@ const zhCN = {
   wtBackupImport: '导入配置 JSON',
   wtBackupExported: '已导出配置文件',
   wtBackupImported: '已导入配置并生效',
+  wtBilingualStyleLabel: '双语对照外观',
+  wtBilingualStyleSubtle: '左竖线柔和（默认）',
+  wtBilingualStyleHighlight: '浅底卡片高亮',
+  wtBilingualStyleUnderline: '底部虚线下划线',
+  wtGlossaryBulkToggle: '批量导入',
+  wtGlossaryBulkPlaceholder: '每行一条，支持「原文 = 译文」「原文 -> 译文」或 Tab 分隔。注释以「# 」开头。',
+  wtGlossaryInvalidLine: '第 {line} 行需要原文和译文，每项限 1 至 {max} 个字符。',
+  wtGlossaryEmpty: '请至少输入一条要导入的术语。',
+  wtGlossaryLimit: '合并后的术语表超出 {max} 条上限。',
+  wtGlossaryConflict: '其他窗口已修改术语表。请核对最新内容后重试。',
+  wtGlossaryBulkImport: '合并导入',
+  wtGlossaryCopy: '复制术语表',
+  wtGlossaryCopied: '已复制术语表到剪贴板',
+  wtGlossaryImported: '已导入 {count} 条术语',
 }
 
 export type MessageKey = keyof typeof zhCN

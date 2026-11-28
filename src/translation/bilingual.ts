@@ -1,10 +1,14 @@
+import type { BilingualStyle } from './preferences-extra'
+
 export const BILINGUAL_ATTR = 'data-wt-bilingual'
 export const BILINGUAL_STYLE_ATTR = 'data-wt-bilingual-style'
+export const BILINGUAL_VARIANT_ATTR = 'data-wt-bilingual-variant'
 
 const styledRoots = new WeakSet<Document | ShadowRoot>()
+const LINE_SELECTOR = `.wt-bilingual-line[${BILINGUAL_ATTR}="1"]`
 
 const BILINGUAL_CSS = `
-[${BILINGUAL_ATTR}="1"] {
+${LINE_SELECTOR} {
   display: block;
   margin-top: 0.28em;
   padding-left: 0.55em;
@@ -17,12 +21,26 @@ const BILINGUAL_CSS = `
   cursor: pointer;
   transition: opacity 120ms ease;
 }
-[${BILINGUAL_ATTR}="1"][data-wt-bilingual-collapsed="1"] {
+${LINE_SELECTOR}[${BILINGUAL_VARIANT_ATTR}="highlight"] {
+  padding: 0.3em 0.6em;
+  border-left: 3px solid color-mix(in srgb, #3b82f6 60%, currentColor);
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 7%, transparent);
+  opacity: 0.96;
+}
+${LINE_SELECTOR}[${BILINGUAL_VARIANT_ATTR}="underline"] {
+  padding-left: 0;
+  padding-bottom: 0.12em;
+  border-left: none;
+  border-bottom: 1px dashed color-mix(in srgb, currentColor 38%, transparent);
+  opacity: 0.92;
+}
+${LINE_SELECTOR}[data-wt-bilingual-collapsed="1"] {
   opacity: 0.22;
 }
-[${BILINGUAL_ATTR}="1"]:focus-visible { outline: 2px solid currentColor; }
+${LINE_SELECTOR}:focus-visible { outline: 2px solid currentColor; }
 @media (prefers-reduced-motion: reduce) {
-  [${BILINGUAL_ATTR}="1"] { transition: none; }
+  ${LINE_SELECTOR} { transition: none; }
 }
 `
 
@@ -50,9 +68,10 @@ export function ensureBilingualStyle(target: Node): void {
   }
 }
 
-function createBilingualSpan(doc: Document, translatedText: string): HTMLElement {
+function createBilingualSpan(doc: Document, translatedText: string, variant: BilingualStyle = 'subtle'): HTMLElement {
   const el = doc.createElement('span')
   el.setAttribute(BILINGUAL_ATTR, '1')
+  updateBilingualVariant(el, variant)
   el.className = 'wt-bilingual-line'
   el.textContent = translatedText
   el.tabIndex = 0
@@ -75,24 +94,38 @@ function createBilingualSpan(doc: Document, translatedText: string): HTMLElement
   return el
 }
 
+/** 更新引擎持有的译文节点，不扫描宿主页面。 */
+export function updateBilingualVariant(line: HTMLElement, variant: BilingualStyle): void {
+  if (variant === 'subtle') line.removeAttribute(BILINGUAL_VARIANT_ATTR)
+  else line.setAttribute(BILINGUAL_VARIANT_ATTR, variant)
+}
+
 /** 在原文节点后插入双语对照译文节点，不破坏原文内容，返回插入的元素以便恢复时彻底清除。 */
-export function attachBilingualNode(anchor: Node, translatedText: string): HTMLElement | undefined {
+export function attachBilingualNode(
+  anchor: Node,
+  translatedText: string,
+  variant: BilingualStyle = 'subtle',
+): HTMLElement | undefined {
   const insertionPoint = anchor.parentElement?.closest('a,button,label') ?? anchor
   const parent = insertionPoint.parentNode
   const doc = anchor.ownerDocument
   if (!parent || !doc) return undefined
   ensureBilingualStyle(anchor)
-  const el = createBilingualSpan(doc, translatedText)
+  const el = createBilingualSpan(doc, translatedText, variant)
   parent.insertBefore(el, insertionPoint.nextSibling)
   return el
 }
 
 /** 在包含链接/粗体等行内富文本的块级容器末尾附加对照译文，完整保留原文行内结构。 */
-export function attachBilingualBlock(block: Element, translatedText: string): HTMLElement | undefined {
+export function attachBilingualBlock(
+  block: Element,
+  translatedText: string,
+  variant: BilingualStyle = 'subtle',
+): HTMLElement | undefined {
   const doc = block.ownerDocument
   if (!doc || !block.isConnected) return undefined
   ensureBilingualStyle(block)
-  const el = createBilingualSpan(doc, translatedText)
+  const el = createBilingualSpan(doc, translatedText, variant)
   block.appendChild(el)
   return el
 }

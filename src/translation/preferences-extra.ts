@@ -2,6 +2,13 @@ import type { TranslationModelConfig } from './config'
 import { isApiType, isTemperature, requestOptionsCacheKey, type ApiType } from './request-options'
 
 export type TranslationDisplayMode = 'replace' | 'bilingual'
+export type BilingualStyle = 'subtle' | 'highlight' | 'underline'
+export const DEFAULT_BILINGUAL_STYLE: BilingualStyle = 'subtle'
+export const BILINGUAL_STYLES: readonly BilingualStyle[] = ['subtle', 'highlight', 'underline'] as const
+
+export function isBilingualStyle(value: unknown): value is BilingualStyle {
+  return value === 'subtle' || value === 'highlight' || value === 'underline'
+}
 export const DEFAULT_DISPLAY_MODE: TranslationDisplayMode = 'replace'
 
 export type TranslationStyle = 'natural' | 'technical' | 'academic' | 'concise'
@@ -160,4 +167,56 @@ export function translationOptionsCacheKey(config: TranslationModelConfig): Prom
   const glossary = glossarySignature(config.promptGlossary)
   const extra = style === DEFAULT_TRANSLATION_STYLE && glossary === '' ? undefined : [style, glossary]
   return requestOptionsCacheKey(config, extra)
+}
+
+type GlossaryImport =
+  | { ok: true; entries: PromptGlossaryEntry[] }
+  | { ok: false; reason: 'invalid'; line: number }
+  | { ok: false; reason: 'empty' | 'limit' }
+
+const glossarySeparator = /\t|=>|->|=|,/
+
+function parseGlossaryLine(line: string): PromptGlossaryEntry | undefined {
+  if (line.startsWith('["')) {
+    try {
+      const pair: unknown = JSON.parse(line)
+      if (Array.isArray(pair) && pair.length === 2 && typeof pair[0] === 'string' && typeof pair[1] === 'string') {
+        return { source: pair[0].trim(), target: pair[1].trim() }
+      }
+    } catch { /* Invalid JSON is reported with the original line number. */ }
+    return undefined
+  }
+  const match = glossarySeparator.exec(line)
+  if (!match) return undefined
+  return { source: line.slice(0, match.index).trim(), target: line.slice(match.index + match[0].length).trim() }
+}
+
+/** Reject the entire import on a bad row so the user can correct the original draft. */
+export function parseGlossaryBulkText(raw: string): GlossaryImport {
+  const entries = new Map<string, PromptGlossaryEntry>()
+  for (const [index, line] of raw.split(/\r\n?|\n/).entries()) {
+    const trimmed = line.trim()
+    if (!trimmed || (trimmed.startsWith('#') && (/^#\s/.test(trimmed) || !glossarySeparator.test(trimmed)))) continue
+    const entry = parseGlossaryLine(trimmed)
+    if (!entry || !entry.source || !entry.target ||
+      entry.source.length > MAX_GLOSSARY_TERM_LENGTH || entry.target.length > MAX_GLOSSARY_TERM_LENGTH) {
+      return { ok: false, reason: 'invalid', line: index + 1 }
+    }
+    const key = entry.source.toLowerCase()
+    if (!entries.has(key)) entries.set(key, entry)
+    if (entries.size > MAX_PROMPT_GLOSSARY) return { ok: false, reason: 'limit' }
+  }
+  return entries.size ? { ok: true, entries: [...entries.values()] } : { ok: false, reason: 'empty' }
+}
+
+/** Keep ordinary rows readable. A JSON pair preserves literal separators, comments and newlines. */
+export function formatGlossaryBulkText(entries: readonly PromptGlossaryEntry[]): string {
+  return entries.map(({ source, target }) => {
+    const row = `${source} = ${target}`
+    // Escape characters that cannot travel literally through every platform's text clipboard.
+    if (source.startsWith('#') || source.startsWith('["') || glossarySeparator.test(source) || JSON.stringify(row) !== `"${row}"`) {
+      return JSON.stringify([source, target])
+    }
+    return row
+  }).join('\n')
 }

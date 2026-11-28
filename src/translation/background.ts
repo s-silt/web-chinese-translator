@@ -516,6 +516,7 @@ async function saveConfig(
   const apiKey = message.type === 'wt:save-config' ? message.apiKey : undefined
   const rawCustomHeaders = message.type === 'wt:save-config' ? message.customHeaders : undefined
   const expected = message.type === 'wt:save-config' ? message.expectedConnection : undefined
+  const expectedGlossary = message.type === 'wt:save-config' ? message.expectedGlossary : undefined
   if (patch.apiType !== undefined && !isApiType(patch.apiType)) {
     return { ok: false, error: '接口类型无效' }
   }
@@ -541,6 +542,12 @@ async function saveConfig(
   let reply: TranslationReply<ConfigMutationMessage['type']> = { ok: false, error: '保存失败' }
   await serializeMutation(async () => {
     const previous = await getTranslationConfig()
+    if (expectedGlossary && (previous.promptGlossary.length !== expectedGlossary.length ||
+      expectedGlossary.some(({ source, target }, i) =>
+        source !== previous.promptGlossary[i]?.source || target !== previous.promptGlossary[i]?.target))) {
+      reply = { ok: false, code: 'glossary-conflict', error: '术语表已在其他窗口更改，请确认最新内容后重试' }
+      return
+    }
     if (
       expected !== undefined &&
       (expected.baseUrl !== previous.baseUrl ||
@@ -740,6 +747,7 @@ async function saveConfig(
       ...(patch.targetLanguage !== undefined ? { targetLanguage: patch.targetLanguage } : {}),
       ...(patch.sourceLanguage !== undefined ? { sourceLanguage: patch.sourceLanguage } : {}),
       displayMode: patch.displayMode ?? previous.displayMode,
+      bilingualStyle: patch.bilingualStyle ?? previous.bilingualStyle,
       translationStyle: patch.translationStyle ?? previous.translationStyle,
       promptGlossary: patch.promptGlossary ?? previous.promptGlossary,
       modelProfiles: profiles,

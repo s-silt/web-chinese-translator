@@ -2,7 +2,7 @@ import { expect, test, waitForSiteContentReady, waitForSiteScriptRegistration } 
 
 test.use({ headless: false })
 
-test('封顶后 display:contents 的可见文字和原生弹层重开都能用现有译文替换', async ({ context, extension }) => {
+test('双语外观覆盖嵌套开放组件，封顶后可用现有译文重绘可见文字与原生弹层', async ({ context, extension }) => {
   const origin = 'https://app.devin.ai'
   const endpoint = 'https://fixture-metrics.devin.ai'
   const calls: string[][] = []
@@ -21,10 +21,16 @@ test('封顶后 display:contents 的可见文字和原生弹层重开都能用�
       <p id="rich-line">Read <span id="contents">the guide</span> today.</p>
       <p><span id="none">Read this hidden sentence.</span></p>
       <div id="panel" popover="manual"><p id="inside">Read this native popover.</p></div>
-      <div id="quota" style="font:2px/4px monospace"></div><script>document.querySelector('#panel').showPopover()</script>` })
+      <div id="outer"></div><span id="site-mark" data-wt-bilingual="1" data-wt-bilingual-variant="site">网站标记</span>
+      <div id="quota" style="font:2px/4px monospace"></div><script>
+        document.querySelector('#panel').showPopover()
+        const inner = document.createElement('div')
+        document.querySelector('#outer').attachShadow({mode:'open'}).append(inner)
+        inner.attachShadow({mode:'open'}).innerHTML = '<p id="nested">Read this nested paragraph.</p>'
+      </script>` })
   })
   const config = { baseUrl: endpoint + '/v1', model: 'fixture', autoOrigins: [origin], pageCharLimit: 20_000 }
-  await extension.setTranslationConfig({ ...config, displayMode: 'bilingual' })
+  await extension.setTranslationConfig({ ...config, displayMode: 'bilingual', bilingualStyle: 'highlight' })
   const url = origin + '/native-layout'
   await waitForSiteScriptRegistration(extension.page, { url })
   const page = await context.newPage()
@@ -38,6 +44,27 @@ test('封顶后 display:contents 的可见文字和原生弹层重开都能用�
   await expect(page.locator('#inside [data-wt-bilingual]')).toHaveText('实测译文')
   await expect(page.locator('#rich-line [data-wt-bilingual]')).toHaveText('阅读指南。')
   await expect(page.locator('#none [data-wt-bilingual]')).toHaveText('实测译文')
+  const lines = ['#inside', '#rich-line', '#nested'].map(id => page.locator(id).locator('[data-wt-bilingual]'))
+  for (const line of lines) {
+    await expect(line).toHaveAttribute('data-wt-bilingual-variant', 'highlight')
+    await expect(line).toHaveCSS('border-left-width', '3px')
+  }
+  const callsBeforeStyleChange = calls.length
+  await extension.setTranslationConfig({ ...config, displayMode: 'bilingual', bilingualStyle: 'underline' })
+  for (const line of lines) {
+    await expect(line).toHaveAttribute('data-wt-bilingual-variant', 'underline')
+    await expect(line).toHaveCSS('border-bottom-style', 'dashed')
+  }
+  await expect(page.locator('#site-mark')).toHaveAttribute('data-wt-bilingual-variant', 'site')
+  await expect(page.locator('#site-mark')).toHaveCSS('display', 'inline')
+  expect(calls).toHaveLength(callsBeforeStyleChange)
+  await page.locator('#nested').evaluate(el => {
+    const row = document.createElement('p')
+    row.id = 'added'
+    row.textContent = 'Read another paragraph inside the component.'
+    el.after(row)
+  })
+  await expect(page.locator('#added [data-wt-bilingual]')).toHaveAttribute('data-wt-bilingual-variant', 'underline')
   await page.locator('#quota').evaluate(el => {
     for (let i = 0; i < 16; i++) {
       const row = document.createElement('p')
@@ -156,7 +183,25 @@ test('Alt 悬停保留链接及监听器，忽略隐藏正文、敏感路由、�
     expect(requests).toHaveLength(2)
     await expect(page.locator('[data-wt-hover-translated]')).toHaveCount(0)
     await page.keyboard.up('Alt')
-    const config = { baseUrl: endpoint + '/v1', model: 'fixture', autoOrigins: [origin], hoverTranslateEnabled: true }
+    const hoverConfig = { baseUrl: endpoint + '/v1', model: 'fixture', hoverTranslateEnabled: true, displayMode: 'bilingual' }
+    await extension.setTranslationConfig({ ...hoverConfig, bilingualStyle: 'highlight' })
+    await page.goto(origin + '/hover-style')
+    await waitForSiteContentReady(extension.page, page)
+    await page.keyboard.down('Alt')
+    await rich.hover({ position: { x: 3, y: 3 } })
+    const hoverLine = rich.locator('[data-wt-bilingual]')
+    await expect(hoverLine).toHaveAttribute('data-wt-bilingual-variant', 'highlight')
+    await page.keyboard.up('Alt')
+    await expect(hoverLine).toHaveText('阅读指南。')
+    const hoverRequests = requests.length
+    await extension.setTranslationConfig({ ...hoverConfig, bilingualStyle: 'underline' })
+    await expect(hoverLine).toHaveAttribute('data-wt-bilingual-variant', 'underline')
+    await expect(rich).toHaveAttribute('data-wt-hover-translated', '1')
+    await expect(link).toHaveText('the guide')
+    await rich.click({ modifiers: ['Alt'], position: { x: 3, y: 3 } })
+    await expect(hoverLine).toHaveCount(0)
+    expect(requests).toHaveLength(hoverRequests)
+    const config = { ...hoverConfig, autoOrigins: [origin] }
     await extension.setTranslationConfig({ ...config, displayMode: 'bilingual' })
     await page.goto(origin + '/bilingual-article')
     const id = await waitForSiteContentReady(extension.page, page, { auto: true })

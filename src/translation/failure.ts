@@ -11,6 +11,7 @@ const FAILURE_CODES = [
   'queue_timeout',
   'cancelled',
   'disconnected',
+  'glossary-conflict',
   'unknown',
 ] as const
 

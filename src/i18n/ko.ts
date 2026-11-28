@@ -488,6 +488,20 @@ const messages: Messages = {
   wtBackupImport: 'JSON 가져오기',
   wtBackupExported: '설정을 내보냈습니다',
   wtBackupImported: '설정을 가져왔습니다',
+  wtBilingualStyleLabel: '병기 표시 스타일',
+  wtBilingualStyleSubtle: '왼쪽 선 (기본)',
+  wtBilingualStyleHighlight: '배경 강조 블록',
+  wtBilingualStyleUnderline: '점선 밑줄',
+  wtGlossaryBulkToggle: '일괄 가져오기',
+  wtGlossaryBulkPlaceholder: '한 줄에 한 항목씩 원문 = 번역, 원문 -> 번역 또는 탭으로 구분하세요. 주석은 “# ”로 시작합니다.',
+  wtGlossaryInvalidLine: '{line}번째 줄에 원문과 번역을 각각 1~{max}자로 입력하세요.',
+  wtGlossaryEmpty: '가져올 용어를 하나 이상 입력하세요.',
+  wtGlossaryLimit: '병합 후 용어 수가 최대 {max}개를 초과합니다.',
+  wtGlossaryConflict: '다른 창에서 용어집을 변경했습니다. 최신 내용을 확인한 후 다시 시도하세요.',
+  wtGlossaryBulkImport: '병합 가져오기',
+  wtGlossaryCopy: '용어집 복사',
+  wtGlossaryCopied: '용어집을 복사했습니다',
+  wtGlossaryImported: '용어 {count}개를 가져왔습니다',
 }
 
 export default messages

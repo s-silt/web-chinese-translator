@@ -23,10 +23,10 @@ Input translation replaces drafts after a typing pause. Restore original uses an
 
 | Core Capability | Description |
 | --- | --- |
-| **Webpage translation** | Connect an OpenAI-compatible endpoint (DeepSeek, OpenAI, Claude, or a self-hosted relay) for full-page or per-site automatic translation as you scroll |
+| **Webpage translation** | Connect an OpenAI- or Anthropic-compatible endpoint for full-page or per-site automatic translation. Replace the original text or show a translation below it with a subtle border, highlight, or underline. Hold Alt and hover to translate one paragraph |
 | **Reading & input** | Selection translation and definitions, multilingual draft translation for chat input fields and web search boxes |
 | **Offline UI dictionaries** | Menus and buttons on 26 popular site groups (Cursor, Claude, Vercel, Linear, etc.) and GitHub are replaced locally without calling a model |
-| **Controllable** | Master switch, Exclude this site, per-page limit, and Where to run list; status and failure reasons are shown directly in the popup |
+| **Translation settings** | Exclude sites, choose where the extension runs, set a per-page character limit, and select model profiles and translation styles. Bulk-import or copy glossary terms, or export a settings backup without credentials |
 
 ```text
 Page text ──► Authorized site + Configured endpoint ──► Your model endpoint ──► In-place replacement    Sent on demand

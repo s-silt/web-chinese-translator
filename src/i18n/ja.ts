@@ -488,6 +488,20 @@ const messages: Messages = {
   wtBackupImport: 'JSON を読み込む',
   wtBackupExported: '設定を書き出しました',
   wtBackupImported: '設定を読み込みました',
+  wtBilingualStyleLabel: '対訳の見た目',
+  wtBilingualStyleSubtle: '左ライン（デフォルト）',
+  wtBilingualStyleHighlight: 'ハイライト背景',
+  wtBilingualStyleUnderline: '点線アンダーライン',
+  wtGlossaryBulkToggle: '一括インポート',
+  wtGlossaryBulkPlaceholder: '1 行に 1 件、原文 = 訳語、原文 -> 訳語、またはタブ区切りで入力します。コメントは「# 」で始めます。',
+  wtGlossaryInvalidLine: '{line} 行目の原文と訳語をそれぞれ 1～{max} 文字で入力してください。',
+  wtGlossaryEmpty: 'インポートする用語を 1 件以上入力してください。',
+  wtGlossaryLimit: '統合後の用語数が上限の {max} 件を超えています。',
+  wtGlossaryConflict: '別のウィンドウで用語集が変更されました。最新の内容を確認してから再試行してください。',
+  wtGlossaryBulkImport: 'マージして追加',
+  wtGlossaryCopy: '用語集をコピー',
+  wtGlossaryCopied: '用語集をコピーしました',
+  wtGlossaryImported: '{count} 件の用語をインポートしました',
 }
 
 export default messages
