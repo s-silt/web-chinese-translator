@@ -1,8 +1,21 @@
 <template>
   <div class="connection-status">
     <div class="connection-status-row">
-      <UiBadge :tone="tone" dot live data-test="wt-connection">{{ label }}</UiBadge>
+      <div class="connection-status-badges">
+        <UiBadge :tone="tone" dot live data-test="wt-connection">{{ label }}</UiBadge>
+        <UiBadge v-if="dirty" tone="attention" dot data-test="wt-draft-badge">{{ t('wtConnDraft') }}</UiBadge>
+      </div>
       <div class="connection-status-actions">
+        <UiButton
+          v-if="dirty && canDiscard"
+          size="sm"
+          variant="invisible"
+          :disabled="testing"
+          data-test="wt-discard-draft"
+          @click="emit('discardDraft')"
+        >
+          {{ t('wtDiscardDraft') }}
+        </UiButton>
         <UiButton
           v-if="kind === 'unauthorized' && canGrantEndpoint"
           variant="primary"
@@ -55,11 +68,14 @@ const props = defineProps<{
   disabledReason?: string
   canGrantEndpoint?: boolean
   grantingEndpoint?: boolean
+  dirty?: boolean
+  canDiscard?: boolean
 }>()
 
 const emit = defineEmits<{
   test: []
   grantEndpoint: []
+  discardDraft: []
 }>()
 
 const { t } = useI18n()
@@ -161,6 +177,14 @@ const label = computed(() => {
   align-items: center;
   justify-content: space-between;
   gap: 8px 12px;
+}
+
+.connection-status-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .connection-status-actions {

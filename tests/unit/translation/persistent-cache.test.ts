@@ -284,6 +284,46 @@ describe('淘汰', () => {
     await (await restartWorker()).writePersistentTranslations(scope, [['next', '下一条']])
     expect((await rawRecords()).keys).toHaveLength(2)
   })
+
+  it('临近过期时命中刷新 usedAt 的条目，超过绝对 TTL 后仍会在扫描中被清除', async () => {
+    const before = await restartWorker()
+    await before.writePersistentTranslations(scope, [['touched', '已访问']])
+    now = NOW + 29 * DAY_MS
+    expect((await before.readPersistentTranslations(scope, ['touched'])).size).toBe(1)
+    await vi.waitFor(async () => {
+      const { values } = await rawRecords()
+      expect(values.some((value) => value.usedAt === now)).toBe(true)
+    })
+    now = NOW + 31 * DAY_MS
+    await (await restartWorker()).writePersistentTranslations(scope, [['fresh', '新条目']])
+    const { values } = await rawRecords()
+    expect(values.map((value) => value.translation)).toEqual(['新条目'])
+  })
+
+  it('从 v1 数据库升级到 v2 时补建 createdAt 索引并保留有效条目', async () => {
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.open(DB, 1)
+      req.onupgradeneeded = () => {
+        req.result.createObjectStore(STORE).createIndex('lru', ['usedAt', 'bytes'])
+      }
+      req.onsuccess = () => {
+        const db = req.result
+        const tx = db.transaction(STORE, 'readwrite')
+        tx.objectStore(STORE).put({ translation: '过期旧条目', createdAt: NOW, usedAt: NOW + 29 * DAY_MS, bytes: 300 }, 'v1-expired')
+        tx.objectStore(STORE).put({ translation: '有效旧条目', createdAt: NOW + 20 * DAY_MS, usedAt: NOW + 20 * DAY_MS, bytes: 300 }, 'v1-live')
+        tx.oncomplete = () => {
+          db.close()
+          resolve()
+        }
+        tx.onerror = () => reject(tx.error)
+      }
+      req.onerror = () => reject(req.error)
+    })
+    now = NOW + 31 * DAY_MS
+    await (await restartWorker()).writePersistentTranslations(scope, [['after-upgrade', '升级后']])
+    const { values } = await rawRecords()
+    expect(values.map((value) => value.translation).sort()).toEqual(['升级后', '有效旧条目'])
+  })
 })
 
 describe('不可用时回退到仅内存', () => {

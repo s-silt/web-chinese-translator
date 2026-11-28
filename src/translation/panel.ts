@@ -909,7 +909,7 @@ export function createTranslationPanel(): TranslationPanel {
 
   function close(options?: { keepFloatingMenu?: boolean }, restoreFocus = false): void {
     clearCopyResultTimer()
-    const owned = host === document.activeElement
+    const owned = host === document.activeElement || host.contains(document.activeElement)
     const restoreTarget = returnFocus
     if (options?.keepFloatingMenu !== true) floatingEntry?.closeMenu()
     if (state === 'hidden') return

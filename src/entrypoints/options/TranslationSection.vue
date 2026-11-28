@@ -28,8 +28,11 @@
       :disabled-reason="testDisabledReason !== '' ? t(testDisabledReason) : undefined"
       :can-grant-endpoint="persistedBase !== '' && !connectionDirty"
       :granting-endpoint="grantingEndpoint"
+      :dirty="connectionDirty"
+      :can-discard="persistedBase !== '' || persistedModel !== ''"
       @test="testConnection"
       @grant-endpoint="grantEndpointAccess"
+      @discard-draft="discardDraft"
     />
 
     <label v-show="props.view === 'all' || props.view === 'model'" class="wt-field">
@@ -67,7 +70,7 @@
           type="password"
           autocomplete="off"
           :disabled="!ready || saving || testing"
-          :placeholder="t('wtApiKeyKeep')"
+          :placeholder="keyState === 'none' ? t('wtApiKeyEnter') : t('wtApiKeyKeep')"
           aria-labelledby="wt-api-key-label"
           aria-describedby="wt-api-key-hint"
         />
@@ -1070,6 +1073,17 @@ function applyConnectionReply(reply: TranslationReply<'wt:test'>, ms: number): v
   connection.value = { kind, error: reply.error }
 }
 
+function discardDraft(): void {
+  baseUrl.value = persistedBase
+  model.value = persistedModel
+  apiType.value = persistedApiType
+  apiKey.value = ''
+  customHeadersDraft.value = ''
+  temperatureDraft.value = persistedTemperature
+  requestParamsDraft.value = persistedParams
+  invalidField.value = null
+}
+
 function applyPreset(url: string): void {
   if (!ready.value || saving.value || testing.value) return
   baseUrl.value = url
@@ -1619,6 +1633,12 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.wt-onboarding :deep(.ui-notice) {
+  padding: 8px 10px;
+  font-size: 12px;
+  gap: 4px;
+}
+
 .wt-onboarding {
   display: grid;
   gap: 8px;

@@ -99,7 +99,7 @@
         {{ t('wtPageLimitAdjust') }}
       </button>
     </p>
-    <p v-if="reasonNoteKey !== ''" id="wt-primary-reason" class="ui-hint">{{ t(reasonNoteKey) }}</p>
+    <p v-if="reasonNoteKey !== ''" id="wt-primary-reason" :class="reasonDuplicatesBadge ? 'sr-only' : 'ui-hint'">{{ t(reasonNoteKey) }}</p>
   </section>
 </template>
 
@@ -170,6 +170,11 @@ const primaryReason = computed<MessageKey | ''>(() => {
   if (!configurationReady.value) return 'wtConfigUnreadable'
   if (sensitive.value) return 'wtSensitivePage'
   return WT_STATE_MESSAGE[state.value]
+})
+
+const reasonDuplicatesBadge = computed(() => {
+  const reason = reasonNoteKey.value
+  return reason !== '' && !sensitive.value && reason === WT_STATE_MESSAGE[state.value]
 })
 
 const reasonNoteKey = computed<MessageKey | ''>(() => {
